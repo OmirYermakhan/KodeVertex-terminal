@@ -1,3 +1,6 @@
+mod fonts;
+mod settings;
+
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Wry};
 
@@ -41,6 +44,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    .invoke_handler(tauri::generate_handler![
+      settings::settings_load,
+      settings::settings_save,
+      fonts::fonts_list
+    ])
     .menu(build_menu)
     .on_menu_event(|app, event| {
       if event.id().as_ref() == SETTINGS_MENU_ID {
