@@ -1,4 +1,4 @@
-import { useRef, type PointerEvent } from 'react'
+import { useEffect, useRef, type PointerEvent } from 'react'
 import { childRects, layoutRects, type PaneNode, type Rect } from '../layout/paneTree'
 import { useTabs, type Tab } from '../layout/tabsStore'
 import { TerminalPane } from '../terminal/TerminalPane'
@@ -30,6 +30,8 @@ export default function PaneView({ tab, visible }: { tab: Tab; visible: boolean 
   const hostRef = useRef<HTMLDivElement>(null)
   const { focus, setCwd, paneExited, setRatio } = useTabs.getState()
   const rects = layoutRects(tab.tree)
+  const stopDrag = useRef<(() => void) | null>(null)
+  useEffect(() => () => stopDrag.current?.(), [])
 
   const startDrag = (d: Divider) => (e: PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -46,9 +48,13 @@ export default function PaneView({ tab, visible }: { tab: Tab; visible: boolean 
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      stopDrag.current = null
     }
+    stopDrag.current = up
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
   }
 
   return (

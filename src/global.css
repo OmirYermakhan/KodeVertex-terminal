@@ -32,6 +32,7 @@ body {
 .panes {
   flex: 1;
   min-height: 0;
+  position: relative;
 }
 
 .statusbar {
@@ -62,8 +63,4 @@ body {
 .tab-close:hover,
 .tab-add:hover {
   color: var(--strong);
-}
-
-.panes {
-  position: relative;
 }
