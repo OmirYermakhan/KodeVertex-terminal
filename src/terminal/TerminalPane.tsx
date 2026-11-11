@@ -187,9 +187,13 @@ export function TerminalPane(p: TerminalPaneProps) {
 
     term.onData((d) => handle?.write(d))
     term.onResize(({ cols, rows }) => handle?.resize(cols, rows))
-    // Пересчитать позицию попапа при прокрутке и изменении размера.
-    term.onScroll(() => setLayoutTick((n) => n + 1))
-    term.onResize(() => setLayoutTick((n) => n + 1))
+    // Пересчитать позицию попапа при прокрутке и изменении размера — только пока он открыт,
+    // иначе каждая пачка вывода с прокруткой перерисовывала бы панель.
+    const relayout = () => {
+      if (completionRef.current.state.open) setLayoutTick((n) => n + 1)
+    }
+    term.onScroll(relayout)
+    term.onResize(relayout)
 
     spawnPty({
       cwd: callbacks.current.initialCwd,

@@ -1,4 +1,5 @@
 import { act, render } from '@testing-library/react'
+import { Profiler } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PtyHandle, SpawnOptions } from './ptyClient'
 
@@ -274,6 +275,30 @@ describe('TerminalPane', () => {
     expect(document.querySelector('.cp')).not.toBeNull()
     act(() => useUi.setState({ settingsOpen: true }))
     expect(document.querySelector('.cp')).toBeNull()
+  })
+
+  it('scroll and resize do not re-render the pane while the popup is closed', async () => {
+    invoke.mockImplementation(listing)
+    const onRender = vi.fn()
+    render(
+      <Profiler id="pane" onRender={onRender}>
+        <TerminalPane {...props()} focused initialCwd="/p" />
+      </Profiler>,
+    )
+    const term = terms[0]
+    const onScroll = term.onScroll.mock.calls[0][0] as () => void
+    const onResize = term.onResize.mock.calls[1][0] as () => void
+    await act(async () => await flush())
+    onRender.mockClear()
+    act(() => {
+      for (let i = 0; i < 5; i++) onScroll()
+      onResize()
+    })
+    expect(onRender).not.toHaveBeenCalled()
+    await openPopup(term)
+    onRender.mockClear()
+    act(() => onScroll())
+    expect(onRender).toHaveBeenCalled()
   })
 
   it('hides and closes the popup when the cursor row scrolls out of view', async () => {
