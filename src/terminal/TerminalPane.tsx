@@ -179,7 +179,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       e.preventDefault()
       e.stopPropagation()
       // Вставка меняет строку мимо попапа — его ctx устарел.
-      completionRef.current.close()
+      completionRef.current.onPaste()
       const text = e.clipboardData?.getData('text/plain')
       if (text) term.paste(text)
     }

@@ -43,6 +43,8 @@ export interface CompletionApi {
   onReport(r: ZleReport): void
   /** true — клавиша съедена попапом и не должна уйти в терминал. */
   onKey(e: KeyboardEvent): boolean
+  /** Вставка в терминал: строка изменена набором, текущий ctx устарел. */
+  onPaste(): void
   /** Подставить элемент i (как Tab). */
   pick(i: number): void
   close(): void
@@ -50,14 +52,38 @@ export interface CompletionApi {
 
 const LIST_DEBOUNCE_MS = 30
 const PREVIEW_DEBOUNCE_MS = 80
+/** Длиннее — не разбираем каждый отчёт (вставка больших текстов, here-doc в строке). */
+const MAX_BUFFER = 4096
 
 // Клавиши, которые меняют строку или курсор в ней: после них ctx устаревает.
 const EDIT_KEYS = new Set(['Backspace', 'Delete', 'ArrowLeft', 'Home', 'End'])
 const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Fn'])
 
+// ⌘⌫ стирает строку, ⌘←/→ — в начало/конец строки.
+const META_EDIT_KEYS = new Set(['Backspace', 'ArrowLeft', 'ArrowRight'])
+// Без модификаторов при закрытом попапе: история zsh / прокрутка.
+const HISTORY_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'])
+// ⌃P/⌃N — история, ⌃R — поиск по истории.
+const CTRL_HISTORY_KEYS = new Set(['p', 'n', 'r'])
+
+const plain = (e: KeyboardEvent) => !e.metaKey && !e.ctrlKey && !e.altKey
+
+/**
+ * Чем клавиша меняет строку: 'history' — подставит строку из истории (не набор),
+ * 'typed' — набор/стирание, null — строку не меняет или неизвестно.
+ */
+function lineChange(e: KeyboardEvent, open: boolean): 'history' | 'typed' | null {
+  if (plain(e) && !e.shiftKey && HISTORY_KEYS.has(e.key)) return open && (e.key === 'ArrowUp' || e.key === 'ArrowDown') ? null : 'history'
+  if (e.ctrlKey && !e.metaKey && !e.altKey && CTRL_HISTORY_KEYS.has(e.key.toLowerCase())) return 'history'
+  if (e.metaKey && !e.ctrlKey && !e.altKey && e.key === 'Backspace') return 'typed'
+  if (plain(e) && ([...e.key].length === 1 || e.key === 'Backspace' || e.key === 'Delete')) return 'typed'
+  return null
+}
+
 /** Клавиша не съедена попапом, но может изменить строку zsh. */
 function editsLine(e: KeyboardEvent): boolean {
-  if (e.metaKey || MODIFIER_KEYS.has(e.key)) return false
+  if (MODIFIER_KEYS.has(e.key)) return false
+  if (e.metaKey) return !e.ctrlKey && !e.altKey && META_EDIT_KEYS.has(e.key)
   // Ctrl/Alt-сочетания в zsh — это правка строки (^W, ^U, ⌥⌫, ⌥b…).
   if (e.ctrlKey || e.altKey) return true
   return [...e.key].length === 1 || EDIT_KEYS.has(e.key)
@@ -74,7 +100,7 @@ export function useCompletion(o: CompletionOptions): CompletionApi {
     api.setOptions(o)
   })
   useEffect(() => api.dispose, [api])
-  return { state, onReport: api.onReport, onKey: api.onKey, pick: api.pick, close: api.close }
+  return { state, onReport: api.onReport, onKey: api.onKey, onPaste: api.onPaste, pick: api.pick, close: api.close }
 }
 
 function createController(initial: CompletionOptions, publish: (s: CompletionState) => void) {
@@ -92,6 +118,11 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
   let dismissedLine: string | null = null
   /** Выбор менялся ↑/↓ с момента показа списка. */
   let navigated = false
+  /**
+   * Строку последним изменил набор (а не история ↑/↓, ⌃P/⌃N/⌃R). Иначе отчёт попап не открывает:
+   * следующая ↑ должна уйти в историю zsh, а не в список.
+   */
+  let typed = true
 
   const set = (s: CompletionState) => {
     cur = s
@@ -139,8 +170,10 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
       cache = null
       lastLine = ''
       dismissedLine = null
+      typed = true
       return close()
     }
+    if (!typed || r.buffer.length > MAX_BUFFER) return close()
     lastLine = `${r.cursor};${r.buffer}`
     if (dismissedLine !== null) {
       if (lastLine === dismissedLine) return
@@ -182,12 +215,15 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
     opts().write(out)
   }
 
-  /** ↵ уходит в оболочку как есть: пустое имя без выбора стрелками или токен уже равен элементу. */
+  /**
+   * ↵ уходит в оболочку как есть: без выбора стрелками — пустое имя или не `cd`;
+   * либо токен уже равен элементу.
+   */
   const enterPassesThrough = (): boolean => {
     const ctx = cur.ctx
     const item = cur.items[cur.selected]
     if (!ctx || !item) return true
-    if (ctx.namePart === '' && !navigated) return true
+    if (!navigated && (ctx.namePart === '' || ctx.command !== 'cd')) return true
     const out = applyCompletion(ctx, item)
     const replacement = out.slice([...ctx.token].length)
     return ctx.token === replacement || ctx.token + '/' === replacement || ctx.token === replacement + '/'
@@ -201,8 +237,14 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
 
   const onKey = (e: KeyboardEvent): boolean => {
     // IME-набор: клавиши принадлежат композиции, а не попапу.
-    if (e.isComposing || e.keyCode === 229) return false
-    if (!cur.open || e.type !== 'keydown') return false
+    if (e.isComposing || e.keyCode === 229) {
+      if (e.type === 'keydown') typed = true
+      return false
+    }
+    if (e.type !== 'keydown') return false
+    const change = lineChange(e, cur.open)
+    if (change !== null) typed = change === 'typed'
+    if (!cur.open) return false
     if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) {
       if (editsLine(e)) close()
       return false
@@ -216,6 +258,13 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
         select((cur.selected - 1 + n) % n)
         return true
       case 'Tab':
+        // Пустое имя без выбора стрелками — обычный Tab zsh.
+        if (cur.ctx?.namePart === '' && !navigated) {
+          close()
+          return false
+        }
+        apply(cur.selected, false)
+        return true
       case 'ArrowRight':
         apply(cur.selected, false)
         return true
@@ -237,5 +286,10 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
     }
   }
 
-  return { onReport, onKey, close, pick: (i: number) => apply(i, false), dispose: stopPending, setOptions: (o: CompletionOptions) => void (options = o) }
+  const onPaste = () => {
+    typed = true
+    close()
+  }
+
+  return { onReport, onKey, onPaste, close, pick: (i: number) => apply(i, false), dispose: stopPending, setOptions: (o: CompletionOptions) => void (options = o) }
 }
