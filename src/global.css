@@ -1,0 +1,41 @@
+:root {
+  --bg: #1e1f22;
+  --panel: #2b2d30;
+  --text: #bcbec4;
+  --accent: #3574f0;
+  --font-text: 'Inter', sans-serif;
+  --font-code: 'JetBrains Mono', monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-text);
+  font-size: 16px;
+  line-height: 1.7;
+  overflow: hidden;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.panes {
+  flex: 1;
+  min-height: 0;
+}
+
+.statusbar {
+  height: 28px;
+  flex-shrink: 0;
+  background: var(--panel);
+}
