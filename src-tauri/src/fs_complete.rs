@@ -37,22 +37,25 @@ fn io_message(e: &io::Error) -> String {
 pub fn list_dir(dir: &Path, dirs_only: bool, include_hidden: bool) -> Result<Vec<FsEntry>, String> {
   let rd = fs::read_dir(dir).map_err(|e| io_message(&e))?;
   let mut out = Vec::new();
-  for item in rd {
+  // Лимит на число ПРОЧИТАННЫХ записей (включая ошибки итератора и отфильтрованные).
+  for item in rd.take(MAX_ENTRIES) {
     let Ok(item) = item else { continue };
     let name = item.file_name().to_string_lossy().into_owned();
     if !include_hidden && name.starts_with('.') {
       continue;
     }
-    let is_symlink = item.file_type().map(|t| t.is_symlink()).unwrap_or(false);
-    // metadata следует по симлинку; битая ссылка — не каталог
-    let is_dir = fs::metadata(item.path()).map(|m| m.is_dir()).unwrap_or(false);
+    let Ok(ft) = item.file_type() else { continue };
+    let is_symlink = ft.is_symlink();
+    // metadata (stat) только для симлинков; битая ссылка — не каталог
+    let is_dir = if is_symlink {
+      fs::metadata(item.path()).map(|m| m.is_dir()).unwrap_or(false)
+    } else {
+      ft.is_dir()
+    };
     if dirs_only && !is_dir {
       continue;
     }
     out.push(FsEntry { name, is_dir, is_symlink });
-    if out.len() >= MAX_ENTRIES {
-      break;
-    }
   }
   out.sort_by(|a, b| {
     b.is_dir
@@ -179,6 +182,31 @@ mod tests {
       }
       other => panic!("{other:?}"),
     }
+  }
+
+  #[test]
+  fn dirs_only_in_file_heavy_dir_is_bounded_and_empty() {
+    let t = tempdir().unwrap();
+    for i in 0..2500 {
+      fs::write(t.path().join(format!("f{i}")), "").unwrap();
+    }
+    let start = std::time::Instant::now();
+    assert!(list_dir(t.path(), true, false).unwrap().is_empty());
+    assert!(start.elapsed() < std::time::Duration::from_secs(2));
+  }
+
+  #[test]
+  fn hidden_filtering_counts_read_entries() {
+    let t = tempdir().unwrap();
+    for i in 0..500 {
+      fs::write(t.path().join(format!(".h{i}")), "").unwrap();
+    }
+    for i in 0..2500 {
+      fs::write(t.path().join(format!("v{i}")), "").unwrap();
+    }
+    // 3000 записей, прочитано 2000: видимых не больше 2000 и не меньше 1500
+    let n = list_dir(t.path(), false, false).unwrap().len();
+    assert!((1500..=2000).contains(&n), "{n}");
   }
 
   #[test]
