@@ -40,7 +40,8 @@ pub fn list_dir(dir: &Path, dirs_only: bool, include_hidden: bool) -> Result<Vec
   // Лимит на число ПРОЧИТАННЫХ записей (включая ошибки итератора и отфильтрованные).
   for item in rd.take(MAX_ENTRIES) {
     let Ok(item) = item else { continue };
-    let name = item.file_name().to_string_lossy().into_owned();
+    // Имя не в UTF-8 нельзя ни показать, ни подставить без искажения — пропускаем.
+    let Ok(name) = item.file_name().into_string() else { continue };
     if !include_hidden && name.starts_with('.') {
       continue;
     }
@@ -80,6 +81,10 @@ pub fn preview(path: &Path) -> FsPreview {
       }
       Err(message) => FsPreview::Error { message },
     };
+  }
+  // FIFO, устройство, сокет: open/read может блокироваться навсегда на общем пуле.
+  if !meta.is_file() {
+    return FsPreview::Error { message: "Особый файл".to_string() };
   }
   let size = meta.len();
   if size > MAX_TEXT_BYTES {
@@ -269,6 +274,42 @@ mod tests {
       preview(&t.path().join("nope")),
       FsPreview::Error { message: "Не найдено".into() }
     );
+  }
+
+  #[test]
+  fn fifo_is_special_and_does_not_block() {
+    let t = tempdir().unwrap();
+    let p = t.path().join("pipe");
+    let st = std::process::Command::new("mkfifo").arg(&p).status().unwrap();
+    assert!(st.success());
+    // Без проверки типа File::open на FIFO без писателя ждал бы вечно.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path = p.clone();
+    std::thread::spawn(move || tx.send(preview(&path)).unwrap());
+    let r = rx.recv_timeout(std::time::Duration::from_secs(2)).expect("preview заблокировался на FIFO");
+    assert_eq!(r, FsPreview::Error { message: "Особый файл".into() });
+  }
+
+  #[test]
+  fn device_is_special() {
+    assert_eq!(
+      preview(Path::new("/dev/null")),
+      FsPreview::Error { message: "Особый файл".into() }
+    );
+  }
+
+  #[test]
+  fn skips_non_utf8_names() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let t = tempdir().unwrap();
+    fs::write(t.path().join("ok"), "").unwrap();
+    let bad = t.path().join(OsStr::from_bytes(b"bad\xff"));
+    if fs::write(&bad, "").is_err() {
+      // APFS не даёт создать имя не в UTF-8 — на такой ФС такого входа и не будет.
+      eprintln!("ФС не принимает имена не в UTF-8, проверяем только валидные");
+    }
+    assert_eq!(names(&list_dir(t.path(), false, false).unwrap()), ["ok"]);
   }
 
   #[test]
