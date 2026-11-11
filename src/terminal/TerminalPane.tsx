@@ -59,8 +59,11 @@ function popupPlacement(term: Terminal | null, host: HTMLElement | null, count: 
   const height = screen?.clientHeight || host.clientHeight
   const cellW = term.cols > 0 ? width / term.cols : 0
   const cellH = term.rows > 0 ? height / term.rows : 0
-  const { cursorX = 0, cursorY = 0 } = term.buffer?.active ?? {}
-  const rowTop = cursorY * cellH
+  const { cursorX = 0, cursorY = 0, baseY = 0, viewportY = 0 } = term.buffer?.active ?? {}
+  // Строка курсора относительно видимой области; прокрутили вверх — попап не показываем.
+  const row = baseY + cursorY - viewportY
+  if (row < 0 || row >= term.rows) return null
+  const rowTop = row * cellH
   const h = popupHeight(count)
   const y = rowTop - h >= 0 ? rowTop - h : rowTop + cellH
   const avail = host.clientWidth || width
@@ -79,6 +82,7 @@ export function TerminalPane(p: TerminalPaneProps) {
     callbacks.current = p
   })
 
+  const [layoutTick, setLayoutTick] = useState(0)
   const handleRef = useRef<PtyHandle | null>(null)
   // cwd панели для подсказок путей: initialCwd, затем OSC 7.
   const cwdRef = useRef(p.initialCwd)
@@ -144,7 +148,9 @@ export function TerminalPane(p: TerminalPaneProps) {
 
     term.parser.registerOscHandler(6973, (data) => {
       const report = parseOsc6973(data)
-      if (report) completionRef.current.onReport(report)
+      // Фоновая панель или открытые настройки — подсказки не показываем.
+      const active = callbacks.current.focused && !useUi.getState().settingsOpen
+      if (report && (report === 'end' || active)) completionRef.current.onReport(report)
       return true
     })
 
@@ -172,6 +178,8 @@ export function TerminalPane(p: TerminalPaneProps) {
     const onPaste = (e: ClipboardEvent) => {
       e.preventDefault()
       e.stopPropagation()
+      // Вставка меняет строку мимо попапа — его ctx устарел.
+      completionRef.current.close()
       const text = e.clipboardData?.getData('text/plain')
       if (text) term.paste(text)
     }
@@ -179,6 +187,9 @@ export function TerminalPane(p: TerminalPaneProps) {
 
     term.onData((d) => handle?.write(d))
     term.onResize(({ cols, rows }) => handle?.resize(cols, rows))
+    // Пересчитать позицию попапа при прокрутке и изменении размера.
+    term.onScroll(() => setLayoutTick((n) => n + 1))
+    term.onResize(() => setLayoutTick((n) => n + 1))
 
     spawnPty({
       cwd: callbacks.current.initialCwd,
@@ -249,14 +260,18 @@ export function TerminalPane(p: TerminalPaneProps) {
   // Фокус в терминал — при смене фокусной панели и после закрытия настроек.
   useEffect(() => {
     if (p.focused && !settingsOpen) termRef.current?.focus()
+    else completionRef.current.close()
   }, [p.focused, settingsOpen])
 
   // Позиция попапа считается по курсору xterm после того, как пришёл новый список.
   const [popup, setPopup] = useState<ReturnType<typeof popupPlacement>>(null)
   const { open, items } = completion.state
   useLayoutEffect(() => {
-    setPopup(open ? popupPlacement(termRef.current, hostRef.current, items.length) : null)
-  }, [open, items])
+    const placement = open ? popupPlacement(termRef.current, hostRef.current, items.length) : null
+    setPopup(placement)
+    // Курсор вне видимой области: невидимый попап не должен съедать клавиши.
+    if (open && !placement) completionRef.current.close()
+  }, [open, items, layoutTick])
 
   return (
     <div

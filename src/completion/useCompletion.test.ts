@@ -228,4 +228,102 @@ describe('useCompletion', () => {
     await tick(80)
     expect(api().state.preview).toEqual({ kind: 'error', message: 'boom' })
   })
+
+  it('a line-editing key typed past the popup invalidates ctx until the next report', async () => {
+    listAlways()
+    const { api, write } = setup()
+    act(() => api().onReport(report('cd s')))
+    await tick(30)
+    expect(api().state.open).toBe(true)
+    let eaten = true
+    act(() => void (eaten = api().onKey(key('r'))))
+    expect(eaten).toBe(false)
+    expect(api().state.open).toBe(false)
+    // Отчёт о `cd sr` ещё не пришёл — Tab уходит в zsh, ничего не пишем.
+    expect(api().onKey(key('Tab'))).toBe(false)
+    expect(write).not.toHaveBeenCalled()
+    // Следующий отчёт открывает из кэша (без esc-блокировки, без нового fs_list).
+    act(() => api().onReport(report('cd sr')))
+    expect(api().state.open).toBe(true)
+    expect(api().state.ctx?.token).toBe('sr')
+    expect(mocked.mock.calls.filter((c) => c[0] === 'fs_list')).toHaveLength(1)
+  })
+
+  it.each(['Backspace', 'Delete', 'ArrowLeft', 'Home', 'End'])('%s closes the popup without eating', async (k) => {
+    listAlways()
+    const { api } = setup()
+    act(() => api().onReport(report('cd s')))
+    await tick(30)
+    let eaten = true
+    act(() => void (eaten = api().onKey(key(k))))
+    expect(eaten).toBe(false)
+    expect(api().state.open).toBe(false)
+  })
+
+  it('Shift+letter and Ctrl-combos also invalidate; bare modifiers do not', async () => {
+    listAlways()
+    const { api } = setup()
+    act(() => api().onReport(report('cd s')))
+    await tick(30)
+    act(() => void api().onKey(new KeyboardEvent('keydown', { key: 'Shift', shiftKey: true })))
+    expect(api().state.open).toBe(true)
+    act(() => void api().onKey(new KeyboardEvent('keydown', { key: 'R', shiftKey: true })))
+    expect(api().state.open).toBe(false)
+    act(() => api().onReport(report('cd sR')))
+    act(() => api().onReport(report('cd s')))
+    expect(api().state.open).toBe(true)
+    act(() => void api().onKey(new KeyboardEvent('keydown', { key: 'w', ctrlKey: true })))
+    expect(api().state.open).toBe(false)
+  })
+
+  it('ignores keys during IME composition', async () => {
+    listAlways()
+    const { api, write } = setup()
+    act(() => api().onReport(report('cd s')))
+    await tick(30)
+    expect(api().onKey(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true }))).toBe(false)
+    expect(api().onKey(new KeyboardEvent('keydown', { key: 'Tab', keyCode: 229 }))).toBe(false)
+    expect(api().state.open).toBe(true)
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('↵ with an empty name and no arrow navigation goes to the shell', async () => {
+    listAlways()
+    const { api, write } = setup()
+    act(() => api().onReport(report('cd ')))
+    await tick(30)
+    let eaten = true
+    act(() => void (eaten = api().onKey(key('Enter'))))
+    expect(eaten).toBe(false)
+    expect(api().state.open).toBe(false)
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('↵ with an empty name after ↓ substitutes the chosen entry', async () => {
+    listAlways()
+    const { api, write } = setup()
+    act(() => api().onReport(report('cd ')))
+    await tick(30)
+    act(() => void api().onKey(key('ArrowDown')))
+    let eaten = false
+    act(() => void (eaten = api().onKey(key('Enter'))))
+    expect(eaten).toBe(true)
+    expect(write).toHaveBeenCalledWith('scripts\r')
+  })
+
+  it.each([
+    ['cd src', [dir('src'), dir('src2')]],
+    ['cat README.md', [file('README.md'), file('README.md.bak')]],
+  ] as const)('↵ is not consumed when the token already equals the entry (%s)', async (line, entries) => {
+    listAlways([...entries])
+    const { api, write } = setup()
+    act(() => api().onReport(report(line)))
+    await tick(30)
+    expect(api().state.open).toBe(true)
+    let eaten = true
+    act(() => void (eaten = api().onKey(key('Enter'))))
+    expect(eaten).toBe(false)
+    expect(api().state.open).toBe(false)
+    expect(write).not.toHaveBeenCalled()
+  })
 })

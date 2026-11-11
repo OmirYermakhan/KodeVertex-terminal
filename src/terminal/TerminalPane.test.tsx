@@ -23,8 +23,9 @@ class FakeTerminal {
   paste = vi.fn()
   onData = vi.fn()
   onResize = vi.fn()
+  onScroll = vi.fn()
   clearTextureAtlas = vi.fn()
-  buffer = { active: { cursorX: 5, cursorY: 3 } }
+  buffer = { active: { cursorX: 5, cursorY: 3, baseY: 0, viewportY: 0 } }
   element: HTMLElement | undefined = undefined
   constructor(opts: Record<string, unknown>) {
     const history = this.fontHistory
@@ -207,7 +208,7 @@ describe('TerminalPane', () => {
         ? [{ name: 'src', isDir: true, isSymlink: false }]
         : { kind: 'dir', entries: [], total: 0 },
     )
-    render(<TerminalPane {...props()} initialCwd="/p" />)
+    render(<TerminalPane {...props()} focused initialCwd="/p" />)
     spawns[0].resolve()
     await flush()
     const term = terms[0]
@@ -232,7 +233,7 @@ describe('TerminalPane', () => {
 
   it('uses the cwd from OSC 7 for completions', async () => {
     invoke.mockResolvedValue([{ name: 'src', isDir: true, isSymlink: false }])
-    render(<TerminalPane {...props()} initialCwd="/p" />)
+    render(<TerminalPane {...props()} focused initialCwd="/p" />)
     const term = terms[0]
     await act(async () => {
       oscHandler(term, 7)('file://host/q')
@@ -240,5 +241,52 @@ describe('TerminalPane', () => {
       await flush(40)
     })
     expect(invoke).toHaveBeenCalledWith('fs_list', { dir: '/q', dirsOnly: true, includeHidden: false })
+  })
+
+  async function openPopup(term: FakeTerminal) {
+    await act(async () => {
+      oscHandler(term, 6973)('5;cd sr')
+      await flush(40)
+    })
+  }
+  const listing = async (cmd: string) =>
+    cmd === 'fs_list' ? [{ name: 'src', isDir: true, isSymlink: false }] : { kind: 'dir', entries: [], total: 0 }
+
+  it('ignores completion reports in an unfocused pane', async () => {
+    invoke.mockImplementation(listing)
+    render(<TerminalPane {...props()} initialCwd="/p" />)
+    await openPopup(terms[0])
+    expect(invoke).not.toHaveBeenCalled()
+    expect(document.querySelector('.cp')).toBeNull()
+  })
+
+  it('closes the popup when the pane loses focus or settings open', async () => {
+    invoke.mockImplementation(listing)
+    const p = props()
+    const { rerender } = render(<TerminalPane {...p} focused initialCwd="/p" />)
+    const term = terms[0]
+    await openPopup(term)
+    expect(document.querySelector('.cp')).not.toBeNull()
+    rerender(<TerminalPane {...p} focused={false} initialCwd="/p" />)
+    expect(document.querySelector('.cp')).toBeNull()
+    rerender(<TerminalPane {...p} focused initialCwd="/p" />)
+    await openPopup(term)
+    expect(document.querySelector('.cp')).not.toBeNull()
+    act(() => useUi.setState({ settingsOpen: true }))
+    expect(document.querySelector('.cp')).toBeNull()
+  })
+
+  it('hides and closes the popup when the cursor row scrolls out of view', async () => {
+    invoke.mockImplementation(listing)
+    render(<TerminalPane {...props()} focused initialCwd="/p" />)
+    const term = terms[0]
+    await openPopup(term)
+    expect(document.querySelector('.cp')).not.toBeNull()
+    term.buffer.active.baseY = 100
+    term.buffer.active.viewportY = 50 // курсор на 53 строки ниже видимой области
+    const onScroll = term.onScroll.mock.calls[0][0] as () => void
+    act(() => onScroll())
+    expect(document.querySelector('.cp')).toBeNull()
+    expect(keyHandler(term)(new KeyboardEvent('keydown', { key: 'Enter' }))).toBe(true)
   })
 })

@@ -51,6 +51,18 @@ export interface CompletionApi {
 const LIST_DEBOUNCE_MS = 30
 const PREVIEW_DEBOUNCE_MS = 80
 
+// Клавиши, которые меняют строку или курсор в ней: после них ctx устаревает.
+const EDIT_KEYS = new Set(['Backspace', 'Delete', 'ArrowLeft', 'Home', 'End'])
+const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Fn'])
+
+/** Клавиша не съедена попапом, но может изменить строку zsh. */
+function editsLine(e: KeyboardEvent): boolean {
+  if (e.metaKey || MODIFIER_KEYS.has(e.key)) return false
+  // Ctrl/Alt-сочетания в zsh — это правка строки (^W, ^U, ⌥⌫, ⌥b…).
+  if (e.ctrlKey || e.altKey) return true
+  return [...e.key].length === 1 || EDIT_KEYS.has(e.key)
+}
+
 const CLOSED: CompletionState = { open: false, items: [], selected: 0, ctx: null, preview: null, dir: '' }
 
 export const joinPath = (dir: string, name: string) => (dir.endsWith('/') ? dir : dir + '/') + name
@@ -78,6 +90,8 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
   let lastLine = ''
   /** Строка, на которой попап закрыли по esc: до её изменения не открываем. */
   let dismissedLine: string | null = null
+  /** Выбор менялся ↑/↓ с момента показа списка. */
+  let navigated = false
 
   const set = (s: CompletionState) => {
     cur = s
@@ -114,6 +128,7 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
   const show = (ctx: CompletionContext, dir: string, entries: FsEntryTS[]) => {
     const items = rankEntries(ctx.namePart, entries)
     if (items.length === 0) return close()
+    navigated = false
     set({ open: true, items, selected: 0, ctx, preview: null, dir })
     schedulePreview()
   }
@@ -167,14 +182,31 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
     opts().write(out)
   }
 
+  /** ↵ уходит в оболочку как есть: пустое имя без выбора стрелками или токен уже равен элементу. */
+  const enterPassesThrough = (): boolean => {
+    const ctx = cur.ctx
+    const item = cur.items[cur.selected]
+    if (!ctx || !item) return true
+    if (ctx.namePart === '' && !navigated) return true
+    const out = applyCompletion(ctx, item)
+    const replacement = out.slice([...ctx.token].length)
+    return ctx.token === replacement || ctx.token + '/' === replacement || ctx.token === replacement + '/'
+  }
+
   const select = (i: number) => {
+    navigated = true
     set({ ...cur, selected: i })
     schedulePreview()
   }
 
   const onKey = (e: KeyboardEvent): boolean => {
+    // IME-набор: клавиши принадлежат композиции, а не попапу.
+    if (e.isComposing || e.keyCode === 229) return false
     if (!cur.open || e.type !== 'keydown') return false
-    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return false
+    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) {
+      if (editsLine(e)) close()
+      return false
+    }
     const n = cur.items.length
     switch (e.key) {
       case 'ArrowDown':
@@ -188,6 +220,10 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
         apply(cur.selected, false)
         return true
       case 'Enter':
+        if (enterPassesThrough()) {
+          close()
+          return false
+        }
         apply(cur.selected, true)
         return true
       case 'Escape':
@@ -195,6 +231,8 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
         close()
         return true
       default:
+        // Строку правят мимо попапа — ctx устарел; следующий отчёт откроет заново (из кэша).
+        if (editsLine(e)) close()
         return false
     }
   }
