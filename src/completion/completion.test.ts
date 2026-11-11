@@ -118,6 +118,13 @@ describe('fuzzyScore', () => {
     expect(p).toBeGreaterThan(s)
     expect(s).toBeGreaterThan(q)
   })
+  it('NFC с обеих сторон: NFD-имя находится по NFC-запросу и наоборот', () => {
+    const nameNfd = 'Мой файл'.normalize('NFD')
+    expect(nameNfd).not.toBe('Мой файл')
+    expect(fuzzyScore('мой', nameNfd)).toBe(fuzzyScore('мой', 'Мой файл'))
+    expect(fuzzyScore('мой'.normalize('NFD'), 'Мой файл')).not.toBeNull()
+    expect(fuzzyScore('é', 'cafe\u0301')).not.toBeNull()
+  })
 })
 
 describe('rankEntries', () => {

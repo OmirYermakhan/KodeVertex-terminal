@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { CompletionPopup } from './CompletionPopup'
+import { CompletionPopup, matchPositions } from './CompletionPopup'
 import { completionContext } from './completion'
 import type { CompletionState, FsPreviewTS } from './useCompletion'
 
@@ -71,6 +71,27 @@ describe('CompletionPopup', () => {
     const preview: FsPreviewTS = { kind: 'text', lines: ['hello'], truncated: false }
     render(<CompletionPopup state={state({ preview })} x={0} y={0} onPick={vi.fn()} previewFits={false} />)
     expect(screen.queryByText('hello')).not.toBeInTheDocument()
+  })
+
+  it('matchPositions: индексы кластеров, NFD-имя по NFC-запросу', () => {
+    expect([...matchPositions('src', 'my-src')]).toEqual([3, 4, 5])
+    // «й» в NFD — два code point, но один кластер.
+    const nfd = 'мой'.normalize('NFD')
+    expect([...matchPositions('й', nfd)]).toEqual([2])
+    expect([...matchPositions('😀b', 'a😀b')]).toEqual([1, 2])
+  })
+
+  it('highlights a surrogate pair and an NFD letter whole', () => {
+    const name = 'a😀' + 'й'.normalize('NFD') + 'z'
+    const st = state({
+      items: [{ name, isDir: false, isSymlink: false }],
+      selected: 0,
+      ctx: completionContext('ls 😀й', 5),
+    })
+    render(<CompletionPopup state={st} x={0} y={0} onPick={vi.fn()} />)
+    const row = screen.getByRole('option')
+    expect(row.textContent).toBe(name)
+    expect([...row.querySelectorAll('b')].map((b) => b.textContent)).toEqual(['😀' + 'й'.normalize('NFD')])
   })
 
   it('picks an entry on click', () => {

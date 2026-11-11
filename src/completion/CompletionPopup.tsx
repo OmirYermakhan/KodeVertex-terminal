@@ -1,5 +1,6 @@
 // Вид попапа подсказок путей: список слева, превью подсвеченного элемента справа.
 import { useEffect, useRef, type ReactNode } from 'react'
+import { foldForMatch, matchIndices } from './completion'
 import type { CompletionState, FsPreviewTS } from './useCompletion'
 
 export const LIST_WIDTH = 280
@@ -13,23 +14,13 @@ export function popupHeight(count: number): number {
   return Math.min(count, MAX_ROWS) * ROW_HEIGHT + HINT_HEIGHT + 2
 }
 
-/** Индексы совпавших букв — той же логикой, что fuzzyScore: подстрока, иначе подпоследовательность. */
+/** Индексы совпавших кластеров name (см. foldForMatch) — той же логикой, что fuzzyScore. */
 export function matchPositions(query: string, name: string): Set<number> {
   const out = new Set<number>()
   if (query === '') return out
-  const q = query.toLowerCase()
-  const n = name.toLowerCase()
-  const at = n.indexOf(q)
-  if (at >= 0) {
-    for (let i = 0; i < q.length; i++) out.add(at + i)
-    return out
-  }
-  let pos = -1
-  for (const ch of q) {
-    pos = n.indexOf(ch, pos + 1)
-    if (pos < 0) return new Set()
-    out.add(pos)
-  }
+  const n = foldForMatch(name)
+  const m = matchIndices(foldForMatch(query).chars, n.chars)
+  for (const i of m?.idx ?? []) out.add(n.owner[i])
   return out
 }
 
@@ -42,13 +33,14 @@ function highlight(query: string, name: string): ReactNode[] {
     if (run) out.push(bold ? <b key={out.length}>{run}</b> : run)
     run = ''
   }
-  for (let i = 0; i < name.length; i++) {
+  // По кластерам: суррогатная пара и буква с диакритикой подсвечиваются целиком.
+  foldForMatch(name).clusters.forEach((c, i) => {
     if (hit.has(i) !== bold) {
       flush()
       bold = !bold
     }
-    run += name[i]
-  }
+    run += c
+  })
   flush()
   return out
 }

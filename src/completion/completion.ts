@@ -123,22 +123,59 @@ export function resolveDir(dirPart: string, cwd: string, home: string): string {
   return normalize(cwd + '/' + dirPart)
 }
 
-/** Больше — лучше; null — не подходит. */
-export function fuzzyScore(query: string, name: string): number | null {
-  if (query === '') return 0
-  const q = query.toLowerCase()
-  const n = name.toLowerCase()
-  const at = n.indexOf(q)
-  if (at === 0) return 3000 - Math.min(n.length, 999)
-  if (at > 0) return 2000 - Math.min(at * 10 + n.length, 999)
+/**
+ * Имя для сопоставления: кластеры (буква + следующие за ней combining marks) исходной строки
+ * и code points их NFC в нижнем регистре; owner[i] — кластер, из которого взят chars[i].
+ * NFC — только для сравнения: в macOS имена файлов часто в NFD, а набранный текст — в NFC.
+ */
+export function foldForMatch(s: string): { clusters: string[]; chars: string[]; owner: number[] } {
+  const clusters: string[] = []
+  for (const cp of s) {
+    if (clusters.length > 0 && /\p{M}/u.test(cp)) clusters[clusters.length - 1] += cp
+    else clusters.push(cp)
+  }
+  const chars: string[] = []
+  const owner: number[] = []
+  clusters.forEach((c, i) => {
+    for (const cp of c.normalize('NFC').toLowerCase()) {
+      chars.push(cp)
+      owner.push(i)
+    }
+  })
+  return { clusters, chars, owner }
+}
+
+function indexOfSeq(hay: string[], needle: string[]): number {
+  outer: for (let i = 0; i + needle.length <= hay.length; i++) {
+    for (let j = 0; j < needle.length; j++) if (hay[i + j] !== needle[j]) continue outer
+    return i
+  }
+  return -1
+}
+
+/** Позиции (в chars) совпавших символов: подстрока, иначе подпоследовательность; null — не подходит. */
+export function matchIndices(q: string[], n: string[]): { at: number; idx: number[] } | null {
+  const at = indexOfSeq(n, q)
+  if (at >= 0) return { at, idx: q.map((_, i) => at + i) }
+  const idx: number[] = []
   let pos = -1
-  let first = -1
   for (const ch of q) {
     pos = n.indexOf(ch, pos + 1)
     if (pos < 0) return null
-    if (first < 0) first = pos
+    idx.push(pos)
   }
-  return 1000 - Math.min(pos - first + n.length, 999)
+  return { at: -1, idx }
+}
+
+/** Больше — лучше; null — не подходит. */
+export function fuzzyScore(query: string, name: string): number | null {
+  if (query === '') return 0
+  const n = foldForMatch(name).chars
+  const m = matchIndices(foldForMatch(query).chars, n)
+  if (!m) return null
+  if (m.at === 0) return 3000 - Math.min(n.length, 999)
+  if (m.at > 0) return 2000 - Math.min(m.at * 10 + n.length, 999)
+  return 1000 - Math.min(m.idx[m.idx.length - 1] - m.idx[0] + n.length, 999)
 }
 
 const CONTROL_CHARS = /[\x00-\x1f\x7f]/
