@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::sync::OnceLock;
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct FontFamily {
@@ -22,9 +23,12 @@ pub fn list_families() -> Vec<FontFamily> {
   out
 }
 
-#[tauri::command]
+static CACHE: OnceLock<Vec<FontFamily>> = OnceLock::new();
+
+/// Скан системных шрифтов дорогой: делаем один раз и вне главного потока.
+#[tauri::command(async)]
 pub fn fonts_list() -> Vec<FontFamily> {
-  list_families()
+  CACHE.get_or_init(list_families).clone()
 }
 
 #[cfg(test)]

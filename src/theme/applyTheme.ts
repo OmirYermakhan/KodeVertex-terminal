@@ -1,13 +1,16 @@
 import type { Settings } from '../settings/settings'
 import type { Theme } from './themes'
 
+const GENERIC = new Set(['system-ui', 'sans-serif', 'serif', 'monospace', 'ui-monospace'])
+const fam = (n: string) => (GENERIC.has(n) ? n : `'${n}'`)
+
 export function applyTheme(theme: Theme, s: Settings, root: HTMLElement = document.documentElement): void {
   const style = root.style
   for (const [token, value] of Object.entries(theme.tokens)) {
     style.setProperty(`--${token}`, value)
   }
-  style.setProperty('--font-text', `'${s.textFont}', sans-serif`)
-  style.setProperty('--font-code', `'${s.codeFont}', monospace`)
+  style.setProperty('--font-text', `${fam(s.textFont)}, sans-serif`)
+  style.setProperty('--font-code', `${fam(s.codeFont)}, monospace`)
   style.setProperty('--size-text', `${s.textSize}px`)
   style.setProperty('--size-code', `${s.codeSize}px`)
   style.setProperty('--lh-text', String(s.lineHeight))

@@ -102,3 +102,26 @@ body {
 .tab-add:hover {
   color: var(--strong);
 }
+
+/* Окно настроек */
+.st-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.st-panel { width: 720px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow: auto; background: var(--panel); color: var(--text); border: 1px solid var(--rule); border-radius: 12px; font-size: 14px; }
+.st-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 18px; border-bottom: 1px solid var(--rule); }
+.st-head h2 { margin: 0; font-size: 16px; color: var(--strong); }
+.st-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 16px 18px; }
+.st-body h3 { margin: 14px 0 8px; font-size: 12px; text-transform: uppercase; color: var(--muted); }
+.st-body h3:first-child { margin-top: 0; }
+.st-panel button, .st-panel select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--rule); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+.st-themes { display: grid; gap: 6px; }
+.st-theme { display: flex; align-items: center; gap: 10px; text-align: left; border-radius: 9px !important; padding: 8px 12px !important; }
+.st-theme.on, .st-lh .on { border-color: var(--acc) !important; box-shadow: 0 0 0 1px var(--acc); }
+.st-sw { display: flex; }
+.st-sw i { width: 12px; height: 18px; border: 1px solid var(--rule); }
+.st-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 8px 0; }
+.st-counter { display: inline-flex; align-items: center; gap: 8px; }
+.st-lh { display: inline-flex; gap: 4px; }
+.st-hint { display: block; color: var(--muted); font-size: 11px; }
+.st-preview { background: var(--bg); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; color: var(--text); align-self: start; }
+.st-preview h4 { margin: 0 0 6px; color: var(--strong); }
+.st-preview p { margin: 0 0 10px; }
+.st-preview pre { margin: 0; padding: 10px; background: var(--panel); border-radius: 6px; overflow: auto; }

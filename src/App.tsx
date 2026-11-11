@@ -7,6 +7,8 @@ import { matchKey } from './keys/keymap'
 import PaneView from './ui/PaneView'
 import TabBar from './ui/TabBar'
 import StatusBar from './ui/StatusBar'
+import SettingsPanel from './ui/SettingsPanel'
+import { useUi } from './ui/uiStore'
 import { useGitInfo } from './status/useGitInfo'
 
 export default function App() {
@@ -18,6 +20,7 @@ export default function App() {
     return t?.cwd[t.focused]
   })
   const git = useGitInfo(cwd)
+  const settingsOpen = useUi((s) => s.settingsOpen)
 
   useEffect(() => {
     useSettings.getState().load()
@@ -49,6 +52,7 @@ export default function App() {
       <div data-testid="statusbar" className="statusbar">
         <StatusBar cwd={cwd} git={git} />
       </div>
+      <SettingsPanel open={settingsOpen} onClose={() => useUi.getState().setSettingsOpen(false)} />
     </div>
   )
 }
