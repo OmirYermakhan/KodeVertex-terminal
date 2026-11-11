@@ -528,6 +528,34 @@ mod tests {
   }
 
   #[test]
+  fn zle_report_replaces_control_chars() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, _rx) = start(&m, opts(home.path(), &[]));
+    // Ctrl-V Ctrl-J вставляет литеральный перевод строки в буфер.
+    // Ждём, пока ZLE примет ввод, и только потом вставляем перевод строки.
+    run(&m, &id, &out, "echo a;b", "\x1b]6973;8;echo a;b\x07");
+    run(&m, &id, &out, "\x16\x0a", "\x1b]6973;9;echo a;b \x07");
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
+  fn osc7_survives_ksh_arrays() {
+    let home = temp_home();
+    std::fs::write(home.path().join(".zshrc"), "setopt KSH_ARRAYS\n").unwrap();
+    let m = PtyManager::default();
+    let (id, out, _rx) = start(&m, opts(home.path(), &[]));
+    run(
+      &m,
+      &id,
+      &out,
+      "mkdir -p '100%done/при вет' && cd '100%done/при вет'\n",
+      "/100%25done/%D0%BF%D1%80%D0%B8%20%D0%B2%D0%B5%D1%82\x07",
+    );
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
   fn pty_resize_reaches_child() {
     let home = temp_home();
     let m = PtyManager::default();
