@@ -46,6 +46,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    .plugin(tauri_plugin_opener::init())
     .invoke_handler(tauri::generate_handler![
       settings::settings_load,
       settings::settings_save,
