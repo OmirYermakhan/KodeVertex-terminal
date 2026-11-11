@@ -24,6 +24,8 @@ class FakeTerminal {
   onData = vi.fn()
   onResize = vi.fn()
   clearTextureAtlas = vi.fn()
+  buffer = { active: { cursorX: 5, cursorY: 3 } }
+  element: HTMLElement | undefined = undefined
   constructor(opts: Record<string, unknown>) {
     const history = this.fontHistory
     this.options = new Proxy({ ...opts }, {
@@ -55,6 +57,9 @@ vi.mock('@xterm/addon-unicode11', () => ({ Unicode11Addon: FakeAddon }))
 vi.mock('@xterm/addon-webgl', () => ({ WebglAddon: FakeAddon }))
 vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: FakeAddon }))
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn() }))
+vi.mock('@tauri-apps/api/path', () => ({ homeDir: () => Promise.resolve('/h') }))
+const invoke = vi.fn()
+vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 
 interface PendingSpawn {
   opts: SpawnOptions
@@ -83,7 +88,13 @@ const { useSettings } = await import('../settings/store')
 const { DEFAULTS } = await import('../settings/settings')
 const { codeFontStack } = await import('../theme/fontFamily')
 
-const flush = () => new Promise((r) => setTimeout(r, 0))
+const flush = (ms = 0) => new Promise((r) => setTimeout(r, ms))
+
+type OscHandler = (data: string) => boolean
+type KeyHandler = (e: KeyboardEvent) => boolean
+const oscHandler = (t: FakeTerminal, id: number) =>
+  t.parser.registerOscHandler.mock.calls.find((c) => c[0] === id)![1] as OscHandler
+const keyHandler = (t: FakeTerminal) => t.attachCustomKeyEventHandler.mock.calls[0][0] as KeyHandler
 
 function props() {
   return { paneId: 'p', focused: false, onCwd: vi.fn(), onExit: vi.fn(), onFocus: vi.fn() }
@@ -96,6 +107,7 @@ describe('TerminalPane', () => {
     addons.length = 0
     useUi.setState({ settingsOpen: false })
     useSettings.setState({ settings: { ...DEFAULTS } })
+    invoke.mockReset()
   })
 
   it('kills a session that resolves after unmount and ignores its output/exit', async () => {
@@ -187,5 +199,46 @@ describe('TerminalPane', () => {
     expect(term.focus).not.toHaveBeenCalled()
     act(() => useUi.setState({ settingsOpen: false }))
     expect(term.focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes OSC 6973 to the completion popup and eats its keys before xterm', async () => {
+    invoke.mockImplementation(async (cmd: string) =>
+      cmd === 'fs_list'
+        ? [{ name: 'src', isDir: true, isSymlink: false }]
+        : { kind: 'dir', entries: [], total: 0 },
+    )
+    render(<TerminalPane {...props()} initialCwd="/p" />)
+    spawns[0].resolve()
+    await flush()
+    const term = terms[0]
+    const onKey = keyHandler(term)
+    const enter = () => new KeyboardEvent('keydown', { key: 'Enter', cancelable: true })
+    // Попап закрыт — ↵ уходит в xterm.
+    expect(onKey(enter())).toBe(true)
+    await act(async () => {
+      oscHandler(term, 6973)('5;cd sr')
+      await flush(40)
+    })
+    expect(invoke).toHaveBeenCalledWith('fs_list', { dir: '/p', dirsOnly: true, includeHidden: false })
+    expect(document.querySelector('.cp')).not.toBeNull()
+    const ev = enter()
+    let passed = true
+    act(() => void (passed = onKey(ev)))
+    expect(passed).toBe(false)
+    expect(ev.defaultPrevented).toBe(true)
+    expect(spawns[0].handle.write).toHaveBeenCalledWith('\x7f\x7fsrc\r')
+    expect(document.querySelector('.cp')).toBeNull()
+  })
+
+  it('uses the cwd from OSC 7 for completions', async () => {
+    invoke.mockResolvedValue([{ name: 'src', isDir: true, isSymlink: false }])
+    render(<TerminalPane {...props()} initialCwd="/p" />)
+    const term = terms[0]
+    await act(async () => {
+      oscHandler(term, 7)('file://host/q')
+      oscHandler(term, 6973)('5;cd sr')
+      await flush(40)
+    })
+    expect(invoke).toHaveBeenCalledWith('fs_list', { dir: '/q', dirsOnly: true, includeHidden: false })
   })
 })

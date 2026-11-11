@@ -5,7 +5,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type ITerminalOptions } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { terminalLineHeight, type Settings } from '../settings/settings'
 import { useSettings } from '../settings/store'
 import { useUi } from '../ui/uiStore'
@@ -13,6 +13,10 @@ import { codeFontStack } from '../theme/fontFamily'
 import { ansiFromTokens, THEMES } from '../theme/themes'
 import { matchKey } from '../keys/keymap'
 import { parseOsc7 } from './osc'
+import { parseOsc6973 } from '../completion/completion'
+import { useCompletion } from '../completion/useCompletion'
+import { CompletionPopup, LIST_WIDTH, PREVIEW_WIDTH, popupHeight } from '../completion/CompletionPopup'
+import { useHome } from '../status/useGitInfo'
 import { spawnPty, type PtyHandle } from './ptyClient'
 
 const RESIZE_DEBOUNCE_MS = 50
@@ -47,6 +51,25 @@ function remeasureFont(term: Terminal): void {
   term.clearTextureAtlas()
 }
 
+/** Над строкой курсора, а если сверху не помещается — под ней; превью — если хватает ширины. */
+function popupPlacement(term: Terminal | null, host: HTMLElement | null, count: number) {
+  if (!term || !host) return null
+  const screen = term.element?.querySelector<HTMLElement>('.xterm-screen')
+  const width = screen?.clientWidth || host.clientWidth
+  const height = screen?.clientHeight || host.clientHeight
+  const cellW = term.cols > 0 ? width / term.cols : 0
+  const cellH = term.rows > 0 ? height / term.rows : 0
+  const { cursorX = 0, cursorY = 0 } = term.buffer?.active ?? {}
+  const rowTop = cursorY * cellH
+  const h = popupHeight(count)
+  const y = rowTop - h >= 0 ? rowTop - h : rowTop + cellH
+  const avail = host.clientWidth || width
+  const x = Math.max(0, Math.min(cursorX * cellW, avail - LIST_WIDTH))
+  // В jsdom размеров нет — превью не прячем.
+  const previewFits = avail === 0 || x + LIST_WIDTH + PREVIEW_WIDTH <= avail
+  return { x, y, previewFits }
+}
+
 export function TerminalPane(p: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -54,6 +77,20 @@ export function TerminalPane(p: TerminalPaneProps) {
   const callbacks = useRef(p)
   useEffect(() => {
     callbacks.current = p
+  })
+
+  const handleRef = useRef<PtyHandle | null>(null)
+  // cwd панели для подсказок путей: initialCwd, затем OSC 7.
+  const cwdRef = useRef(p.initialCwd)
+  const home = useHome()
+  const completion = useCompletion({
+    cwd: () => cwdRef.current,
+    home: home || null,
+    write: (s) => handleRef.current?.write(s),
+  })
+  const completionRef = useRef(completion)
+  useEffect(() => {
+    completionRef.current = completion
   })
 
   const settings = useSettings((st) => st.settings)
@@ -98,11 +135,25 @@ export function TerminalPane(p: TerminalPaneProps) {
 
     term.parser.registerOscHandler(7, (data) => {
       const cwd = parseOsc7(data)
-      if (cwd) callbacks.current.onCwd(cwd)
+      if (cwd) {
+        cwdRef.current = cwd
+        callbacks.current.onCwd(cwd)
+      }
+      return true
+    })
+
+    term.parser.registerOscHandler(6973, (data) => {
+      const report = parseOsc6973(data)
+      if (report) completionRef.current.onReport(report)
       return true
     })
 
     term.attachCustomKeyEventHandler((e) => {
+      // Открытый попап забирает свои клавиши до xterm; preventDefault гасит keypress и уход фокуса по Tab.
+      if (completionRef.current.onKey(e)) {
+        e.preventDefault()
+        return false
+      }
       // App hotkeys are handled globally; keep xterm from consuming them.
       if (matchKey(e) !== null) return false
       if (e.type !== 'keydown' || !e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return true
@@ -148,6 +199,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           return
         }
         handle = h
+        handleRef.current = h
         // Resizes during the in-flight spawn were dropped; sync the current size.
         h.resize(term.cols, term.rows)
       })
@@ -169,6 +221,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       ro.disconnect()
       host.removeEventListener('paste', onPaste, true)
       if (!exited) handle?.kill()
+      handleRef.current = null
       term.dispose()
       termRef.current = null
       fitRef.current = null
@@ -198,13 +251,31 @@ export function TerminalPane(p: TerminalPaneProps) {
     if (p.focused && !settingsOpen) termRef.current?.focus()
   }, [p.focused, settingsOpen])
 
+  // Позиция попапа считается по курсору xterm после того, как пришёл новый список.
+  const [popup, setPopup] = useState<ReturnType<typeof popupPlacement>>(null)
+  const { open, items } = completion.state
+  useLayoutEffect(() => {
+    setPopup(open ? popupPlacement(termRef.current, hostRef.current, items.length) : null)
+  }, [open, items])
+
   return (
     <div
       data-pane-id={p.paneId}
       onFocus={() => callbacks.current.onFocus()}
       style={{ height: '100%', boxSizing: 'border-box', padding: '10px 12px', background: 'var(--bg)' }}
     >
-      <div ref={hostRef} style={{ height: '100%', width: '100%' }} />
+      <div style={{ position: 'relative', height: '100%', width: '100%' }}>
+        <div ref={hostRef} style={{ height: '100%', width: '100%' }} />
+        {popup && open && (
+          <CompletionPopup
+            state={completion.state}
+            x={popup.x}
+            y={popup.y}
+            previewFits={popup.previewFits}
+            onPick={completion.pick}
+          />
+        )}
+      </div>
     </div>
   )
 }
