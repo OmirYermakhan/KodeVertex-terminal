@@ -38,10 +38,13 @@ export async function spawnPty(o: SpawnOptions): Promise<PtyHandle> {
     onData,
     onExit,
   })
+  // pty_write is an async command: concurrent invokes may be reordered on the Rust side,
+  // so each write waits for the previous one.
+  let writes: Promise<unknown> = Promise.resolve()
   return {
     id,
     write(data) {
-      invoke('pty_write', { id, data }).catch(report('pty_write'))
+      writes = writes.then(() => invoke('pty_write', { id, data })).catch(report('pty_write'))
     },
     resize(cols, rows) {
       invoke('pty_resize', { id, cols, rows }).catch(report('pty_resize'))

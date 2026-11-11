@@ -85,7 +85,7 @@ export function TerminalPane(p: TerminalPaneProps) {
     })
 
     term.attachCustomKeyEventHandler((e) => {
-      if (e.type !== 'keydown' || !e.metaKey || e.ctrlKey || e.altKey) return true
+      if (e.type !== 'keydown' || !e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return true
       const key = e.key.toLowerCase()
       if (key === 'c') {
         if (term.hasSelection()) {
@@ -113,12 +113,22 @@ export function TerminalPane(p: TerminalPaneProps) {
       cwd: callbacks.current.initialCwd,
       cols: term.cols,
       rows: term.rows,
-      onData: (b) => term.write(b),
-      onExit: () => callbacks.current.onExit(),
+      // After unmount (incl. our own kill in cleanup) the session's output and exit are ignored.
+      onData: (b) => {
+        if (!disposed) term.write(b)
+      },
+      onExit: () => {
+        if (!disposed) callbacks.current.onExit()
+      },
     })
       .then((h) => {
-        if (disposed) h.kill()
-        else handle = h
+        if (disposed) {
+          h.kill()
+          return
+        }
+        handle = h
+        // Resizes during the in-flight spawn were dropped; sync the current size.
+        h.resize(term.cols, term.rows)
       })
       .catch((err) => {
         console.error('pty_spawn failed:', err)
@@ -148,9 +158,13 @@ export function TerminalPane(p: TerminalPaneProps) {
   useEffect(() => {
     const term = termRef.current
     if (!term) return
-    Object.assign(term.options, appearance(settings))
+    const opts = appearance(settings)
+    Object.assign(term.options, opts)
     fitRef.current?.fit()
-    document.fonts?.ready.then(() => fitRef.current?.fit())
+    document.fonts
+      ?.load(`${opts.fontSize}px ${opts.fontFamily}`)
+      .catch(() => {})
+      .then(() => fitRef.current?.fit())
   }, [settings])
 
   useEffect(() => {

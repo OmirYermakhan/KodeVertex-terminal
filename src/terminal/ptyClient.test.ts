@@ -60,8 +60,51 @@ describe('spawnPty', () => {
     h.write('ls\n')
     h.resize(100, 30)
     h.kill()
+    await new Promise((r) => setTimeout(r, 0)) // writes are chained on a promise
     expect(invoke).toHaveBeenCalledWith('pty_write', { id: 'sess-1', data: 'ls\n' })
     expect(invoke).toHaveBeenCalledWith('pty_resize', { id: 'sess-1', cols: 100, rows: 30 })
     expect(invoke).toHaveBeenCalledWith('pty_kill', { id: 'sess-1' })
+  })
+})
+
+describe('spawnPty write ordering', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    channels.length = 0
+  })
+
+  it('serializes writes: the second waits for the first even if the first resolves later', async () => {
+    const order: string[] = []
+    let releaseFirst: () => void = () => {}
+    invoke.mockImplementation(async (cmd: string, args?: { data?: string }) => {
+      if (cmd === 'pty_spawn') return 'sess-1'
+      if (cmd === 'pty_write') {
+        order.push(`start:${args?.data}`)
+        if (args?.data === 'paste') await new Promise<void>((r) => (releaseFirst = r))
+        order.push(`end:${args?.data}`)
+      }
+    })
+    const h = await spawnPty({ cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
+    h.write('paste')
+    h.write('\r')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(order).toEqual(['start:paste'])
+    releaseFirst()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(order).toEqual(['start:paste', 'end:paste', 'start:\r', 'end:\r'])
+  })
+
+  it('a failed write does not block later writes', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    invoke.mockImplementation(async (cmd: string, args?: { data?: string }) => {
+      if (cmd === 'pty_spawn') return 'sess-1'
+      if (args?.data === 'bad') throw new Error('boom')
+    })
+    const h = await spawnPty({ cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
+    h.write('bad')
+    h.write('ok')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(invoke).toHaveBeenCalledWith('pty_write', { id: 'sess-1', data: 'ok' })
+    errSpy.mockRestore()
   })
 })
