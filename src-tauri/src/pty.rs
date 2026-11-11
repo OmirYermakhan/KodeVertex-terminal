@@ -14,7 +14,7 @@ use crate::shell;
 
 /// Размер буфера чтения из PTY.
 const READ_BUF: usize = 16 * 1024;
-/// Сколько ждать выхода после SIGHUP, прежде чем добить SIGKILL.
+/// Сколько ждать выхода оболочки после SIGHUP, прежде чем добить её SIGKILL.
 const KILL_GRACE: Duration = Duration::from_secs(2);
 /// Сколько после выхода оболочки ждать, пока читатель дочитает вывод.
 const DRAIN_GRACE: Duration = Duration::from_millis(150);
@@ -41,6 +41,9 @@ struct Session {
   pid: Option<u32>,
   /// Просит поток чтения завершиться (даже если слейв ещё кем-то открыт).
   stop_reading: Arc<AtomicBool>,
+  /// Оболочка завершилась и подобрана `wait`: её pid мог достаться другому процессу.
+  #[cfg_attr(not(unix), allow(dead_code))]
+  exited: Arc<AtomicBool>,
 }
 
 type Sessions = Arc<Mutex<HashMap<String, Session>>>;
@@ -88,6 +91,7 @@ impl PtyManager {
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
     let stop_reading = Arc::new(AtomicBool::new(false));
+    let exited = Arc::new(AtomicBool::new(false));
     let (input, input_rx) = mpsc::channel::<Vec<u8>>();
     let (read_done, read_done_rx) = mpsc::channel::<()>();
 
@@ -99,6 +103,7 @@ impl PtyManager {
         killer: child.clone_killer(),
         pid: child.process_id(),
         stop_reading: stop_reading.clone(),
+        exited: exited.clone(),
       },
     );
 
@@ -122,6 +127,7 @@ impl PtyManager {
     let wait_id = id.clone();
     spawn_thread(format!("pty-wait-{id}"), move || {
       let code = child.wait().ok().map(|s| s.exit_code());
+      exited.store(true, Ordering::SeqCst);
       // Даём читателю дочитать хвост вывода, затем останавливаем его в любом случае:
       // слейв может держать отвязанный потомок, и тогда EOF не придёт никогда.
       let _ = read_done_rx.recv_timeout(DRAIN_GRACE);
@@ -149,19 +155,32 @@ impl PtyManager {
       .map_err(|e| e.to_string())
   }
 
-  /// Завершает всю сессию терминала: SIGHUP всем её процессам (включая фоновые
-  /// задания), закрытие мастера, а через `KILL_GRACE` — SIGKILL уцелевшим.
+  /// Закрывает терминал как обычные эмуляторы: SIGHUP группе оболочки и активной
+  /// (foreground) группе tty, закрытие мастера, а через `KILL_GRACE` — SIGKILL одной
+  /// оболочке, если она ещё жива. Задания с `nohup`/`trap '' HUP` и отвязанные
+  /// (`disown`) переживают закрытие. Неизвестная или уже завершённая сессия — не ошибка.
   pub fn kill(&self, id: &str) -> Result<(), String> {
     #[cfg_attr(unix, allow(unused_mut))]
-    let mut s = lock(&self.sessions).remove(id).ok_or_else(|| no_session(id))?;
+    let Some(mut s) = lock(&self.sessions).remove(id) else { return Ok(()) };
     s.stop_reading.store(true, Ordering::SeqCst);
     #[cfg(unix)]
-    if let Some(pid) = s.pid {
-      let sid = pid as libc::pid_t;
-      session::signal(sid, libc::SIGHUP);
+    if let (Some(pid), false) = (s.pid, s.exited.load(Ordering::SeqCst)) {
+      let shell = pid as libc::pid_t;
+      let foreground = s.master.as_raw_fd().map(|fd| unsafe { libc::tcgetpgrp(fd) }).unwrap_or(-1);
+      unsafe {
+        // Оболочка — лидер сессии и своей группы (pgid = pid).
+        libc::killpg(shell, libc::SIGHUP);
+        if foreground > 0 && foreground != shell {
+          libc::killpg(foreground, libc::SIGHUP);
+        }
+      }
+      let exited = s.exited.clone();
       std::thread::spawn(move || {
         std::thread::sleep(KILL_GRACE);
-        session::signal(sid, libc::SIGKILL);
+        // Пока `wait` не подобрал оболочку, её pid не может достаться другому процессу.
+        if !exited.load(Ordering::SeqCst) {
+          unsafe { libc::kill(shell, libc::SIGKILL) };
+        }
       });
     }
     #[cfg(not(unix))]
@@ -259,46 +278,6 @@ fn wait_readable(file: &std::fs::File, timeout: Duration) -> std::io::Result<boo
       0 => Ok(false),
       _ => Ok(true),
     }
-  }
-}
-
-/// Процессы сессии терминала (оболочка — лидер сессии, `sid` = её pid).
-#[cfg(unix)]
-mod session {
-  /// Сигнал всем процессам сессии: группе оболочки и каждому заданию в своей группе.
-  /// Ничего не делает, если от сессии не осталось процессов (pid мог быть переиспользован).
-  pub fn signal(sid: libc::pid_t, sig: libc::c_int) {
-    let pids = members(sid);
-    if pids.is_empty() {
-      return;
-    }
-    unsafe { libc::killpg(sid, sig) };
-    for pid in pids {
-      unsafe { libc::kill(pid, sig) };
-    }
-  }
-
-  #[cfg(target_os = "macos")]
-  fn members(sid: libc::pid_t) -> Vec<libc::pid_t> {
-    let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
-    if n <= 0 {
-      return Vec::new();
-    }
-    let mut pids = vec![0 as libc::pid_t; n as usize + 64];
-    let size = (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int;
-    let n = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), size) };
-    pids.truncate(n.max(0) as usize);
-    pids.retain(|&p| p > 0 && unsafe { libc::getsid(p) } == sid);
-    pids
-  }
-
-  #[cfg(not(target_os = "macos"))]
-  fn members(sid: libc::pid_t) -> Vec<libc::pid_t> {
-    let Ok(dir) = std::fs::read_dir("/proc") else { return Vec::new() };
-    dir
-      .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<libc::pid_t>().ok())
-      .filter(|&p| unsafe { libc::getsid(p) } == sid)
-      .collect()
   }
 }
 
@@ -557,8 +536,25 @@ mod tests {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
   }
 
+  /// Добивает процесс в конце теста, даже если проверка упала.
+  struct KillOnDrop(u32);
+
+  impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+      unsafe { libc::kill(self.0 as libc::pid_t, libc::SIGKILL) };
+    }
+  }
+
+  fn wait_dead(pid: u32) -> bool {
+    let deadline = Instant::now() + OUTPUT_TIMEOUT;
+    while alive(pid) && Instant::now() < deadline {
+      std::thread::sleep(Duration::from_millis(50));
+    }
+    !alive(pid)
+  }
+
   #[test]
-  fn pty_kill_takes_down_background_jobs_and_reader() {
+  fn pty_kill_hangs_up_foreground_spares_nohup_jobs_and_releases_reader() {
     let home = temp_home();
     let m = PtyManager::default();
     let (id, out, rx) = start(&m, opts(home.path(), &[]));
@@ -566,16 +562,38 @@ mod tests {
     let from = out.len();
     m.write(&id, b"(trap '' HUP; exec sleep 300) & echo \"B\"\"G=$!;\"\n").unwrap();
     let bg = out.wait_number("BG=", from).unwrap_or_else(|| panic!("нет pid, вывод: {:?}", out.text()));
-    assert!(alive(bg));
+    let _bg_guard = KillOnDrop(bg);
+    // Обычная программа на переднем плане.
+    let from = out.len();
+    m.write(&id, b"sh -c 'echo \"F\"\"G=$$;\"; exec sleep 300'\n").unwrap();
+    let fg = out.wait_number("FG=", from).unwrap_or_else(|| panic!("нет pid, вывод: {:?}", out.text()));
+    let _fg_guard = KillOnDrop(fg);
+    assert!(alive(bg) && alive(fg));
 
     m.kill(&id).unwrap();
     rx.recv_timeout(EXIT_TIMEOUT).expect("on_exit после kill");
-    let deadline = Instant::now() + OUTPUT_TIMEOUT;
-    while alive(bg) && Instant::now() < deadline {
-      std::thread::sleep(Duration::from_millis(50));
-    }
-    assert!(!alive(bg), "фоновый процесс {bg} пережил kill");
+    assert!(wait_dead(fg), "процесс переднего плана {fg} пережил kill");
     assert!(out.wait_reader_done(), "поток чтения не завершился");
+    // После окна SIGKILL задание, игнорирующее SIGHUP, всё ещё живо.
+    std::thread::sleep(KILL_GRACE + Duration::from_millis(300));
+    assert!(alive(bg), "задание {bg} с trap '' HUP не пережило закрытие");
+  }
+
+  #[test]
+  fn pty_kill_unknown_or_finished_session_is_ok() {
+    let m = PtyManager::default();
+    assert!(m.kill("нет-такой").is_ok());
+
+    let home = temp_home();
+    let (id, _out, rx) = start(&m, opts(home.path(), &[]));
+    m.write(&id, b"exit\n").unwrap();
+    rx.recv_timeout(EXIT_TIMEOUT).expect("on_exit после exit");
+    assert!(m.kill(&id).is_ok(), "kill после обычного exit должен быть no-op");
+    // Повторный kill уже убитой сессии — тоже не ошибка.
+    let (id, _out, rx) = start(&m, opts(home.path(), &[]));
+    m.kill(&id).unwrap();
+    rx.recv_timeout(EXIT_TIMEOUT).expect("on_exit после kill");
+    assert!(m.kill(&id).is_ok());
   }
 
   #[test]
