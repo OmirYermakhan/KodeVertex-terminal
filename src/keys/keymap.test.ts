@@ -1,0 +1,51 @@
+import { describe, expect, it } from 'vitest'
+import { matchKey } from './keymap'
+
+const ev = (o: Partial<Parameters<typeof matchKey>[0]>) => ({
+  key: '',
+  code: '',
+  metaKey: false,
+  shiftKey: false,
+  altKey: false,
+  ctrlKey: false,
+  ...o,
+})
+
+describe('matchKey', () => {
+  it('matches by code, so the Russian layout works', () => {
+    expect(matchKey(ev({ code: 'KeyD', key: 'в', metaKey: true }))).toBe('splitRight')
+    expect(matchKey(ev({ code: 'KeyD', key: 'в', metaKey: true, shiftKey: true }))).toBe('splitDown')
+  })
+  it('new tab / close pane', () => {
+    expect(matchKey(ev({ code: 'KeyT', metaKey: true }))).toBe('newTab')
+    expect(matchKey(ev({ code: 'KeyW', metaKey: true }))).toBe('closePane')
+  })
+  it('focus with alt+cmd+arrows', () => {
+    expect(matchKey(ev({ code: 'ArrowLeft', metaKey: true, altKey: true }))).toBe('focusLeft')
+    expect(matchKey(ev({ code: 'ArrowRight', metaKey: true, altKey: true }))).toBe('focusRight')
+    expect(matchKey(ev({ code: 'ArrowUp', metaKey: true, altKey: true }))).toBe('focusUp')
+    expect(matchKey(ev({ code: 'ArrowDown', metaKey: true, altKey: true }))).toBe('focusDown')
+    expect(matchKey(ev({ code: 'ArrowLeft', metaKey: true }))).toBeNull()
+  })
+  it('tabs by digit', () => {
+    expect(matchKey(ev({ code: 'Digit3', metaKey: true }))).toBe('tab3')
+    expect(matchKey(ev({ code: 'Digit9', metaKey: true }))).toBe('tab9')
+    expect(matchKey(ev({ code: 'Digit0', metaKey: true }))).toBe('fontReset')
+  })
+  it('prev/next tab', () => {
+    expect(matchKey(ev({ code: 'BracketLeft', metaKey: true, shiftKey: true }))).toBe('prevTab')
+    expect(matchKey(ev({ code: 'BracketRight', metaKey: true, shiftKey: true }))).toBe('nextTab')
+  })
+  it('font size and settings', () => {
+    expect(matchKey(ev({ code: 'Equal', metaKey: true }))).toBe('fontBigger')
+    expect(matchKey(ev({ code: 'Equal', metaKey: true, shiftKey: true }))).toBe('fontBigger')
+    expect(matchKey(ev({ code: 'Minus', metaKey: true }))).toBe('fontSmaller')
+    expect(matchKey(ev({ code: 'Comma', metaKey: true }))).toBe('openSettings')
+  })
+  it('leaves shell and clipboard keys alone', () => {
+    expect(matchKey(ev({ code: 'KeyD', ctrlKey: true }))).toBeNull()
+    expect(matchKey(ev({ code: 'KeyC', metaKey: true }))).toBeNull()
+    expect(matchKey(ev({ code: 'KeyV', metaKey: true }))).toBeNull()
+    expect(matchKey(ev({ code: 'KeyD' }))).toBeNull()
+  })
+})

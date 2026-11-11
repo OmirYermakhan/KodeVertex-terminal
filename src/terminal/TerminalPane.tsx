@@ -9,6 +9,7 @@ import { useEffect, useRef } from 'react'
 import { terminalLineHeight, type Settings } from '../settings/settings'
 import { useSettings } from '../settings/store'
 import { ansiFromTokens, THEMES } from '../theme/themes'
+import { matchKey } from '../keys/keymap'
 import { parseOsc7 } from './osc'
 import { spawnPty, type PtyHandle } from './ptyClient'
 
@@ -85,6 +86,8 @@ export function TerminalPane(p: TerminalPaneProps) {
     })
 
     term.attachCustomKeyEventHandler((e) => {
+      // App hotkeys are handled globally; keep xterm from consuming them.
+      if (matchKey(e) !== null) return false
       if (e.type !== 'keydown' || !e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return true
       const key = e.key.toLowerCase()
       if (key === 'c') {

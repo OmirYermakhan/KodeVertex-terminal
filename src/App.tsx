@@ -1,6 +1,9 @@
 import { useEffect } from 'react'
 import { useSettings } from './settings/store'
+import { listen } from '@tauri-apps/api/event'
 import { useTabs } from './layout/tabsStore'
+import { runAction } from './keys/actions'
+import { matchKey } from './keys/keymap'
 import PaneView from './ui/PaneView'
 import TabBar from './ui/TabBar'
 
@@ -11,6 +14,22 @@ export default function App() {
 
   useEffect(() => {
     useSettings.getState().load()
+  }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const a = matchKey(e)
+      if (!a) return
+      e.preventDefault()
+      e.stopPropagation()
+      runAction(a)
+    }
+    window.addEventListener('keydown', onKey, { capture: true })
+    const unlisten = listen('menu://settings', () => runAction('openSettings')).catch(() => () => {})
+    return () => {
+      window.removeEventListener('keydown', onKey, { capture: true })
+      unlisten.then((f) => f())
+    }
   }, [])
 
   return (
