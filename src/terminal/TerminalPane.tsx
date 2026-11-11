@@ -148,8 +148,9 @@ export function TerminalPane(p: TerminalPaneProps) {
 
     term.parser.registerOscHandler(6973, (data) => {
       const report = parseOsc6973(data)
-      // Фоновая панель или открытые настройки — подсказки не показываем.
-      const active = callbacks.current.focused && !useUi.getState().settingsOpen
+      // Фоновая панель, открытые настройки или подсказки выключены — не показываем.
+      const active =
+        callbacks.current.focused && !useUi.getState().settingsOpen && useSettings.getState().settings.pathCompletions
       if (report && (report === 'end' || active)) completionRef.current.onReport(report)
       return true
     })
@@ -260,6 +261,11 @@ export function TerminalPane(p: TerminalPaneProps) {
         fitRef.current?.fit()
       })
   }, [settings])
+
+  // Подсказки выключили — открытый попап закрыть.
+  useEffect(() => {
+    if (!settings.pathCompletions) completionRef.current.close()
+  }, [settings.pathCompletions])
 
   // Фокус в терминал — при смене фокусной панели и после закрытия настроек.
   useEffect(() => {

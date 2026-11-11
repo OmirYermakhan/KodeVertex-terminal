@@ -5,7 +5,7 @@ import { applyTheme } from '../theme/applyTheme'
 
 describe('settings', () => {
   it('defaults', () => {
-    expect(DEFAULTS).toEqual({ theme: 'as', textFont: 'Inter', codeFont: 'JetBrains Mono', textSize: 16, codeSize: 14, lineHeight: 1.7, ligatures: true })
+    expect(DEFAULTS).toEqual({ theme: 'as', textFont: 'Inter', codeFont: 'JetBrains Mono', textSize: 16, codeSize: 14, lineHeight: 1.7, ligatures: true, pathCompletions: true })
     expect(normalizeSettings(undefined)).toEqual(DEFAULTS)
     expect(normalizeSettings('мусор')).toEqual(DEFAULTS)
   })
@@ -22,6 +22,8 @@ describe('settings', () => {
     expect(normalizeSettings({ lineHeight: 1.65 }).lineHeight).toBe(1.7)
     expect(normalizeSettings({ textFont: '' }).textFont).toBe('Inter')
     expect(normalizeSettings({ foo: 1 })).not.toHaveProperty('foo')
+    expect(normalizeSettings({ pathCompletions: false }).pathCompletions).toBe(false)
+    expect(normalizeSettings({ pathCompletions: 'нет' }).pathCompletions).toBe(true)
   })
   it('stepSize clamps', () => {
     expect(stepSize(28, 1, 'text')).toBe(28)

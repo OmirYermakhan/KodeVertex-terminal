@@ -191,6 +191,12 @@ export default function SettingsPanel(p: { open: boolean; onClose: () => void })
               <input type="checkbox" checked={settings.ligatures} onChange={(e) => update({ ligatures: e.target.checked })} />
             </label>
             <small className="st-hint">Влияют на блоки кода в карточках; в терминале лигатуры не поддерживаются.</small>
+
+            <h3>Терминал</h3>
+            <label className="st-row">
+              <span>Подсказки путей</span>
+              <input type="checkbox" checked={settings.pathCompletions} onChange={(e) => update({ pathCompletions: e.target.checked })} />
+            </label>
           </div>
 
           <div className="st-preview" data-testid="preview" style={{ fontFamily: textFontStack(settings.textFont), fontSize: settings.textSize, lineHeight: settings.lineHeight }}>

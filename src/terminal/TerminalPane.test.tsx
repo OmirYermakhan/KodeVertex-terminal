@@ -277,6 +277,22 @@ describe('TerminalPane', () => {
     expect(document.querySelector('.cp')).toBeNull()
   })
 
+  it('ignores reports when path completions are off and closes an open popup on toggle', async () => {
+    invoke.mockImplementation(listing)
+    useSettings.setState({ settings: { ...DEFAULTS, pathCompletions: false } })
+    render(<TerminalPane {...props()} focused initialCwd="/p" />)
+    const term = terms[0]
+    await openPopup(term)
+    expect(invoke).not.toHaveBeenCalled()
+    expect(document.querySelector('.cp')).toBeNull()
+    act(() => useSettings.setState({ settings: { ...DEFAULTS, pathCompletions: true } }))
+    await openPopup(term)
+    expect(document.querySelector('.cp')).not.toBeNull()
+    act(() => useSettings.setState({ settings: { ...DEFAULTS, pathCompletions: false } }))
+    expect(document.querySelector('.cp')).toBeNull()
+    expect(keyHandler(term)(new KeyboardEvent('keydown', { key: 'Enter' }))).toBe(true)
+  })
+
   it('scroll and resize do not re-render the pane while the popup is closed', async () => {
     invoke.mockImplementation(listing)
     const onRender = vi.fn()

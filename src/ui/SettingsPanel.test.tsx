@@ -77,6 +77,14 @@ describe('SettingsPanel', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
+  it('toggles path completions', () => {
+    render(<SettingsPanel open onClose={vi.fn()} />)
+    const box = screen.getByLabelText('Подсказки путей')
+    expect(box).toBeChecked()
+    fireEvent.click(box)
+    expect(update).toHaveBeenCalledWith({ pathCompletions: false })
+  })
+
   it('stores ui-monospace for SF Mono and previews it with Menlo fallback', () => {
     render(<SettingsPanel open onClose={() => {}} />)
     const select = screen.getByLabelText('Шрифт кода') as HTMLSelectElement

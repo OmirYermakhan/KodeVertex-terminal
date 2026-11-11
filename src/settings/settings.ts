@@ -8,6 +8,8 @@ export interface Settings {
   codeSize: number
   lineHeight: 1.5 | 1.6 | 1.7 | 1.8
   ligatures: boolean
+  /** Попап подсказок путей в терминале. */
+  pathCompletions: boolean
 }
 
 export const DEFAULTS: Settings = {
@@ -18,6 +20,7 @@ export const DEFAULTS: Settings = {
   codeSize: 14,
   lineHeight: 1.7,
   ligatures: true,
+  pathCompletions: true,
 }
 
 const THEME_IDS: ThemeId[] = ['kv', 'warm', 'cold', 'light', 'as']
@@ -55,6 +58,7 @@ export function normalizeSettings(raw: unknown): Settings {
     codeSize: clampSize(r.codeSize, 'code', DEFAULTS.codeSize),
     lineHeight: nearestLineHeight(r.lineHeight),
     ligatures: typeof r.ligatures === 'boolean' ? r.ligatures : DEFAULTS.ligatures,
+    pathCompletions: typeof r.pathCompletions === 'boolean' ? r.pathCompletions : DEFAULTS.pathCompletions,
   }
 }
 
