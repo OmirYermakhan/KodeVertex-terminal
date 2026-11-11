@@ -8,6 +8,7 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { useEffect, useRef } from 'react'
 import { terminalLineHeight, type Settings } from '../settings/settings'
 import { useSettings } from '../settings/store'
+import { useUi } from '../ui/uiStore'
 import { codeFontStack } from '../theme/fontFamily'
 import { ansiFromTokens, THEMES } from '../theme/themes'
 import { matchKey } from '../keys/keymap'
@@ -34,6 +35,18 @@ function appearance(s: Settings): Pick<ITerminalOptions, 'fontFamily' | 'fontSiz
   }
 }
 
+/**
+ * xterm замеряет ячейку только при смене fontFamily. Если шрифт догрузился позже
+ * (встроенный @fontsource грузится лениво), замеры остались от запасного шрифта —
+ * переключаем семейство туда и обратно, чтобы xterm перемерил и перерисовал атлас.
+ */
+function remeasureFont(term: Terminal): void {
+  const family = term.options.fontFamily
+  term.options.fontFamily = 'monospace'
+  term.options.fontFamily = family
+  term.clearTextureAtlas()
+}
+
 export function TerminalPane(p: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -44,6 +57,7 @@ export function TerminalPane(p: TerminalPaneProps) {
   })
 
   const settings = useSettings((st) => st.settings)
+  const settingsOpen = useUi((st) => st.settingsOpen)
 
   // Create xterm + PTY once per pane.
   useEffect(() => {
@@ -79,6 +93,8 @@ export function TerminalPane(p: TerminalPaneProps) {
 
     let handle: PtyHandle | null = null
     let disposed = false
+    // Оболочка уже завершилась сама: сессии на стороне Rust больше нет, kill не нужен.
+    let exited = false
 
     term.parser.registerOscHandler(7, (data) => {
       const cwd = parseOsc7(data)
@@ -122,12 +138,13 @@ export function TerminalPane(p: TerminalPaneProps) {
         if (!disposed) term.write(b)
       },
       onExit: () => {
+        exited = true
         if (!disposed) callbacks.current.onExit()
       },
     })
       .then((h) => {
         if (disposed) {
-          h.kill()
+          if (!exited) h.kill()
           return
         }
         handle = h
@@ -151,7 +168,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       clearTimeout(resizeTimer)
       ro.disconnect()
       host.removeEventListener('paste', onPaste, true)
-      handle?.kill()
+      if (!exited) handle?.kill()
       term.dispose()
       termRef.current = null
       fitRef.current = null
@@ -168,12 +185,18 @@ export function TerminalPane(p: TerminalPaneProps) {
     document.fonts
       ?.load(`${opts.fontSize}px ${opts.fontFamily}`)
       .catch(() => {})
-      .then(() => fitRef.current?.fit())
+      .then(() => {
+        // Терминал закрыт или шрифт уже сменили снова — замеры сделает следующий вызов.
+        if (termRef.current !== term || term.options.fontFamily !== opts.fontFamily) return
+        remeasureFont(term)
+        fitRef.current?.fit()
+      })
   }, [settings])
 
+  // Фокус в терминал — при смене фокусной панели и после закрытия настроек.
   useEffect(() => {
-    if (p.focused) termRef.current?.focus()
-  }, [p.focused])
+    if (p.focused && !settingsOpen) termRef.current?.focus()
+  }, [p.focused, settingsOpen])
 
   return (
     <div

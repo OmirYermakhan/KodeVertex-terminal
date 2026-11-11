@@ -1,11 +1,13 @@
-import { render } from '@testing-library/react'
+import { act, render } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PtyHandle, SpawnOptions } from './ptyClient'
 
 const terms: FakeTerminal[] = []
 
 class FakeTerminal {
-  options: Record<string, unknown> = {}
+  /** Все присваивания fontFamily по порядку. */
+  fontHistory: unknown[] = []
+  options: Record<string, unknown>
   cols = 80
   rows = 24
   unicode = { activeVersion: '6' }
@@ -21,13 +23,26 @@ class FakeTerminal {
   paste = vi.fn()
   onData = vi.fn()
   onResize = vi.fn()
+  clearTextureAtlas = vi.fn()
   constructor(opts: Record<string, unknown>) {
-    this.options = { ...opts }
+    const history = this.fontHistory
+    this.options = new Proxy({ ...opts }, {
+      set(target, key, value) {
+        if (key === 'fontFamily') history.push(value)
+        target[key as string] = value
+        return true
+      },
+    })
     terms.push(this)
   }
 }
 
+const addons: FakeAddon[] = []
+
 class FakeAddon {
+  constructor() {
+    addons.push(this)
+  }
   fit = vi.fn()
   onContextLoss = vi.fn()
   dispose = vi.fn()
@@ -63,6 +78,10 @@ globalThis.ResizeObserver = class {
 } as unknown as typeof ResizeObserver
 
 const { TerminalPane } = await import('./TerminalPane')
+const { useUi } = await import('../ui/uiStore')
+const { useSettings } = await import('../settings/store')
+const { DEFAULTS } = await import('../settings/settings')
+const { codeFontStack } = await import('../theme/fontFamily')
 
 const flush = () => new Promise((r) => setTimeout(r, 0))
 
@@ -74,6 +93,9 @@ describe('TerminalPane', () => {
   beforeEach(() => {
     terms.length = 0
     spawns.length = 0
+    addons.length = 0
+    useUi.setState({ settingsOpen: false })
+    useSettings.setState({ settings: { ...DEFAULTS } })
   })
 
   it('kills a session that resolves after unmount and ignores its output/exit', async () => {
@@ -122,5 +144,48 @@ describe('TerminalPane', () => {
     spawns[0].resolve()
     await flush()
     expect(spawns[0].handle.resize).toHaveBeenCalledWith(120, 40)
+  })
+
+  it('does not kill a session that already exited on its own', async () => {
+    const p = props()
+    const { unmount } = render(<TerminalPane {...p} />)
+    spawns[0].resolve()
+    await flush()
+    spawns[0].opts.onExit(0)
+    unmount()
+    expect(spawns[0].handle.kill).not.toHaveBeenCalled()
+  })
+
+  it('re-measures the font after it finishes loading, then fits', async () => {
+    let loaded!: () => void
+    const load = vi.fn(() => new Promise<void>((r) => (loaded = r)))
+    Object.defineProperty(document, 'fonts', { value: { load }, configurable: true })
+    try {
+      render(<TerminalPane {...props()} />)
+      const term = terms[0]
+      const fit = addons[0].fit
+      act(() => useSettings.setState({ settings: { ...DEFAULTS, codeFont: 'Fira Code' } }))
+      const stack = codeFontStack('Fira Code')
+      expect(load).toHaveBeenLastCalledWith(`${DEFAULTS.codeSize}px ${stack}`)
+      term.fontHistory.length = 0
+      fit.mockClear()
+      loaded()
+      await flush()
+      // Семейство меняется туда и обратно — xterm перемеряет ячейку.
+      expect(term.fontHistory).toEqual(['monospace', stack])
+      expect(term.clearTextureAtlas).toHaveBeenCalled()
+      expect(fit).toHaveBeenCalled()
+    } finally {
+      delete (document as { fonts?: unknown }).fonts
+    }
+  })
+
+  it('returns focus to the focused terminal when settings close', () => {
+    useUi.setState({ settingsOpen: true })
+    render(<TerminalPane {...props()} focused />)
+    const term = terms[0]
+    expect(term.focus).not.toHaveBeenCalled()
+    act(() => useUi.setState({ settingsOpen: false }))
+    expect(term.focus).toHaveBeenCalledTimes(1)
   })
 })
