@@ -1,5 +1,7 @@
 mod fonts;
+mod pty;
 mod settings;
+mod shell;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Wry};
@@ -47,8 +49,13 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       settings::settings_load,
       settings::settings_save,
-      fonts::fonts_list
+      fonts::fonts_list,
+      pty::pty_spawn,
+      pty::pty_write,
+      pty::pty_resize,
+      pty::pty_kill
     ])
+    .manage(pty::PtyManager::default())
     .menu(build_menu)
     .on_menu_event(|app, event| {
       if event.id().as_ref() == SETTINGS_MENU_ID {
