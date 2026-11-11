@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -15,6 +16,11 @@ use crate::shell;
 const READ_BUF: usize = 16 * 1024;
 /// Сколько ждать выхода после SIGHUP, прежде чем добить SIGKILL.
 const KILL_GRACE: Duration = Duration::from_secs(2);
+/// Сколько после выхода оболочки ждать, пока читатель дочитает вывод.
+const DRAIN_GRACE: Duration = Duration::from_millis(150);
+/// Как часто читатель проверяет флаг остановки.
+#[cfg(unix)]
+const READ_POLL: Duration = Duration::from_millis(100);
 
 pub struct SpawnOpts {
   pub cwd: Option<PathBuf>,
@@ -28,11 +34,13 @@ pub struct SpawnOpts {
 
 struct Session {
   master: Box<dyn MasterPty + Send>,
-  /// Отдельный замок, чтобы долгая запись не блокировала весь менеджер.
-  writer: Arc<Mutex<Box<dyn Write + Send>>>,
+  /// Очередь для потока записи: вызывающий никогда не блокируется на PTY.
+  input: Sender<Vec<u8>>,
+  #[cfg_attr(unix, allow(dead_code))]
   killer: Box<dyn ChildKiller + Send + Sync>,
   pid: Option<u32>,
-  exited: Arc<AtomicBool>,
+  /// Просит поток чтения завершиться (даже если слейв ещё кем-то открыт).
+  stop_reading: Arc<AtomicBool>,
 }
 
 type Sessions = Arc<Mutex<HashMap<String, Session>>>;
@@ -76,47 +84,61 @@ impl PtyManager {
     // Слейв нужен только ребёнку: иначе чтение мастера не увидит EOF после выхода.
     drop(pair.slave);
 
-    let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+    let reader = PtyReader::new(pair.master.as_ref())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
-    let exited = Arc::new(AtomicBool::new(false));
+    let stop_reading = Arc::new(AtomicBool::new(false));
+    let (input, input_rx) = mpsc::channel::<Vec<u8>>();
+    let (read_done, read_done_rx) = mpsc::channel::<()>();
 
     lock(&self.sessions).insert(
       id.clone(),
       Session {
         master: pair.master,
-        writer: Arc::new(Mutex::new(writer)),
+        input,
         killer: child.clone_killer(),
         pid: child.process_id(),
-        exited: exited.clone(),
+        stop_reading: stop_reading.clone(),
       },
     );
 
-    std::thread::Builder::new()
-      .name(format!("pty-read-{id}"))
-      .spawn(move || read_loop(reader, on_data))
-      .map_err(|e| e.to_string())?;
+    // Поток записи: живёт, пока жива сессия (Sender), и пишет по порядку.
+    spawn_thread(format!("pty-write-{id}"), move || {
+      let mut writer = writer;
+      for chunk in input_rx {
+        if writer.write_all(&chunk).and_then(|_| writer.flush()).is_err() {
+          break;
+        }
+      }
+    })?;
+
+    let stop = stop_reading.clone();
+    spawn_thread(format!("pty-read-{id}"), move || {
+      reader.run(&stop, on_data);
+      let _ = read_done.send(());
+    })?;
 
     let sessions = self.sessions.clone();
     let wait_id = id.clone();
-    std::thread::Builder::new()
-      .name(format!("pty-wait-{id}"))
-      .spawn(move || {
-        let code = child.wait().ok().map(|s| s.exit_code());
-        exited.store(true, Ordering::SeqCst);
-        // Сессию убираем до события, чтобы после on_exit write уже давал Err.
-        lock(&sessions).remove(&wait_id);
-        on_exit(code);
-      })
-      .map_err(|e| e.to_string())?;
+    spawn_thread(format!("pty-wait-{id}"), move || {
+      let code = child.wait().ok().map(|s| s.exit_code());
+      // Даём читателю дочитать хвост вывода, затем останавливаем его в любом случае:
+      // слейв может держать отвязанный потомок, и тогда EOF не придёт никогда.
+      let _ = read_done_rx.recv_timeout(DRAIN_GRACE);
+      stop_reading.store(true, Ordering::SeqCst);
+      // Сессию убираем до события, чтобы после on_exit write уже давал Err.
+      lock(&sessions).remove(&wait_id);
+      on_exit(code);
+    })?;
 
     Ok(id)
   }
 
+  /// Ставит данные в очередь записи; не блокируется, даже если ребёнок не читает ввод.
   pub fn write(&self, id: &str, data: &[u8]) -> Result<(), String> {
-    let writer = lock(&self.sessions).get(id).map(|s| s.writer.clone()).ok_or_else(|| no_session(id))?;
-    let mut w = lock(&writer);
-    w.write_all(data).and_then(|_| w.flush()).map_err(|e| e.to_string())
+    let sessions = lock(&self.sessions);
+    let s = sessions.get(id).ok_or_else(|| no_session(id))?;
+    s.input.send(data.to_vec()).map_err(|_| no_session(id))
   }
 
   pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -127,22 +149,25 @@ impl PtyManager {
       .map_err(|e| e.to_string())
   }
 
-  /// Шлёт оболочке SIGHUP и закрывает мастер; если процесс не вышел за
-  /// `KILL_GRACE`, добивает SIGKILL. Ожидающий поток затем соберёт статус.
+  /// Завершает всю сессию терминала: SIGHUP всем её процессам (включая фоновые
+  /// задания), закрытие мастера, а через `KILL_GRACE` — SIGKILL уцелевшим.
   pub fn kill(&self, id: &str) -> Result<(), String> {
+    #[cfg_attr(unix, allow(unused_mut))]
     let mut s = lock(&self.sessions).remove(id).ok_or_else(|| no_session(id))?;
-    let _ = s.killer.kill();
-    let (pid, exited) = (s.pid, s.exited.clone());
-    drop(s);
-    if let Some(pid) = pid {
+    s.stop_reading.store(true, Ordering::SeqCst);
+    #[cfg(unix)]
+    if let Some(pid) = s.pid {
+      let sid = pid as libc::pid_t;
+      session::signal(sid, libc::SIGHUP);
       std::thread::spawn(move || {
         std::thread::sleep(KILL_GRACE);
-        if !exited.load(Ordering::SeqCst) {
-          // Процесс ещё не собран ожидающим потоком, значит pid всё ещё его.
-          unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
-        }
+        session::signal(sid, libc::SIGKILL);
       });
     }
+    #[cfg(not(unix))]
+    let _ = s.killer.kill();
+    // Drop закрывает мастер и очередь записи (поток записи завершится сам).
+    drop(s);
     Ok(())
   }
 
@@ -153,20 +178,131 @@ impl PtyManager {
   }
 }
 
-/// Читает PTY и отдаёт байты как есть, без декодирования.
-fn read_loop(mut reader: Box<dyn Read + Send>, on_data: impl Fn(Vec<u8>)) {
-  let mut buf = vec![0u8; READ_BUF];
-  loop {
-    match reader.read(&mut buf) {
-      Ok(0) => break,
-      Ok(n) => on_data(buf[..n].to_vec()),
-      Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-      Err(_) => break,
+fn spawn_thread(name: String, f: impl FnOnce() + Send + 'static) -> Result<(), String> {
+  std::thread::Builder::new().name(name).spawn(f).map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Чтение мастера PTY. Байты отдаются как есть, без декодирования.
+struct PtyReader {
+  #[cfg(unix)]
+  file: std::fs::File,
+  #[cfg(not(unix))]
+  inner: Box<dyn Read + Send>,
+}
+
+impl PtyReader {
+  #[cfg(unix)]
+  fn new(master: &(dyn MasterPty + Send)) -> Result<Self, String> {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let fd = master.as_raw_fd().ok_or("нет дескриптора PTY")?;
+    // Собственная копия дескриптора: закрывается, когда поток чтения завершится.
+    let dup = unsafe { libc::dup(fd) };
+    if dup < 0 {
+      return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(Self { file: std::fs::File::from(unsafe { OwnedFd::from_raw_fd(dup) }) })
+  }
+
+  #[cfg(not(unix))]
+  fn new(master: &(dyn MasterPty + Send)) -> Result<Self, String> {
+    Ok(Self { inner: master.try_clone_reader().map_err(|e| e.to_string())? })
+  }
+
+  #[cfg(unix)]
+  fn run(mut self, stop: &AtomicBool, on_data: impl Fn(Vec<u8>)) {
+    let mut buf = vec![0u8; READ_BUF];
+    while !stop.load(Ordering::SeqCst) {
+      match wait_readable(&self.file, READ_POLL) {
+        Ok(false) => continue,
+        Ok(true) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+        Err(_) => break,
+      }
+      match self.file.read(&mut buf) {
+        Ok(0) => break,
+        Ok(n) => on_data(buf[..n].to_vec()),
+        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+        Err(_) => break,
+      }
+    }
+  }
+
+  #[cfg(not(unix))]
+  fn run(mut self, stop: &AtomicBool, on_data: impl Fn(Vec<u8>)) {
+    let mut buf = vec![0u8; READ_BUF];
+    while !stop.load(Ordering::SeqCst) {
+      match self.inner.read(&mut buf) {
+        Ok(0) => break,
+        Ok(n) => on_data(buf[..n].to_vec()),
+        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+        Err(_) => break,
+      }
     }
   }
 }
 
-#[tauri::command]
+/// Ждёт готовности к чтению. `select`, а не `poll`: на macOS `poll` не работает с tty.
+#[cfg(unix)]
+fn wait_readable(file: &std::fs::File, timeout: Duration) -> std::io::Result<bool> {
+  use std::os::fd::AsRawFd;
+  let fd = file.as_raw_fd();
+  unsafe {
+    let mut set: libc::fd_set = std::mem::zeroed();
+    libc::FD_ZERO(&mut set);
+    libc::FD_SET(fd, &mut set);
+    let mut tv = libc::timeval {
+      tv_sec: timeout.as_secs() as libc::time_t,
+      tv_usec: timeout.subsec_micros() as libc::suseconds_t,
+    };
+    match libc::select(fd + 1, &mut set, std::ptr::null_mut(), std::ptr::null_mut(), &mut tv) {
+      -1 => Err(std::io::Error::last_os_error()),
+      0 => Ok(false),
+      _ => Ok(true),
+    }
+  }
+}
+
+/// Процессы сессии терминала (оболочка — лидер сессии, `sid` = её pid).
+#[cfg(unix)]
+mod session {
+  /// Сигнал всем процессам сессии: группе оболочки и каждому заданию в своей группе.
+  /// Ничего не делает, если от сессии не осталось процессов (pid мог быть переиспользован).
+  pub fn signal(sid: libc::pid_t, sig: libc::c_int) {
+    let pids = members(sid);
+    if pids.is_empty() {
+      return;
+    }
+    unsafe { libc::killpg(sid, sig) };
+    for pid in pids {
+      unsafe { libc::kill(pid, sig) };
+    }
+  }
+
+  #[cfg(target_os = "macos")]
+  fn members(sid: libc::pid_t) -> Vec<libc::pid_t> {
+    let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    if n <= 0 {
+      return Vec::new();
+    }
+    let mut pids = vec![0 as libc::pid_t; n as usize + 64];
+    let size = (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int;
+    let n = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), size) };
+    pids.truncate(n.max(0) as usize);
+    pids.retain(|&p| p > 0 && unsafe { libc::getsid(p) } == sid);
+    pids
+  }
+
+  #[cfg(not(target_os = "macos"))]
+  fn members(sid: libc::pid_t) -> Vec<libc::pid_t> {
+    let Ok(dir) = std::fs::read_dir("/proc") else { return Vec::new() };
+    dir
+      .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<libc::pid_t>().ok())
+      .filter(|&p| unsafe { libc::getsid(p) } == sid)
+      .collect()
+  }
+}
+
+#[tauri::command(async)]
 pub fn pty_spawn(
   app: AppHandle,
   manager: State<'_, PtyManager>,
@@ -194,17 +330,17 @@ pub fn pty_spawn(
   )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pty_write(manager: State<'_, PtyManager>, id: String, data: String) -> Result<(), String> {
   manager.write(&id, data.as_bytes())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pty_resize(manager: State<'_, PtyManager>, id: String, cols: u16, rows: u16) -> Result<(), String> {
   manager.resize(&id, cols, rows)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn pty_kill(manager: State<'_, PtyManager>, id: String) -> Result<(), String> {
   manager.kill(&id)
 }
@@ -252,6 +388,35 @@ mod tests {
           return false;
         }
         guard = cv.wait_timeout(guard, deadline - now).unwrap().0;
+      }
+    }
+
+    /// Ждёт, пока поток чтения отпустит колбэк (значит, он завершился).
+    fn wait_reader_done(&self) -> bool {
+      let deadline = Instant::now() + OUTPUT_TIMEOUT;
+      while Arc::strong_count(&self.0) > 1 {
+        if Instant::now() >= deadline {
+          return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+      }
+      true
+    }
+
+    /// Ищет `<prefix><число>;` в выводе после `from`.
+    fn wait_number(&self, prefix: &str, from: usize) -> Option<u32> {
+      let deadline = Instant::now() + OUTPUT_TIMEOUT;
+      loop {
+        let text = String::from_utf8_lossy(&self.0 .0.lock().unwrap()[from..]).into_owned();
+        let found = text.match_indices(prefix).find_map(|(i, _)| {
+          let rest = &text[i + prefix.len()..];
+          let end = rest.find(';')?;
+          rest[..end].parse().ok()
+        });
+        if found.is_some() || Instant::now() >= deadline {
+          return found;
+        }
+        std::thread::sleep(Duration::from_millis(20));
       }
     }
 
@@ -312,7 +477,8 @@ mod tests {
     let home = temp_home();
     let m = PtyManager::default();
     let (id, out, _rx) = start(&m, opts(home.path(), &[]));
-    run(&m, &id, &out, "echo \"Привет 👋\"\n", "Привет 👋");
+    // Строка склеивается оболочкой, поэтому в эхе ввода её нет — только в выводе.
+    run(&m, &id, &out, "echo \"При\"\"вет 👋\"\n", "Привет 👋");
     m.kill(&id).unwrap();
   }
 
@@ -385,5 +551,46 @@ mod tests {
     let errno = std::io::Error::last_os_error().raw_os_error();
     assert_eq!((rc, errno), (-1, Some(libc::ESRCH)), "процесс {pid} всё ещё существует");
     assert!(m.write(&id, b"echo\n").is_err());
+  }
+
+  fn alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+  }
+
+  #[test]
+  fn pty_kill_takes_down_background_jobs_and_reader() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, rx) = start(&m, opts(home.path(), &[]));
+    // Фоновое задание, которое игнорирует SIGHUP и держит слейв открытым.
+    let from = out.len();
+    m.write(&id, b"(trap '' HUP; exec sleep 300) & echo \"B\"\"G=$!;\"\n").unwrap();
+    let bg = out.wait_number("BG=", from).unwrap_or_else(|| panic!("нет pid, вывод: {:?}", out.text()));
+    assert!(alive(bg));
+
+    m.kill(&id).unwrap();
+    rx.recv_timeout(EXIT_TIMEOUT).expect("on_exit после kill");
+    let deadline = Instant::now() + OUTPUT_TIMEOUT;
+    while alive(bg) && Instant::now() < deadline {
+      std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!alive(bg), "фоновый процесс {bg} пережил kill");
+    assert!(out.wait_reader_done(), "поток чтения не завершился");
+  }
+
+  #[test]
+  fn pty_reader_released_after_exit_with_disowned_job() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, rx) = start(&m, opts(home.path(), &[]));
+    // Отвязанное задание держит слейв, поэтому EOF на мастере после exit не придёт.
+    let from = out.len();
+    m.write(&id, b"(trap '' HUP; exec sleep 300) &! echo \"B\"\"G=$!;\"\n").unwrap();
+    let bg = out.wait_number("BG=", from).unwrap_or_else(|| panic!("нет pid, вывод: {:?}", out.text()));
+    m.write(&id, b"exit\n").unwrap();
+    rx.recv_timeout(EXIT_TIMEOUT).expect("on_exit после exit");
+    let reader_done = out.wait_reader_done();
+    unsafe { libc::kill(bg as libc::pid_t, libc::SIGKILL) };
+    assert!(reader_done, "поток чтения не завершился");
   }
 }

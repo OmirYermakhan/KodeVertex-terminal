@@ -7,11 +7,15 @@ use tauri::{AppHandle, Manager, Runtime};
 const FALLBACK_SHELL: &str = "/bin/zsh";
 
 /// Каталог с файлами интеграции zsh (`.zshenv`, `.zshrc`, …) из ресурсов приложения.
+/// В отладочной сборке, если ресурс не найден, берётся каталог из исходников.
 pub fn integration_dir<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
-  app
-    .path()
-    .resolve("shell/zsh", BaseDirectory::Resource)
-    .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("shell/zsh"))
+  let resolved = app.path().resolve("shell/zsh", BaseDirectory::Resource).ok();
+  #[cfg(debug_assertions)]
+  if !resolved.as_ref().is_some_and(|d| d.is_dir()) {
+    return PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("shell/zsh");
+  }
+  // Пустой путь: spawn не найдёт .zshrc и запустит оболочку без интеграции.
+  resolved.unwrap_or_default()
 }
 
 /// Оболочка пользователя: `SHELL` из переопределений, затем из окружения, иначе `/bin/zsh`.
@@ -33,9 +37,15 @@ pub fn session_env(zdotdir: &std::path::Path, orig_zdotdir: Option<String>) -> V
     ("TERM".to_string(), "xterm-256color".to_string()),
     ("COLORTERM".to_string(), "truecolor".to_string()),
     ("TERM_PROGRAM".to_string(), "KodeVertex".to_string()),
-    ("KV_ORIG_ZDOTDIR".to_string(), orig_zdotdir.unwrap_or_default()),
-    ("ZDOTDIR".to_string(), zdotdir.to_string_lossy().into_owned()),
   ];
+  // Без файлов интеграции подмена ZDOTDIR отключила бы dotfiles пользователя —
+  // в этом случае запускаем обычную оболочку.
+  if zdotdir.join(".zshrc").is_file() {
+    env.push(("KV_ORIG_ZDOTDIR".to_string(), orig_zdotdir.unwrap_or_default()));
+    env.push(("ZDOTDIR".to_string(), zdotdir.to_string_lossy().into_owned()));
+  } else {
+    log::warn!("нет файлов интеграции zsh в {}, ZDOTDIR не подменяется", zdotdir.display());
+  }
   // Приложение, запущенное из Finder, не получает LANG — без него zsh не понимает UTF-8.
   let has_locale = ["LC_ALL", "LC_CTYPE", "LANG"]
     .iter()
@@ -58,12 +68,21 @@ mod tests {
 
   #[test]
   fn session_env_sets_integration_vars() {
-    let env = session_env(std::path::Path::new("/r/shell/zsh"), None);
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("shell/zsh");
+    let env = session_env(&dir, None);
     let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
     assert_eq!(get("TERM"), Some("xterm-256color"));
     assert_eq!(get("COLORTERM"), Some("truecolor"));
     assert_eq!(get("TERM_PROGRAM"), Some("KodeVertex"));
     assert_eq!(get("KV_ORIG_ZDOTDIR"), Some(""));
-    assert_eq!(get("ZDOTDIR"), Some("/r/shell/zsh"));
+    assert_eq!(get("ZDOTDIR"), Some(dir.to_str().unwrap()));
+  }
+
+  #[test]
+  fn session_env_without_integration_keeps_user_zdotdir() {
+    let missing = tempfile::tempdir().unwrap();
+    let env = session_env(missing.path(), Some("/u/zd".to_string()));
+    assert!(env.iter().all(|(k, _)| k != "ZDOTDIR" && k != "KV_ORIG_ZDOTDIR"), "{env:?}");
+    assert!(env.iter().any(|(k, v)| k == "TERM" && v == "xterm-256color"));
   }
 }
