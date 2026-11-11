@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KodeVertex Terminal — темы</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#08090a;color:#f1f0eb;font-family:"Geist",system-ui,sans-serif;padding:40px 32px 80px}
+  .wrap{max-width:1380px;margin:0 auto}
+  .eyebrow{font-family:"Geist Mono",monospace;font-size:12px;color:#636972;letter-spacing:.08em;text-transform:uppercase}
+  h1{font-weight:500;font-size:30px;margin:10px 0 8px}
+  .lead{color:#8a9199;font-size:16px;max-width:900px;line-height:1.6;margin:0 0 24px}
+
+  /* theme vars */
+  .t-kv{--bg:#0c0e10;--panel:#16191d;--panel2:#0f1113;--rule:#262a2f;--text:#e4e3dd;--strong:#f1f0eb;--muted:#8a9199;--you:#23272d;--acc:#c6f24e;--accText:#c6f24e;--onAcc:#0c0e10;--info:#7fb6f2;--add:#7fd18b;--del:#ef7d7d;--sumBg:#1a2010;--sumRule:#3a4a1a;--kw:#c6f24e;--str:#7fd18b;--fn:#7fb6f2;--num:#f2c46b;--com:#636972;--sans:"Geist",system-ui,sans-serif;--mono:"Geist Mono",monospace}
+  .t-warm{--bg:#1c1b19;--panel:#252321;--panel2:#201f1d;--rule:#34312d;--text:#dcd7cd;--strong:#efeae0;--muted:#948d82;--you:#2e2b27;--acc:#b5cf6a;--accText:#c3d985;--onAcc:#1c1b19;--info:#9bb4c9;--add:#9cc58f;--del:#d99484;--sumBg:#262a1e;--sumRule:#3f4630;--kw:#d7a86e;--str:#9cc58f;--fn:#9bb4c9;--num:#c9a0c9;--com:#7a746a;--sans:"Geist",system-ui,sans-serif;--mono:"Geist Mono",monospace}
+  .t-cold{--bg:#161b22;--panel:#1d232c;--panel2:#191e26;--rule:#2b333e;--text:#d3dae3;--strong:#eef2f6;--muted:#8592a3;--you:#252d38;--acc:#8fb8ff;--accText:#a5c6ff;--onAcc:#10151b;--info:#b9a2f0;--add:#7fcf9a;--del:#f08c8c;--sumBg:#1a2534;--sumRule:#2f425c;--kw:#ff8f70;--str:#a5d6a7;--fn:#8fb8ff;--num:#79d0e0;--com:#66727f;--sans:"Geist",system-ui,sans-serif;--mono:"Geist Mono",monospace}
+  .t-light{--bg:#f6f5f0;--panel:#ecebe4;--panel2:#f0efe9;--rule:#dcdad1;--text:#2a2d31;--strong:#0c0e10;--muted:#6d737b;--you:#e3e2da;--acc:#5f7d12;--accText:#4b6608;--onAcc:#f6f5f0;--info:#2f6fb3;--add:#2e8540;--del:#c0443b;--sumBg:#e9efd9;--sumRule:#c8d6a3;--kw:#8a3ffc;--str:#2e8540;--fn:#2f6fb3;--num:#b5641a;--com:#9a9ea4;--sans:"Geist",system-ui,sans-serif;--mono:"Geist Mono",monospace}
+  /* Android Studio · New UI · Dark (ваша текущая настройка) */
+  .t-as{--bg:#1e1f22;--panel:#2b2d30;--panel2:#26282b;--rule:#393b40;--text:#bcbec4;--strong:#dfe1e5;--muted:#6f737a;--you:#2e436e;--acc:#3574f0;--accText:#548af7;--onAcc:#ffffff;--info:#56a8f5;--add:#6aab73;--del:#f75464;--sumBg:#25324d;--sumRule:#35538f;--kw:#cf8e6d;--str:#6aab73;--fn:#56a8f5;--num:#2aacb8;--com:#7a7e85;--sans:"Inter",-apple-system,system-ui,sans-serif;--mono:"JetBrains Mono",monospace}
+
+  /* switcher */
+  .switch{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}
+  .sbtn{display:flex;align-items:center;gap:10px;cursor:pointer;border:1px solid #262a2f;background:#0f1113;color:#e4e3dd;border-radius:9px;padding:9px 14px;font-size:14px;font-family:inherit}
+  .sbtn:hover{border-color:#636972}
+  .sbtn.selected,.sbtn.on{border-color:#c6f24e;box-shadow:0 0 0 1px #c6f24e}
+  .sbtn .sw{display:flex}.sbtn .sw i{width:12px;height:18px}
+  .sbtn .sw i:first-child{border-radius:3px 0 0 3px}.sbtn .sw i:last-child{border-radius:0 3px 3px 0}
+  .sbtn small{color:#636972;font-family:"Geist Mono",monospace;font-size:11px}
+
+  /* window */
+  .win{border-radius:12px;overflow:hidden;background:var(--bg);color:var(--text);border:1px solid var(--rule);font-family:var(--sans);transition:background .25s,color .25s}
+  .win *{transition:background-color .25s,border-color .25s,color .25s}
+  .bar{display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--rule)}
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--rule)}
+  .tab{font-family:var(--mono);font-size:12px;color:var(--muted);padding:5px 11px;border-radius:6px;display:flex;align-items:center;gap:7px}
+  .tab.on{color:var(--strong);background:var(--bg)}
+  .tab.on i{width:6px;height:6px;border-radius:50%;background:var(--acc)}
+  .tabs{display:flex;gap:4px;margin-left:16px}
+  .menu{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--muted);border:1px solid var(--rule);border-radius:6px;padding:3px 10px}
+  .menu b{color:var(--strong);font-weight:500}
+  .panes{display:grid;grid-template-columns:1.6fr 1fr;height:470px}
+  .pane{position:relative;overflow:hidden;padding:18px 20px}
+  .pane + .pane{border-left:1px solid var(--rule)}
+  .who{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px}
+  .you{margin:0 0 14px auto;max-width:70%;background:var(--you);border-radius:10px 10px 2px 10px;padding:10px 14px;font-size:14.5px;color:var(--strong)}
+  .you .who{color:var(--muted);text-align:right}
+  .t-as .you .who{color:#9fb6e8}
+  .ai{background:var(--panel);border:1px solid var(--rule);border-left:2px solid var(--acc);border-radius:8px;padding:12px 14px;margin-bottom:12px}
+  .ai .who{color:var(--accText)}
+  .ai p{margin:0 0 10px;font-size:14.5px;line-height:1.65}
+  .ai code{font-family:var(--mono);font-size:12.5px;background:var(--bg);color:var(--accText);padding:1px 5px;border-radius:4px}
+  pre{margin:0;background:var(--bg);border:1px solid var(--rule);border-radius:6px;padding:10px 12px;font-family:var(--mono);font-size:12.5px;line-height:1.6;color:var(--text)}
+  .kw{color:var(--kw)}.str{color:var(--str)}.fn{color:var(--fn)}.num{color:var(--num)}.com{color:var(--com);font-style:italic}
+  .act{border:1px dashed var(--rule);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+  .act .who{color:var(--info)}
+  .act b{color:var(--strong);font-weight:500}
+  .diff{margin-top:6px;background:var(--bg);border-radius:5px;padding:6px 10px;line-height:1.55}
+  .diff .a{color:var(--add)}.diff .d{color:var(--del)}
+  .sum{background:var(--sumBg);border:1px solid var(--sumRule);border-radius:8px;padding:11px 14px;font-size:14.5px;line-height:1.6}
+  .sum .who{color:var(--accText)}
+  .fade{position:absolute;left:0;right:0;bottom:0;height:50px;background:linear-gradient(transparent,var(--bg))}
+  .sh{font-family:var(--mono);font-size:13px;line-height:1.75}
+  .sh .p{color:var(--accText)}.sh .dim{color:var(--muted)}.sh .ok{color:var(--add)}
+  .agents{border-top:1px solid var(--rule);background:var(--panel2);font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .ah{display:flex;justify-content:space-between;padding:7px 18px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;border-bottom:1px solid var(--rule)}
+  .ah b{color:var(--strong);font-weight:500}
+  .ar{display:grid;grid-template-columns:14px 170px 1fr 90px 60px;gap:12px;align-items:center;padding:7px 18px}
+  .ar + .ar{border-top:1px solid var(--rule)}
+  .st{width:7px;height:7px;border-radius:50%;background:var(--acc)}
+  .st.d{background:var(--muted)}
+  .ar b{color:var(--strong);font-weight:500}
+  .r{text-align:right}
+  .status{display:flex;height:28px;background:var(--panel);border-top:1px solid var(--rule);font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  .seg{display:flex;align-items:center;gap:6px;padding:0 13px;border-right:1px solid var(--rule)}
+  .seg b{color:var(--strong);font-weight:500}
+  .seg.v{background:var(--acc);color:var(--onAcc);font-weight:500}
+  .seg.right{margin-left:auto;border-left:1px solid var(--rule);border-right:0}
+  .ctx{width:80px;height:5px;background:var(--rule);border-radius:3px;overflow:hidden}
+  .ctx i{display:block;height:100%;width:42%;background:var(--acc)}
+  .note{margin-top:18px;color:#8a9199;font-size:14px;line-height:1.6;max-width:900px}
+  .note b{color:#e4e3dd;font-weight:500}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">KodeVertex Terminal · Лист 05 · темы</div>
+  <h1>Все палитры — как выбор тем в настройках</h1>
+  <p class="lead">Нажимайте на темы: окно переключается сразу, так же это будет работать в самом терминале. Последняя тема, <b style="color:#e4e3dd;font-weight:500">Android Studio</b>, повторяет вашу текущую настройку: New UI, тема Dark, шрифт JetBrains Mono, те же цвета подсветки кода.</p>
+
+  <div class="switch" id="sw"></div>
+
+  <div class="win t-as" id="win">
+    <div class="bar">
+      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <div class="tabs"><div class="tab on"><i></i>shop-app · claude</div><div class="tab">landing</div><div class="tab">server logs</div></div>
+      <div class="menu">Тема: <b id="tname">Android Studio</b> ▾</div>
+    </div>
+    <div class="panes">
+      <div class="pane">
+        <div class="you"><div class="who">Вы</div>Почему не работает кнопка «Отправить»?</div>
+        <div class="ai"><div class="who">Claude</div><p>Кнопка не была связана с функцией <code>send</code>. Вот как должно быть:</p>
+<pre><span class="com">// Form.kt</span>
+<span class="kw">fun</span> <span class="fn">send</span>(form: Form) {
+    api.<span class="fn">post</span>(<span class="str">"/orders"</span>, form, retries = <span class="num">3</span>)
+}</pre></div>
+        <div class="act"><div class="who">✎ Изменил файл</div><b>src/Form.tsx</b> · +1 −1
+          <div class="diff"><div class="d">- &lt;button&gt;</div><div class="a">+ &lt;button onClick={send}&gt;</div></div></div>
+        <div class="sum"><div class="who">✓ Итог</div>Готово — все 4 теста проходят.</div>
+        <div class="fade"></div>
+      </div>
+      <div class="pane">
+        <div class="sh">
+          <span class="p">❯</span> git status<br>
+          <span class="dim">On branch</span> feature/form<br>
+          &nbsp;&nbsp;<span class="ok">modified: src/Form.tsx</span><br><br>
+          <span class="p">❯</span> npm run dev<br>
+          <span class="dim">▲ ready on</span> localhost:3000<br><br>
+          <span class="p">❯</span> ▍
+        </div>
+      </div>
+    </div>
+    <div class="agents">
+      <div class="ah"><span>Агенты · <b>1 работает</b> · 1 готов</span><span>⌘J</span></div>
+      <div class="ar"><span class="st"></span><b>Главный</b><span>Запускает <b>npm test</b></span><span class="r">1м 04с</span><span class="r">38k</span></div>
+      <div class="ar"><span class="st d"></span><b>└ Стили</b><span>Готово · проверил 7 файлов</span><span class="r">0м 41с</span><span class="r">12k</span></div>
+    </div>
+    <div class="status">
+      <div class="seg v">◆ CLAUDE</div>
+      <div class="seg">проект <b>shop-app</b></div>
+      <div class="seg">⎇ <b>feature/form</b></div>
+      <div class="seg">модель <b>Opus 5.5</b></div>
+      <div class="seg">контекст <span class="ctx"><i></i></span> <b>84k</b>/200k</div>
+      <div class="seg right">14:32</div>
+    </div>
+  </div>
+
+  <p class="note">В настройках будет отдельный пункт <b>«Импорт темы из JetBrains»</b>: терминал прочитает вашу тему из Android Studio или IntelliJ и подхватит цвета. Если в IDE поменяете тему, терминал можно обновить в один клик.</p>
+</div>
+
+<script>
+  const themes=[
+    ['kv','A · KodeVertex','фирменная',['#0c0e10','#e4e3dd','#c6f24e']],
+    ['warm','B · Тёплый графит','мягкая',['#1c1b19','#dcd7cd','#b5cf6a']],
+    ['cold','C · Сине-серый','спокойная',['#161b22','#d3dae3','#8fb8ff']],
+    ['light','D · Светлая бумага','дневная',['#f6f5f0','#2a2d31','#5f7d12']],
+    ['as','E · Android Studio','как у вас',['#1e1f22','#bcbec4','#3574f0']],
+  ];
+  const sw=document.getElementById('sw'),win=document.getElementById('win'),tn=document.getElementById('tname');
+  themes.forEach(([k,n,s,c])=>{
+    const b=document.createElement('div');
+    b.className='sbtn'+(k==='as'?' on':'');
+    b.dataset.choice=k;
+    b.innerHTML=`<span class="sw">${c.map(x=>`<i style="background:${x}"></i>`).join('')}</span>${n} <small>${s}</small>`;
+    b.onclick=()=>{document.querySelectorAll('.sbtn').forEach(x=>x.classList.remove('on'));b.classList.add('on');win.className='win t-'+k;tn.textContent=n.split(' · ')[1];window.toggleSelect&&toggleSelect(b)};
+    sw.appendChild(b);
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KodeVertex Terminal — нижняя панель</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#08090a;color:#f1f0eb;font-family:"Geist",system-ui,sans-serif;padding:40px 32px 80px}
+  .wrap{max-width:1300px;margin:0 auto}
+  .eyebrow{font-family:"Geist Mono",monospace;font-size:12px;color:#636972;letter-spacing:.08em;text-transform:uppercase}
+  h1{font-weight:500;font-size:30px;margin:10px 0 8px}
+  .lead{color:#8a9199;font-size:16px;max-width:900px;line-height:1.6;margin:0 0 26px}
+  .kbd{display:inline-block;font-family:"Geist Mono",monospace;font-size:11.5px;color:#e4e3dd;background:#16191d;border:1px solid #262a2f;border-bottom-width:2px;border-radius:4px;padding:0 5px}
+
+  .win{--bg:#1e1f22;--panel:#2b2d30;--panel2:#26282b;--rule:#393b40;--text:#bcbec4;--strong:#dfe1e5;--muted:#6f737a;--you:#2e436e;--acc:#3574f0;--accText:#548af7;--info:#56a8f5;--add:#6aab73;--del:#f75464;--warn:#e0b05a;--sans:"Inter",system-ui,sans-serif;--mono:"JetBrains Mono",monospace;
+    border-radius:12px;overflow:hidden;background:var(--bg);color:var(--text);border:1px solid var(--rule);font-family:var(--sans);display:flex;flex-direction:column;height:760px}
+  .bar{display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--rule);flex:none}
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--rule)}
+  .tabs{display:flex;gap:4px;margin-left:16px}
+  .tab{font-family:var(--mono);font-size:12px;color:var(--muted);padding:5px 11px;border-radius:6px;display:flex;align-items:center;gap:7px}
+  .tab.on{color:var(--strong);background:var(--bg)}
+  .tab.on i{width:6px;height:6px;border-radius:50%;background:var(--acc)}
+
+  /* blocks area */
+  .feed{flex:1;overflow:hidden;padding:16px 22px;position:relative}
+  .who{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px}
+  .you{margin:0 0 12px auto;max-width:60%;background:var(--you);border-radius:10px 10px 2px 10px;padding:9px 14px;font-size:14.5px;color:var(--strong)}
+  .you .who{color:#9fb6e8;text-align:right}
+  .card{background:var(--panel);border:1px solid var(--rule);border-left:2px solid var(--acc);border-radius:8px;padding:11px 14px;margin-bottom:10px;max-width:76ch}
+  .card .who{color:var(--accText)}
+  .card p{margin:0;font-size:14.5px;line-height:1.65}
+  .card code{font-family:var(--mono);font-size:12.5px;background:var(--bg);color:var(--accText);padding:1px 5px;border-radius:4px}
+  .act{border:1px dashed var(--rule);border-radius:8px;padding:8px 12px;margin-bottom:10px;font-family:var(--mono);font-size:12.5px;color:var(--muted);max-width:76ch}
+  .act .who{color:var(--info)}
+  .act b{color:var(--strong);font-weight:500}
+  .blk{border:1px solid transparent;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-family:var(--mono);font-size:13px;line-height:1.7;max-width:76ch}
+  .blk .cmd{color:var(--strong)} .blk .p{color:var(--accText)} .blk .ok{color:var(--add)} .blk .dim{color:var(--muted)}
+  .blk .bh{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}
+  .blk.sel{border-color:var(--acc);background:rgba(53,116,240,.06)}
+
+  /* bottom dock */
+  .dock{flex:none;border-top:1px solid var(--rule);background:var(--panel2)}
+  .dh{display:flex;align-items:center;justify-content:space-between;padding:6px 16px;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .dh b{color:var(--strong);font-weight:500}
+  .dh .keys{text-transform:none;letter-spacing:0}
+  .row{display:grid;grid-template-columns:10px 150px 92px 1fr 64px 44px;gap:12px;align-items:center;padding:6px 16px;font-family:var(--mono);font-size:12.5px;color:var(--muted);border-left:2px solid transparent}
+  .row .n{color:var(--strong)}
+  .row .m{font-size:10.5px;border:1px solid var(--rule);border-radius:4px;padding:0 5px;justify-self:start}
+  .row .m.f{color:#e8c46a;border-color:#5a4a22}
+  .row b{color:var(--strong);font-weight:500}
+  .row .r{text-align:right}
+  .row.sub .n{padding-left:14px;position:relative}
+  .row.sub .n::before{content:"└";position:absolute;left:0;color:var(--muted)}
+  .row.focus{background:#232b3a;border-left-color:var(--acc)}
+  .row.focus .hint{color:var(--accText)}
+  .s{width:7px;height:7px;border-radius:50%}
+  .s.run{background:var(--accText);animation:pulse 1.4s infinite}
+  .s.wait{background:var(--warn)} .s.done{background:var(--add)}
+  @keyframes pulse{50%{opacity:.35}}
+  .detail{margin:2px 16px 8px 40px;padding:8px 12px;border-left:1px solid var(--acc);font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--muted)}
+  .detail b{color:var(--strong);font-weight:500}
+  .detail .now{color:var(--accText)}
+
+  /* input editor like Warp */
+  .input{display:flex;align-items:center;gap:10px;margin:8px 12px 10px;padding:10px 14px;background:var(--bg);border:1px solid var(--rule);border-radius:9px;font-family:var(--mono);font-size:13.5px;color:var(--muted)}
+  .input .ctx{font-size:11px;padding:2px 7px;border-radius:5px;background:var(--panel);color:var(--text)}
+  .input .ph{flex:1}
+  .input .caret{display:inline-block;width:8px;height:16px;background:var(--accText);vertical-align:-3px;animation:pulse 1s steps(1) infinite}
+  .sbar{display:flex;height:26px;background:var(--panel);border-top:1px solid var(--rule);font-family:var(--mono);font-size:11px;color:var(--muted);flex:none}
+  .sg{display:flex;align-items:center;gap:6px;padding:0 12px;border-right:1px solid var(--rule)}
+  .sg b{color:var(--strong);font-weight:500}
+  .sg.v{background:var(--acc);color:#fff;font-weight:500}
+  .sg.right{margin-left:auto;border-left:1px solid var(--rule);border-right:0}
+  .cbar{width:70px;height:4px;background:var(--rule);border-radius:2px;overflow:hidden}
+  .cbar i{display:block;height:100%;width:42%;background:var(--acc)}
+
+  .keysheet{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:22px}
+  .ks{border:1px solid #262a2f;border-radius:10px;padding:14px 16px;background:#0f1113}
+  .ks h3{margin:0 0 8px;font-size:14px;font-weight:500;color:#c6f24e;font-family:"Geist Mono",monospace;letter-spacing:.04em;text-transform:uppercase}
+  .ks li{display:flex;justify-content:space-between;color:#8a9199;font-size:13.5px;padding:3px 0}
+  .ks ul{list-style:none;margin:0;padding:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">KodeVertex Terminal · Лист 07d · агенты снизу</div>
+  <h1>Функции как в Warp, дизайн удобный для чтения</h1>
+  <p class="lead">Аватаров больше нет. Агенты собраны в нижней панели над строкой ввода, как в Warp. Стрелками <span class="kbd">↑</span> <span class="kbd">↓</span> выбираете агента, <span class="kbd">↵</span> раскрывает, что он делает подробно. Вывод выше разбит на блоки, как в Warp, и по ним тоже можно ходить.</p>
+
+  <div class="win">
+    <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <div class="tabs"><div class="tab on"><i></i>shop-app · claude</div><div class="tab">landing</div><div class="tab">+</div></div>
+    </div>
+
+    <div class="feed">
+      <div class="blk"><div class="bh"><span><span class="p">❯</span> <span class="cmd">git status</span></span><span>0.1 с</span></div><span class="dim">On branch</span> feature/payments · <span class="ok">1 file changed</span></div>
+      <div class="you"><div class="who">Вы</div>Сделай модуль оплаты и проверь стили формы.</div>
+      <div class="card"><div class="who">Главный · Opus 5.5</div><p>Разделю работу: архитектуру оплаты отдам Архитектору (Fable 5.2), стили — отдельному агенту. Перед удалением старого API уточню у вас.</p></div>
+      <div class="act"><div class="who">▶ Поиск · Haiku 5.5</div>Нашёл <b>Form.tsx:42</b> — обработчик кнопки</div>
+      <div class="card" style="border-left-color:#e8c46a"><div class="who" style="color:#e8c46a">Архитектор · Fable 5.2</div><p>Предлагаю три слоя: <code>PaymentApi</code> → <code>PaymentService</code> → экран. Ретраи и идемпотентность — в сервисе…</p></div>
+    </div>
+
+    <div class="dock">
+      <div class="dh"><span>Агенты · <b>2 работают</b> · 1 ждёт · 1 готов</span><span class="keys">↑↓ выбрать · ↵ подробно · esc назад к вводу · ⌘J скрыть</span></div>
+      <div class="row focus"><span class="s run"></span><span class="n">Архитектор</span><span class="m f">Fable 5.2</span><span>Проектирует <b>модуль оплаты</b></span><span class="r">2м 10с</span><span class="r">51k</span></div>
+      <div class="detail">
+        <span class="now">→ сейчас:</span> пишет <b>PaymentService.kt</b> (строка 48)<br>
+        ✓ прочитал PaymentApi.kt, Order.kt, 4 теста<br>
+        ✓ составил план из 3 шагов · шаг 2 из 3
+      </div>
+      <div class="row sub"><span class="s run"></span><span class="n">Стили</span><span class="m">Sonnet 5.5</span><span>Читает <b>form.css</b> · 3 из 7</span><span class="r">0м 41с</span><span class="r">12k</span></div>
+      <div class="row"><span class="s wait"></span><span class="n">Главный</span><span class="m">Opus 5.5</span><span style="color:var(--warn)">Ждёт вашего ответа: удалить старый API?</span><span class="r">3м 02с</span><span class="r">84k</span></div>
+      <div class="row sub"><span class="s done"></span><span class="n">Поиск</span><span class="m">Haiku 5.5</span><span>Готово · Form.tsx:42</span><span class="r">0м 18с</span><span class="r">6k</span></div>
+
+      <div class="input"><span class="ph">Команда или вопрос Claude…<span class="caret"></span></span><span>⌘↵ отправить агенту</span></div>
+    </div>
+
+    <div class="sbar">
+      <div class="sg v">◆ CLAUDE</div>
+      <div class="sg">сейчас <b>Архитектор</b></div>
+      <div class="sg">проект <b>shop-app</b></div>
+      <div class="sg">⎇ <b>feature/payments</b></div>
+      <div class="sg">модель <b>Opus 5.5</b></div>
+      <div class="sg">контекст <span class="cbar"><i></i></span> <b>84k</b>/200k</div>
+      <div class="sg right">14:32</div>
+    </div>
+  </div>
+
+  <div class="keysheet">
+    <div class="ks"><h3>Агенты снизу</h3><ul>
+      <li><span>Перейти в список агентов</span><span><span class="kbd">⌘</span> <span class="kbd">↓</span></span></li>
+      <li><span>Выбрать агента</span><span><span class="kbd">↑</span> <span class="kbd">↓</span></span></li>
+      <li><span>Раскрыть подробности</span><span><span class="kbd">↵</span></span></li>
+      <li><span>Вернуться к вводу</span><span><span class="kbd">esc</span></span></li>
+      <li><span>Скрыть / показать</span><span><span class="kbd">⌘</span> <span class="kbd">J</span></span></li></ul></div>
+    <div class="ks"><h3>Блоки (как Warp)</h3><ul>
+      <li><span>Выбрать блок выше / ниже</span><span><span class="kbd">⌘</span> <span class="kbd">↑</span> / <span class="kbd">↓</span></span></li>
+      <li><span>Скопировать вывод блока</span><span><span class="kbd">⌘</span> <span class="kbd">⇧</span> <span class="kbd">C</span></span></li>
+      <li><span>Найти в выводе</span><span><span class="kbd">⌘</span> <span class="kbd">F</span></span></li>
+      <li><span>История команд</span><span><span class="kbd">⌃</span> <span class="kbd">R</span></span></li>
+      <li><span>Палитра команд</span><span><span class="kbd">⌘</span> <span class="kbd">P</span></span></li></ul></div>
+    <div class="ks"><h3>Окна</h3><ul>
+      <li><span>Разделить вправо</span><span><span class="kbd">⌘</span> <span class="kbd">D</span></span></li>
+      <li><span>Разделить вниз</span><span><span class="kbd">⌘</span> <span class="kbd">⇧</span> <span class="kbd">D</span></span></li>
+      <li><span>Новая вкладка</span><span><span class="kbd">⌘</span> <span class="kbd">T</span></span></li>
+      <li><span>Между панелями</span><span><span class="kbd">⌥</span> <span class="kbd">⌘</span> <span class="kbd">←→</span></span></li>
+      <li><span>Закрыть панель</span><span><span class="kbd">⌘</span> <span class="kbd">W</span></span></li></ul></div>
+  </div>
+</div>
+</body>
+</html>

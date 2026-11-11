@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KodeVertex Terminal — слои</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0c0e10; --graphite:#16191d; --g2:#1b1f24; --rule:#262a2f;
+    --bone:#f1f0eb; --text:#e4e3dd; --ash:#8a9199; --steel:#636972; --volt:#c6f24e;
+    --add:#7fd18b; --del:#ef7d7d; --info:#7fb6f2;
+    --sans:"Geist",system-ui,sans-serif; --mono:"Geist Mono",ui-monospace,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#08090a;color:var(--bone);font-family:var(--sans);padding:40px 32px 80px}
+  .wrap{max-width:1500px;margin:0 auto}
+  .eyebrow{font-family:var(--mono);font-size:12px;color:var(--steel);letter-spacing:.08em;text-transform:uppercase}
+  h1{font-weight:500;font-size:30px;margin:10px 0 8px;letter-spacing:-.01em}
+  h1 b{color:var(--volt);font-weight:500}
+  .lead{color:var(--ash);font-size:16px;max-width:820px;line-height:1.6;margin:0 0 36px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+  @media (max-width:1250px){.grid{grid-template-columns:1fr}}
+  .opt{border:1px solid var(--rule);border-radius:10px;overflow:hidden;cursor:pointer;background:var(--ink)}
+  .opt:hover{border-color:var(--steel)}
+  .opt.selected{border-color:var(--volt);box-shadow:0 0 0 1px var(--volt)}
+  .cap{padding:16px 20px;border-top:1px solid var(--rule)}
+  .cap .l{font-family:var(--mono);color:var(--volt);font-size:13px}
+  .cap h3{margin:4px 0 6px;font-weight:500;font-size:17px}
+  .cap p{margin:0;color:var(--ash);font-size:14px;line-height:1.55}
+  .bar{display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;background:var(--graphite);border-bottom:1px solid var(--rule)}
+  .dot{width:11px;height:11px;border-radius:50%;background:#2c3035}
+  .tab{margin-left:14px;font-family:var(--mono);font-size:12px;color:var(--bone);padding:4px 10px;border-radius:5px;background:var(--ink)}
+  .tab::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--volt);margin-right:7px;vertical-align:1px}
+  .screen{height:640px;overflow:hidden;position:relative;padding:18px}
+  .fade{position:absolute;left:0;right:0;bottom:0;height:60px;background:linear-gradient(transparent,var(--ink))}
+  code{font-family:var(--mono);font-size:12.5px;background:var(--ink);padding:1px 5px;border-radius:4px;color:var(--volt)}
+  .mono{font-family:var(--mono)}
+  p.t{margin:0 0 8px;font-size:14.5px;line-height:1.65;color:var(--text)}
+  .diff{font-family:var(--mono);font-size:12px;line-height:1.6;background:var(--ink);border-radius:6px;padding:8px 10px;margin-top:6px}
+  .diff .a{color:var(--add)} .diff .d{color:var(--del)} .diff .n{color:var(--steel)}
+
+  /* A — левая полоса с подписями */
+  .A .row{display:grid;grid-template-columns:62px 1fr;gap:12px;margin-bottom:14px}
+  .A .lab{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--steel);padding-top:3px;text-align:right;border-right:2px solid var(--rule);padding-right:10px}
+  .A .you .lab{color:var(--bone);border-color:var(--bone)}
+  .A .you .body{font-size:15px;font-weight:500}
+  .A .ai .lab{color:var(--volt);border-color:var(--volt)}
+  .A .act .lab{color:var(--info);border-color:var(--info)}
+  .A .act .body{font-family:var(--mono);font-size:12.5px;color:var(--ash)}
+  .A .act .body b{color:var(--bone);font-weight:500}
+
+  /* B — карточки разного фона */
+  .B .you{margin:0 0 14px auto;max-width:82%;background:#23272d;border-radius:10px 10px 2px 10px;padding:10px 14px;font-size:14.5px}
+  .B .who{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px}
+  .B .you .who{color:var(--ash);text-align:right}
+  .B .ai{background:var(--graphite);border:1px solid var(--rule);border-left:2px solid var(--volt);border-radius:8px;padding:12px 14px;margin-bottom:12px}
+  .B .ai .who{color:var(--volt)}
+  .B .act{border:1px dashed var(--rule);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-family:var(--mono);font-size:12.5px;color:var(--ash)}
+  .B .act .who{color:var(--info)}
+  .B .act b{color:var(--bone);font-weight:500}
+  .B .sum{background:#1a2010;border:1px solid #3a4a1a;border-radius:8px;padding:12px 14px}
+  .B .sum .who{color:var(--volt)}
+
+  /* C — шаги-лента, действия свёрнуты */
+  .C .q{font-size:16px;font-weight:600;padding-bottom:12px;margin-bottom:14px;border-bottom:1px solid var(--rule)}
+  .C .q .mono{font-size:11px;color:var(--steel);font-weight:400;display:block;margin-bottom:4px;letter-spacing:.06em;text-transform:uppercase}
+  .C .step{position:relative;padding-left:26px;margin-bottom:14px}
+  .C .step::before{content:"";position:absolute;left:7px;top:20px;bottom:-14px;width:1px;background:var(--rule)}
+  .C .step:last-child::before{display:none}
+  .C .ic{position:absolute;left:0;top:3px;width:15px;height:15px;border-radius:50%;border:1.5px solid var(--steel);background:var(--ink)}
+  .C .ai .ic{border-color:var(--volt);background:var(--volt)}
+  .C .act .ic{border-color:var(--info)}
+  .C .act .line{font-family:var(--mono);font-size:12.5px;color:var(--ash);display:flex;justify-content:space-between;background:var(--graphite);border-radius:6px;padding:7px 10px}
+  .C .act .line b{color:var(--bone);font-weight:500}
+  .C .act .line span:last-child{color:var(--steel)}
+  .C .done .ic{border-color:var(--volt)}
+  .C .done .box{background:var(--graphite);border-radius:8px;padding:12px 14px;border:1px solid var(--rule)}
+  .C .done .h{font-family:var(--mono);font-size:10.5px;color:var(--volt);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">KodeVertex Terminal · Лист 02 · слои</div>
+  <h1>Как <b>разделить</b>, кто что написал и что сделал?</h1>
+  <p class="lead">Одна и та же сессия: вы задаёте вопрос, я объясняю, запускаю команду, правлю файл и подвожу итог. Это три способа сделать границы между слоями видимыми с первого взгляда. Нажмите на самый понятный вариант.</p>
+
+  <div class="grid">
+
+    <!-- A -->
+    <div class="opt A" data-choice="a" onclick="toggleSelect(this)">
+      <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="tab">claude · проект</span></div>
+      <div class="screen">
+        <div class="row you"><div class="lab">Вы</div><div class="body">Почему не работает кнопка «Отправить»?</div></div>
+        <div class="row ai"><div class="lab">Claude</div><div class="body"><p class="t">Сначала посмотрю, что происходит при нажатии. Скорее всего, обработчик не привязан.</p></div></div>
+        <div class="row act"><div class="lab">Запуск</div><div class="body"><b>npm test</b> · 3 passed, 1 failed</div></div>
+        <div class="row act"><div class="lab">Правка</div><div class="body"><b>src/Form.tsx</b>
+          <div class="diff"><div class="d">- &lt;button&gt;</div><div class="a">+ &lt;button onClick={send}&gt;</div></div></div></div>
+        <div class="row ai"><div class="lab">Итог</div><div class="body"><p class="t">Кнопка не была связана с функцией <code>send</code>. Я добавил связь — теперь все 4 теста проходят.</p></div></div>
+        <div class="fade"></div>
+      </div>
+      <div class="cap"><div class="l">A</div><h3>Подписи слева</h3><p>У каждого блока слева подпись и цветная черта: «Вы», «Claude», «Запуск», «Правка», «Итог». Всё в одну колонку, строго, как в документе.</p></div>
+    </div>
+
+    <!-- B -->
+    <div class="opt B" data-choice="b" onclick="toggleSelect(this)">
+      <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="tab">claude · проект</span></div>
+      <div class="screen">
+        <div class="you"><div class="who">Вы</div>Почему не работает кнопка «Отправить»?</div>
+        <div class="ai"><div class="who">Claude</div><p class="t" style="margin:0">Сначала посмотрю, что происходит при нажатии. Скорее всего, обработчик не привязан.</p></div>
+        <div class="act"><div class="who">▶ Запустил команду</div><b>npm test</b> · 3 passed, 1 failed</div>
+        <div class="act"><div class="who">✎ Изменил файл</div><b>src/Form.tsx</b>
+          <div class="diff"><div class="d">- &lt;button&gt;</div><div class="a">+ &lt;button onClick={send}&gt;</div></div></div>
+        <div class="sum"><div class="who">✓ Итог</div><p class="t" style="margin:0">Кнопка не была связана с функцией <code>send</code>. Я добавил связь — теперь все 4 теста проходят.</p></div>
+        <div class="fade"></div>
+      </div>
+      <div class="cap"><div class="l">B</div><h3>Разные карточки</h3><p>Ваш вопрос — справа, как в мессенджере. Мой текст — сплошная карточка с лаймовой чертой. Действия — пунктирные рамки. Итог выделен отдельно, его сразу видно.</p></div>
+    </div>
+
+    <!-- C -->
+    <div class="opt C" data-choice="c" onclick="toggleSelect(this)">
+      <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="tab">claude · проект</span></div>
+      <div class="screen">
+        <div class="q"><span class="mono">Ваш вопрос</span>Почему не работает кнопка «Отправить»?</div>
+        <div class="step ai"><span class="ic"></span><p class="t">Сначала посмотрю, что происходит при нажатии. Скорее всего, обработчик не привязан.</p></div>
+        <div class="step act"><span class="ic"></span><div class="line"><span>▶ <b>npm test</b> · 1 failed</span><span>развернуть ▾</span></div></div>
+        <div class="step act"><span class="ic"></span><div class="line"><span>✎ <b>src/Form.tsx</b> · +1 −1</span><span>развернуть ▾</span></div></div>
+        <div class="step done"><span class="ic"></span><div class="box"><div class="h">Итог</div><p class="t" style="margin:0">Кнопка не была связана с функцией <code>send</code>. Я добавил связь — теперь все 4 теста проходят.</p></div></div>
+        <div class="fade"></div>
+      </div>
+      <div class="cap"><div class="l">C</div><h3>Лента шагов</h3><p>Вопрос — заголовком сверху. Ниже шаги по порядку на одной линии. Технические действия свёрнуты в одну строку и раскрываются по клику, чтобы не мешать читать.</p></div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

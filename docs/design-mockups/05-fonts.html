@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KodeVertex Terminal — шрифты</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=PT+Serif:wght@400;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#08090a;color:#f1f0eb;font-family:"Geist",system-ui,sans-serif;padding:40px 32px 80px}
+  .wrap{max-width:1400px;margin:0 auto}
+  .eyebrow{font-family:"Geist Mono",monospace;font-size:12px;color:#636972;letter-spacing:.08em;text-transform:uppercase}
+  h1{font-weight:500;font-size:30px;margin:10px 0 8px}
+  .lead{color:#8a9199;font-size:16px;max-width:900px;line-height:1.6;margin:0 0 20px}
+  .ctrl{display:flex;flex-wrap:wrap;gap:22px;align-items:center;margin-bottom:22px;font-family:"Geist Mono",monospace;font-size:13px;color:#8a9199}
+  .ctrl button{background:#16191d;border:1px solid #262a2f;color:#e4e3dd;border-radius:6px;padding:5px 11px;font:inherit;cursor:pointer}
+  .ctrl button.on{border-color:#3574f0;color:#fff;background:#1d2a44}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:22px}
+  @media (max-width:1100px){.grid{grid-template-columns:1fr}}
+  .opt{cursor:pointer;border:1px solid #262a2f;border-radius:12px;overflow:hidden;background:#1e1f22}
+  .opt:hover{border-color:#636972}
+  .opt.selected{border-color:#3574f0;box-shadow:0 0 0 1px #3574f0}
+  .head{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:#2b2d30;border-bottom:1px solid #393b40;font-family:"Geist Mono",monospace;font-size:12px;color:#8a9199}
+  .head b{color:#dfe1e5;font-weight:500}
+  .head .l{color:#548af7}
+  .body{padding:18px 20px 20px;color:#bcbec4}
+  .card{background:#2b2d30;border:1px solid #393b40;border-left:2px solid #3574f0;border-radius:8px;padding:14px 16px}
+  .who{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:#548af7;margin-bottom:8px}
+  .card h4{margin:0 0 8px;color:#dfe1e5;font-weight:600}
+  .card p{margin:0 0 10px;max-width:70ch}
+  .card ul{margin:0 0 10px;padding-left:20px}
+  .card code{background:#1e1f22;color:#56a8f5;padding:1px 5px;border-radius:4px}
+  pre{margin:0;background:#1e1f22;border:1px solid #393b40;border-radius:6px;padding:10px 12px;color:#bcbec4;line-height:1.6;overflow:hidden}
+  .kw{color:#cf8e6d}.str{color:#6aab73}.fn{color:#56a8f5}.num{color:#2aacb8}.com{color:#7a7e85;font-style:italic}
+  .sh{margin-top:12px;color:#bcbec4;line-height:1.7}
+  .sh .p{color:#548af7}.sh .d{color:#6f737a}
+  .why{padding:10px 16px 14px;border-top:1px solid #393b40;font-size:13.5px;color:#8a9199;line-height:1.55;font-family:"Geist",sans-serif}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">KodeVertex Terminal · Лист 08 · шрифты</div>
+  <h1>Какие шрифты удобнее читать?</h1>
+  <p class="lead">Один и тот же ответ Claude на русском с кодом и командами в четырёх парах шрифтов: <b style="color:#e4e3dd;font-weight:500">шрифт текста + шрифт кода</b>. Кнопками ниже можно менять размер и межстрочный интервал, как потом в настройках.</p>
+
+  <div class="ctrl">
+    <span>Размер текста: <span id="sz"></span></span>
+    <span>Интервал: <span id="lh"></span></span>
+  </div>
+
+  <div class="grid" id="g"></div>
+</div>
+<script>
+const pairs=[
+  ['a','Inter','JetBrains Mono','Как в Android Studio','Inter — интерфейсный шрифт JetBrains, JetBrains Mono — их же шрифт для кода. Чёткий, широкий, кириллица отличная.'],
+  ['b','Geist','Geist Mono','Фирменный KodeVertex','Шрифты с вашего сайта. Современные и аккуратные, чуть уже и строже.'],
+  ['c','IBM Plex Sans','IBM Plex Mono','Мягкий «книжный»','Чуть теплее и «человечнее», хорошо подходит для длинной документации.'],
+  ['d','PT Serif','Fira Code','С засечками для чтения','Текст с засечками, как в книге или статье, код в Fira Code с лигатурами (=> != ->). Самый «читальный».'],
+];
+let size=16,lh=1.7;
+function card([k,sans,mono,name,why]){
+  const S=`font-family:'${sans}',sans-serif;font-size:${size}px;line-height:${lh}`;
+  const M=`font-family:'${mono}',monospace;font-size:${(size*0.86).toFixed(1)}px`;
+  return `<div class="opt" data-choice="${k}" onclick="toggleSelect(this)">
+   <div class="head"><span><span class="l">${k.toUpperCase()}</span> · <b>${name}</b></span><span>${sans} + ${mono}</span></div>
+   <div class="body">
+    <div class="card" style="${S}">
+      <div class="who" style="font-family:'${mono}',monospace">Claude · Opus 5.5</div>
+      <h4 style="font-size:${size+3}px">Почему корутины не блокируют поток</h4>
+      <p>Когда корутина доходит до <code style="${M}">suspend</code>-функции, она не ждёт результат, а отдаёт поток обратно. Поток в это время выполняет другие задачи, а корутина продолжится позже — с того же места.</p>
+      <ul><li>поток не простаивает — экономия памяти;</li><li>код читается сверху вниз, без колбэков.</li></ul>
+      <pre style="${M}"><span class="com">// загружаем профиль, не блокируя UI</span>
+<span class="kw">suspend fun</span> <span class="fn">loadUser</span>(id: <span class="kw">Int</span>) = withContext(Dispatchers.IO) {
+    api.<span class="fn">get</span>(<span class="str">"/users/$id"</span>, timeout = <span class="num">5_000</span>) <span class="kw">!=</span> <span class="kw">null</span>
+}</pre>
+    </div>
+    <div class="sh" style="${M}"><span class="p">❯</span> ./gradlew test<br><span class="d">BUILD SUCCESSFUL in 4s · 12 tests passed</span></div>
+   </div>
+   <div class="why">${why}</div>
+  </div>`;
+}
+function render(){
+  const sel=[...document.querySelectorAll('.opt.selected')].map(e=>e.dataset.choice);
+  document.getElementById('g').innerHTML=pairs.map(card).join('');
+  sel.forEach(c=>document.querySelector(`.opt[data-choice="${c}"]`)?.classList.add('selected'));
+  document.getElementById('sz').innerHTML=[14,15,16,17,18].map(v=>`<button class="${v===size?'on':''}" onclick="size=${v};render()">${v}</button>`).join(' ');
+  document.getElementById('lh').innerHTML=[1.5,1.6,1.7,1.8].map(v=>`<button class="${v===lh?'on':''}" onclick="lh=${v};render()">${v}</button>`).join(' ');
+}
+render();
+</script>
+</body>
+</html>
