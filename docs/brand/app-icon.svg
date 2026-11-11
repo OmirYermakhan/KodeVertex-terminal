@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16191d"/>
+      <stop offset="1" stop-color="#0c0e10"/>
+    </linearGradient>
+  </defs>
+  <!-- macOS icon grid: 824x824 body, radius ~185, centered -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <rect x="100.5" y="100.5" width="823" height="823" rx="184.5" fill="none" stroke="#262a2f" stroke-width="1"/>
+  <!-- KodeVertex mark (viewBox 10 8 65 84), scaled ×5.4, centered -->
+  <g transform="translate(512 512) scale(5.4) translate(-42.5 -50)">
+    <rect x="10" y="8" width="14" height="84" fill="#f1f0eb"/>
+    <path d="M75 8 L33 50 L75 92 L75 72.2 L52.8 50 L75 27.8 Z" fill="#f1f0eb"/>
+  </g>
+  <!-- terminal caret accent -->
+  <rect x="652" y="778" width="92" height="22" rx="3" fill="#c6f24e"/>
+</svg>
