@@ -38,4 +38,10 @@ describe('StatusBar', () => {
     expect(container.textContent).not.toContain('⎇')
     expect(screen.getByText('09:05')).toBeInTheDocument()
   })
+
+  it('shows ~ as the project in the home folder without git', async () => {
+    render(<StatusBar cwd="/Users/me" git={null} now={new Date(2026, 0, 1, 9, 5)} />)
+    expect(await screen.findByText('~', { selector: 'b' })).toBeInTheDocument()
+    expect(screen.queryByText('me', { selector: 'b' })).toBeNull()
+  })
 })

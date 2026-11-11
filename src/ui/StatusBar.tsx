@@ -22,7 +22,7 @@ export default function StatusBar(p: { cwd?: string; git: GitInfo | null; now?: 
       {p.leading}
       {p.cwd && (
         <div className="sg">
-          проект <b>{projectName(p.cwd, p.git)}</b>
+          проект <b>{projectName(p.cwd, p.git, home)}</b>
         </div>
       )}
       {p.git?.branch && (

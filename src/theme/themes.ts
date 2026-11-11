@@ -188,27 +188,35 @@ export const THEMES: Record<ThemeId, Theme> = {
   },
 }
 
-export function ansiFromTokens(t: ThemeTokens): ITheme {
+/**
+ * ANSI-палитра из токенов. На светлом фоне «чёрный» должен быть тёмным, а «белый» —
+ * светлым, поэтому для светлых тем пары меняются местами.
+ */
+export function ansiFromTokens(t: ThemeTokens, dark: boolean): ITheme {
+  const black = dark ? t.panel : t.strong
+  const brightBlack = t.muted
+  const white = dark ? t.text : t.panel
+  const brightWhite = dark ? t.strong : t.bg
   return {
     background: t.bg,
     foreground: t.text,
     cursor: t.accText,
     selectionBackground: `${t.acc}55`,
-    black: t.panel,
+    black,
     red: t.del,
     green: t.add,
     yellow: t.warn,
     blue: t.info,
     magenta: t.mag,
     cyan: t.num,
-    white: t.text,
-    brightBlack: t.muted,
+    white,
+    brightBlack,
     brightRed: t.del,
     brightGreen: t.add,
     brightYellow: t.warn,
     brightBlue: t.info,
     brightMagenta: t.mag,
     brightCyan: t.num,
-    brightWhite: t.strong,
+    brightWhite,
   }
 }

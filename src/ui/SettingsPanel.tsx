@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useEffect, useState } from 'react'
 import { stepSize, type Settings } from '../settings/settings'
 import { useSettings } from '../settings/store'
+import { codeFontStack, textFontStack } from '../theme/fontFamily'
 import { THEMES, type ThemeId } from '../theme/themes'
 
 interface SystemFont {
@@ -27,14 +28,14 @@ export const FONT_CSS_NAME: Record<string, string> = {
   'Geist Mono': 'Geist Mono',
   'IBM Plex Mono': 'IBM Plex Mono',
   'Fira Code': 'Fira Code',
-  'SF Mono': 'SF Mono',
+  'ui-monospace': 'SF Mono',
 }
 
 const NO_CYRILLIC = new Set(['Geist Sans'])
 const entry = (css: string): FontEntry => ({ css, label: FONT_CSS_NAME[css] ?? css, noCyrillic: NO_CYRILLIC.has(css) })
 
 const BUNDLED_TEXT = ['Inter', 'Geist Sans', 'IBM Plex Sans', 'PT Serif', 'system-ui'].map(entry)
-const BUNDLED_CODE = ['JetBrains Mono', 'Geist Mono', 'IBM Plex Mono', 'Fira Code', 'SF Mono'].map(entry)
+const BUNDLED_CODE = ['JetBrains Mono', 'Geist Mono', 'IBM Plex Mono', 'Fira Code', 'ui-monospace'].map(entry)
 
 const LINE_HEIGHTS: Settings['lineHeight'][] = [1.5, 1.6, 1.7, 1.8]
 
@@ -42,10 +43,6 @@ const PREVIEW_CODE = `fn main() {
     let msg = "Привет, мир";
     println!("{msg} -> {}", 1 != 2);
 }`
-
-function family(name: string): string {
-  return name === 'system-ui' ? name : `'${name}'`
-}
 
 function FontSelect(p: { label: string; value: string; bundled: FontEntry[]; system: FontEntry[]; onChange(v: string): void }) {
   const known = [...p.bundled, ...p.system].some((e) => e.css === p.value)
@@ -172,13 +169,13 @@ export default function SettingsPanel(p: { open: boolean; onClose: () => void })
               <span>Лигатуры в коде</span>
               <input type="checkbox" checked={settings.ligatures} onChange={(e) => update({ ligatures: e.target.checked })} />
             </label>
-            <small className="st-hint">Влияют только на карточки (план 3); в терминале xterm лигатуры не поддерживаются.</small>
+            <small className="st-hint">Влияют на блоки кода в карточках; в терминале лигатуры не поддерживаются.</small>
           </div>
 
-          <div className="st-preview" data-testid="preview" style={{ fontFamily: `${family(settings.textFont)}, sans-serif`, fontSize: settings.textSize, lineHeight: settings.lineHeight }}>
+          <div className="st-preview" data-testid="preview" style={{ fontFamily: textFontStack(settings.textFont), fontSize: settings.textSize, lineHeight: settings.lineHeight }}>
             <h4>Предпросмотр</h4>
             <p>Съешь же ещё этих мягких французских булок, да выпей чаю. The quick brown fox jumps over the lazy dog.</p>
-            <pre style={{ fontFamily: `${family(settings.codeFont)}, monospace`, fontSize: settings.codeSize, fontVariantLigatures: settings.ligatures ? 'normal' : 'none' }}>{PREVIEW_CODE}</pre>
+            <pre style={{ fontFamily: codeFontStack(settings.codeFont), fontSize: settings.codeSize, fontVariantLigatures: settings.ligatures ? 'normal' : 'none' }}>{PREVIEW_CODE}</pre>
           </div>
         </div>
       </div>

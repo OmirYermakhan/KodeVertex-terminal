@@ -8,6 +8,7 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { useEffect, useRef } from 'react'
 import { terminalLineHeight, type Settings } from '../settings/settings'
 import { useSettings } from '../settings/store'
+import { codeFontStack } from '../theme/fontFamily'
 import { ansiFromTokens, THEMES } from '../theme/themes'
 import { matchKey } from '../keys/keymap'
 import { parseOsc7 } from './osc'
@@ -26,10 +27,10 @@ export interface TerminalPaneProps {
 
 function appearance(s: Settings): Pick<ITerminalOptions, 'fontFamily' | 'fontSize' | 'lineHeight' | 'theme'> {
   return {
-    fontFamily: `'${s.codeFont}', 'JetBrains Mono', monospace`,
+    fontFamily: codeFontStack(s.codeFont),
     fontSize: s.codeSize,
     lineHeight: terminalLineHeight(s),
-    theme: ansiFromTokens(THEMES[s.theme].tokens),
+    theme: ansiFromTokens(THEMES[s.theme].tokens, THEMES[s.theme].dark),
   }
 }
 

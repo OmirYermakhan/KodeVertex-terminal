@@ -37,8 +37,12 @@ function nearestLineHeight(v: unknown): Settings['lineHeight'] {
   return LINE_HEIGHTS.reduce((best, c) => (dist(c) <= dist(best) ? c : best))
 }
 
+/** Старые значения, которые не являются CSS-семействами. */
+const FONT_ALIASES: Record<string, string> = { 'SF Mono': 'ui-monospace' }
+
 function fontName(v: unknown, fallback: string): string {
-  return typeof v === 'string' && v.trim() !== '' ? v.trim() : fallback
+  if (typeof v !== 'string' || v.trim() === '') return fallback
+  return FONT_ALIASES[v.trim()] ?? v.trim()
 }
 
 export function normalizeSettings(raw: unknown): Settings {

@@ -9,6 +9,9 @@ describe('settings', () => {
     expect(normalizeSettings(undefined)).toEqual(DEFAULTS)
     expect(normalizeSettings('мусор')).toEqual(DEFAULTS)
   })
+  it('maps legacy SF Mono to the ui-monospace keyword', () => {
+    expect(normalizeSettings({ codeFont: 'SF Mono' }).codeFont).toBe('ui-monospace')
+  })
   it('normalizes values', () => {
     expect(normalizeSettings({ theme: 'nope' }).theme).toBe('as')
     expect(normalizeSettings({ theme: 'warm' }).theme).toBe('warm')
