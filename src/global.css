@@ -39,3 +39,31 @@ body {
   flex-shrink: 0;
   background: var(--panel);
 }
+
+.tab-close,
+.tab-add {
+  font: inherit;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  padding: 0 4px;
+  cursor: default;
+  line-height: 1;
+}
+
+.tab-close {
+  visibility: hidden;
+}
+
+.tab:hover .tab-close {
+  visibility: visible;
+}
+
+.tab-close:hover,
+.tab-add:hover {
+  color: var(--strong);
+}
+
+.panes {
+  position: relative;
+}
