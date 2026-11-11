@@ -169,4 +169,52 @@ describe('applyCompletion', () => {
     expect(applyCompletion(ctxOf('cd 😀'), { name: 'ab', isDir: false }))
       .toBe('\x7f' + 'ab')
   })
+  it('ведущие - + = получают ./', () => {
+    expect(applyCompletion(ctxOf('rm fo'), { name: '-foo', isDir: false })).toBe('\x7f\x7f./-foo')
+    expect(applyCompletion(ctxOf('cd 1'), { name: '+1', isDir: true })).toBe('\x7f./+1/')
+    expect(applyCompletion(ctxOf('ls fo'), { name: '=foo', isDir: false })).toBe('\x7f\x7f./=foo')
+    expect(applyCompletion(ctxOf('rm src/f'), { name: '-f', isDir: false })).toBe('\x7f'.repeat(5) + 'src/-f')
+  })
+  it('~ в имени без dirPart экранируется', () => {
+    expect(applyCompletion(ctxOf('ls ~'), { name: '~x', isDir: false })).toBe('\x7f' + '\\~x')
+  })
+  it('~ как домашний каталог не экранируется', () => {
+    expect(applyCompletion(ctxOf('ls ~/a'), { name: 'a b', isDir: false })).toBe('\x7f'.repeat(3) + '~/a\\ b')
+  })
+  it('квотированные токены', () => {
+    expect(applyCompletion(ctxOf("cd 'my fo"), { name: 'my folder', isDir: true }))
+      .toBe('\x7f'.repeat(6) + 'my\\ folder/')
+    expect(applyCompletion(ctxOf('cd "my fo'), { name: "it's", isDir: false }))
+      .toBe('\x7f'.repeat(6) + "it\\'s")
+  })
+})
+
+describe('shellEscape =', () => {
+  it('= в начале слова экранируется, внутри нет', () => {
+    expect(shellEscape('=a')).toBe('\\=a')
+    expect(shellEscape('a=b')).toBe('a=b')
+  })
+})
+
+describe('rankEntries управляющие символы', () => {
+  it('отбрасывает имена с управляющими символами', () => {
+    const names = ['a\nb', 'a\rb', 'a\tb', 'a\x03b', 'a\x1bb', 'a\x7fb', 'ab']
+    const r = rankEntries('a', names.map((name) => ({ name, isDir: false })))
+    expect(r.map((x) => x.name)).toEqual(['ab'])
+  })
+})
+
+describe('completionContext многокомандные строки и табы', () => {
+  it('; | & до курсора -> null', () => {
+    expect(completionContext('echo 1; cd sr', 13)).toBeNull()
+    expect(completionContext('ls | cat sr', 11)).toBeNull()
+    expect(completionContext('make && cd sr', 13)).toBeNull()
+  })
+  it('экранированный/квотированный ; не мешает', () => {
+    expect(completionContext('cd a\\;b', 7)).not.toBeNull()
+    expect(completionContext("cd 'a;b", 7)).not.toBeNull()
+  })
+  it('таб — разделитель', () => {
+    expect(completionContext('cd\tsr', 5)).toMatchObject({ command: 'cd', token: 'sr' })
+  })
 })

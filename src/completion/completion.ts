@@ -30,14 +30,15 @@ export function parseOsc6973(data: string): ZleReport | null {
 }
 
 /** Разбор до курсора: границы слов и значение последнего токена без кавычек/экранирования. */
-function scan(text: string): { starts: number[]; value: string; inToken: boolean } {
+function scan(text: string): { starts: number[]; value: string; inToken: boolean; multi: boolean } {
   const starts: number[] = []
   let value = ''
   let quote: '"' | "'" | null = null
   let inToken = false
+  let multi = false
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]
-    if (!inToken && (quote !== null || ch !== ' ')) {
+    if (!inToken && (quote !== null || (ch !== ' ' && ch !== '\t'))) {
       starts.push(i)
       inToken = true
       value = ''
@@ -52,15 +53,16 @@ function scan(text: string): { starts: number[]; value: string; inToken: boolean
       else value += ch
     } else if (ch === "'" || ch === '"') {
       quote = ch
-    } else if (ch === ' ') {
+    } else if (ch === ' ' || ch === '\t') {
       inToken = false
       value = ''
     } else {
+      if (ch === ';' || ch === '|' || ch === '&') multi = true
       value += ch
     }
   }
   if (!inToken) value = ''
-  return { starts, value, inToken }
+  return { starts, value, inToken, multi }
 }
 
 /** cursor — индекс в code points (как в zsh). */
@@ -72,9 +74,9 @@ export function completionContext(buffer: string, cursor: number): CompletionCon
   const after = buffer.slice(idx)
   if (after.trim() !== '') return null
 
-  const { starts, value, inToken } = scan(before)
-  if (starts.length === 0) return null
-  const command = before.slice(starts[0]).split(' ', 1)[0]
+  const { starts, value, inToken, multi } = scan(before)
+  if (multi || starts.length === 0) return null
+  const command = before.slice(starts[0]).split(/[ \t]/, 1)[0]
   if (!PATH_COMMANDS.includes(command)) return null
 
   // Первое слово — команда; аргумент начинается после хотя бы одного пробела.
@@ -139,6 +141,8 @@ export function fuzzyScore(query: string, name: string): number | null {
   return 1000 - Math.min(pos - first + n.length, 999)
 }
 
+const CONTROL_CHARS = /[\x00-\x1f\x7f]/
+
 export function rankEntries<T extends { name: string; isDir: boolean }>(
   q: string,
   items: T[],
@@ -146,6 +150,8 @@ export function rankEntries<T extends { name: string; isDir: boolean }>(
 ): T[] {
   const scored: { item: T; score: number }[] = []
   for (const item of items) {
+    // Управляющие символы в имени попали бы в ZLE как нажатия клавиш.
+    if (CONTROL_CHARS.test(item.name)) continue
     const score = fuzzyScore(q, item.name)
     if (score !== null) scored.push({ item, score })
   }
@@ -159,18 +165,33 @@ export function rankEntries<T extends { name: string; isDir: boolean }>(
 
 export function shellEscape(name: string): string {
   let out = ''
+  let first = true
   for (const ch of name) {
+    // '=' в начале слова zsh раскрывает как =cmd.
+    if (first && ch === '=') {
+      out += '\\='
+      first = false
+      continue
+    }
+    first = false
     out += /[A-Za-z0-9._\-/+,@%=:]/.test(ch) || /[\p{L}\p{N}\p{M}]/u.test(ch) ? ch : '\\' + ch
   }
   return out
 }
 
-/** Байты для PTY: стереть набранный токен и вписать выбранную запись. */
+/**
+ * Байты для PTY: стереть набранный токен и вписать выбранную запись.
+ * Число DEL считается по code points (zsh без COMBINING_CHARS, по умолчанию).
+ */
 export function applyCompletion(
   ctx: CompletionContext,
   entry: { name: string; isDir: boolean },
 ): string {
-  const full = ctx.dirPart + entry.name
-  const escaped = full.startsWith('~') ? '~' + shellEscape(full.slice(1)) : shellEscape(full)
+  // Ведущие - + = без каталога стали бы опцией, стеком каталогов или =cmd.
+  const name = ctx.dirPart === '' && /^[-+=]/.test(entry.name) ? './' + entry.name : entry.name
+  const full = ctx.dirPart + name
+  // '~' остаётся неэкранированной только как домашний каталог в самом токене.
+  const keepTilde = ctx.dirPart === '~' || ctx.dirPart.startsWith('~/')
+  const escaped = keepTilde ? '~' + shellEscape(full.slice(1)) : shellEscape(full)
   return '\x7f'.repeat([...ctx.token].length) + escaped + (entry.isDir ? '/' : '')
 }
