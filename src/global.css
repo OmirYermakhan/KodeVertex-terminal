@@ -41,6 +41,43 @@ body {
   background: var(--panel);
 }
 
+.sbar {
+  display: flex;
+  height: 100%;
+  box-sizing: border-box;
+  background: var(--panel);
+  border-top: 1px solid var(--rule);
+  font-family: var(--font-code);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.sg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border-right: 1px solid var(--rule);
+  white-space: nowrap;
+}
+
+.sg b {
+  color: var(--strong);
+  font-weight: 500;
+}
+
+.sg.right {
+  margin-left: auto;
+  border-left: 1px solid var(--rule);
+  border-right: 0;
+  color: var(--strong);
+}
+
+.sg .dirty {
+  color: var(--acc);
+  font-size: 9px;
+}
+
 .tab-close,
 .tab-add {
   font: inherit;

@@ -1,4 +1,5 @@
 mod fonts;
+mod git;
 mod pty;
 mod settings;
 mod shell;
@@ -51,6 +52,7 @@ pub fn run() {
       settings::settings_load,
       settings::settings_save,
       fonts::fonts_list,
+      git::git_info,
       pty::pty_spawn,
       pty::pty_write,
       pty::pty_resize,
