@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { leaves } from './paneTree'
-import { initialTabsState, useTabs } from './tabsStore'
+import { initialTabsState, RESPAWN_LIMIT, RESPAWN_WINDOW_MS, useTabs } from './tabsStore'
 
 const active = () => {
   const s = useTabs.getState()
@@ -50,6 +50,40 @@ describe('tabsStore', () => {
     expect(s.tabs).toHaveLength(1)
     expect(s.tabs[0].id).not.toBe(old.id)
     expect(s.active).toBe(s.tabs[0].id)
+  })
+
+  describe('respawn limiter', () => {
+    beforeEach(() => vi.useFakeTimers({ now: 1_000_000 }))
+    afterEach(() => vi.useRealTimers())
+    const exitLast = () => useTabs.getState().paneExited(active().focused)
+
+    it(`stops after more than ${RESPAWN_LIMIT} exit respawns within the window`, () => {
+      for (let i = 0; i < RESPAWN_LIMIT; i++) {
+        exitLast()
+        expect(useTabs.getState().tabs).toHaveLength(1)
+        vi.advanceTimersByTime(500)
+      }
+      exitLast()
+      expect(useTabs.getState().tabs).toHaveLength(0)
+      // «Открыть снова» — новая вкладка и новый счёт.
+      useTabs.getState().newTab()
+      expect(useTabs.getState().tabs).toHaveLength(1)
+      exitLast()
+      expect(useTabs.getState().tabs).toHaveLength(1)
+    })
+
+    it('keeps respawning when exits are spread out', () => {
+      for (let i = 0; i < 10; i++) {
+        exitLast()
+        expect(useTabs.getState().tabs).toHaveLength(1)
+        vi.advanceTimersByTime(RESPAWN_WINDOW_MS / 2)
+      }
+    })
+
+    it('user closing the last tab does not count', () => {
+      for (let i = 0; i < 10; i++) useTabs.getState().closeTab(active().id)
+      expect(useTabs.getState().tabs).toHaveLength(1)
+    })
   })
 
   it('activateIndex out of range is a no-op', () => {

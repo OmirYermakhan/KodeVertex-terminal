@@ -23,6 +23,7 @@ export function runAction(a: Action): void {
     case 'prevTab':
     case 'nextTab': {
       const n = tabs.tabs.length
+      if (n === 0) return
       const i = tabs.tabs.findIndex((t) => t.id === tabs.active)
       return tabs.activate(tabs.tabs[(i + (a === 'nextTab' ? 1 : n - 1)) % n].id)
     }

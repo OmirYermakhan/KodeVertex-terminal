@@ -35,6 +35,27 @@ body {
   position: relative;
 }
 
+.stalled {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--muted);
+}
+
+.stalled button {
+  font: inherit;
+  color: var(--onAcc);
+  background: var(--acc);
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
 .statusbar {
   height: 28px;
   flex-shrink: 0;
@@ -111,6 +132,7 @@ body {
 .st-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 16px 18px; }
 .st-body h3 { margin: 14px 0 8px; font-size: 12px; text-transform: uppercase; color: var(--muted); }
 .st-body h3:first-child { margin-top: 0; }
+.st-panel:focus { outline: none; }
 .st-panel button, .st-panel select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--rule); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
 .st-themes { display: grid; gap: 6px; }
 .st-theme { display: flex; align-items: center; gap: 10px; text-align: left; border-radius: 9px !important; padding: 8px 12px !important; }

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -75,5 +75,49 @@ describe('SettingsPanel', () => {
     expect(update).toHaveBeenCalledWith({ ligatures: false })
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('stores ui-monospace for SF Mono and previews it with Menlo fallback', () => {
+    render(<SettingsPanel open onClose={() => {}} />)
+    const select = screen.getByLabelText('Шрифт кода') as HTMLSelectElement
+    const sf = within(select).getByRole('option', { name: 'SF Mono' }) as HTMLOptionElement
+    expect(sf.value).toBe('ui-monospace')
+    fireEvent.change(select, { target: { value: 'ui-monospace' } })
+    expect(update).toHaveBeenCalledWith({ codeFont: 'ui-monospace' })
+    act(() => useSettings.setState({ settings: { ...DEFAULTS, codeFont: 'ui-monospace' } }))
+    expect(screen.getByTestId('preview').querySelector('pre')!.style.fontFamily).toContain('Menlo')
+  })
+
+  it('is a modal dialog that takes focus and keeps it', () => {
+    const outside = document.createElement('textarea')
+    document.body.appendChild(outside)
+    try {
+      render(<SettingsPanel open onClose={() => {}} />)
+      const dialog = screen.getByRole('dialog')
+      expect(dialog).toHaveAttribute('aria-modal', 'true')
+      expect(document.activeElement).toBe(dialog)
+      outside.focus()
+      expect(document.activeElement).toBe(dialog)
+    } finally {
+      outside.remove()
+    }
+  })
+
+  it('Esc closes the panel without reaching the terminal', () => {
+    const outside = document.createElement('textarea')
+    const reached = vi.fn()
+    outside.addEventListener('keydown', reached)
+    document.body.appendChild(outside)
+    try {
+      const onClose = vi.fn()
+      render(<SettingsPanel open onClose={onClose} />)
+      const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+      outside.dispatchEvent(ev)
+      expect(onClose).toHaveBeenCalledTimes(1)
+      expect(reached).not.toHaveBeenCalled()
+      expect(ev.defaultPrevented).toBe(true)
+    } finally {
+      outside.remove()
+    }
   })
 })

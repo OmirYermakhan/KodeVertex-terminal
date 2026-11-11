@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { stepSize, type Settings } from '../settings/settings'
 import { useSettings } from '../settings/store'
 import { codeFontStack, textFontStack } from '../theme/fontFamily'
@@ -100,14 +100,35 @@ export default function SettingsPanel(p: { open: boolean; onClose: () => void })
     }
   }, [p.open])
 
+  const dialogRef = useRef<HTMLDivElement>(null)
+  // onClose из App пересоздаётся на каждый рендер; эффект ниже не должен перезапускаться
+  // (иначе он снова фокусирует окно и выбивает фокус из открытого списка).
+  const onClose = useRef(p.onClose)
+  useEffect(() => {
+    onClose.current = p.onClose
+  })
+
+  // Модальность: фокус внутри окна, Esc закрывает его и не доходит до терминала.
   useEffect(() => {
     if (!p.open) return
+    const dialog = dialogRef.current
+    dialog?.focus()
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') p.onClose()
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      onClose.current()
     }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [p.open, p.onClose])
+    const onFocusIn = (e: FocusEvent) => {
+      if (dialog && !dialog.contains(e.target as Node)) dialog.focus()
+    }
+    window.addEventListener('keydown', onKey, { capture: true })
+    document.addEventListener('focusin', onFocusIn)
+    return () => {
+      window.removeEventListener('keydown', onKey, { capture: true })
+      document.removeEventListener('focusin', onFocusIn)
+    }
+  }, [p.open])
 
   if (!p.open) return null
 
@@ -118,7 +139,7 @@ export default function SettingsPanel(p: { open: boolean; onClose: () => void })
 
   return (
     <div className="st-overlay" onMouseDown={(e) => e.target === e.currentTarget && p.onClose()}>
-      <div role="dialog" aria-label="Настройки" className="st-panel">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Настройки" tabIndex={-1} className="st-panel">
         <header className="st-head">
           <h2>Настройки</h2>
           <button type="button" aria-label="Закрыть" onClick={p.onClose}>×</button>

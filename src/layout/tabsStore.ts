@@ -8,9 +8,16 @@ export interface Tab {
   cwd: Record<string, string>
 }
 
+/** Больше стольких автозапусков последней вкладки за окно — оболочка падает сразу. */
+export const RESPAWN_LIMIT = 3
+export const RESPAWN_WINDOW_MS = 5000
+
 interface TabsState {
+  /** Пусто, только если автозапуск остановлен (см. `respawns`). */
   tabs: Tab[]
   active: string
+  /** Времена автозапусков новой вкладки после выхода оболочки в последней. */
+  respawns: number[]
   newTab(cwd?: string): void
   closeTab(id: string): void
   activate(id: string): void
@@ -29,17 +36,17 @@ function makeTab(cwd?: string): Tab {
   return { id, tree: leaf(id), focused: id, cwd: cwd ? { [id]: cwd } : {} }
 }
 
-export function initialTabsState(): Pick<TabsState, 'tabs' | 'active'> {
+export function initialTabsState(): Pick<TabsState, 'tabs' | 'active' | 'respawns'> {
   const t = makeTab()
-  return { tabs: [t], active: t.id }
+  return { tabs: [t], active: t.id, respawns: [] }
 }
 
 const mapTab = (s: TabsState, id: string, fn: (t: Tab) => Tab): Tab[] => s.tabs.map((t) => (t.id === id ? fn(t) : t))
 
 /** Удаляет панель; если вкладка опустела — закрывает её. */
-function removePane(s: TabsState, tab: Tab, paneId: string): Partial<TabsState> {
+function removePane(s: TabsState, tab: Tab, paneId: string, byExit = false): Partial<TabsState> {
   const tree = closePane(tab.tree, paneId)
-  if (!tree) return removeTab(s, tab.id)
+  if (!tree) return removeTab(s, tab.id, byExit)
   const order = leaves(tab.tree)
   const rest = leaves(tree)
   let focused = tab.focused
@@ -54,11 +61,19 @@ function removePane(s: TabsState, tab: Tab, paneId: string): Partial<TabsState> 
   return { tabs: mapTab(s, tab.id, () => ({ ...tab, tree, focused, cwd })) }
 }
 
-function removeTab(s: TabsState, id: string): Partial<TabsState> {
+/** `byExit` — вкладку закрыл выход оболочки, а не пользователь. */
+function removeTab(s: TabsState, id: string, byExit = false): Partial<TabsState> {
   const i = s.tabs.findIndex((t) => t.id === id)
   if (i < 0) return {}
   const tabs = s.tabs.filter((t) => t.id !== id)
-  if (tabs.length === 0) return initialTabsState()
+  if (tabs.length === 0) {
+    if (!byExit) return initialTabsState()
+    // Оболочка, падающая сразу после запуска, иначе перезапускалась бы бесконечно.
+    const now = Date.now()
+    const respawns = [...s.respawns.filter((t) => now - t < RESPAWN_WINDOW_MS), now]
+    if (respawns.length > RESPAWN_LIMIT) return { tabs: [], active: '', respawns: [] }
+    return { ...initialTabsState(), respawns }
+  }
   const active = s.active === id ? tabs[Math.min(i, tabs.length - 1)].id : s.active
   return { tabs, active }
 }
@@ -97,7 +112,7 @@ export const useTabs = create<TabsState>((set) => ({
   paneExited: (paneId) =>
     set((s) => {
       const tab = s.tabs.find((t) => leaves(t.tree).includes(paneId))
-      return tab ? removePane(s, tab, paneId) : {}
+      return tab ? removePane(s, tab, paneId, true) : {}
     }),
   focusDir: (dir) =>
     set((s) => {
