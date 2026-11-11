@@ -1,21 +1,19 @@
 import { useTabs, type Tab } from '../layout/tabsStore'
-import { projectName, useGitInfo, useHome, type GitInfo } from '../status/useGitInfo'
+import { projectName, useHome, type GitInfo } from '../status/useGitInfo'
 
-export function tabTitle(t: Tab, git: GitInfo | null = null): string {
+export function tabTitle(t: Tab, git: GitInfo | null = null, home = ''): string {
   const cwd = t.cwd[t.focused]
-  return cwd ? projectName(cwd, git) : 'Терминал'
+  return cwd ? projectName(cwd, git, home) : 'Терминал'
 }
 
 // Левый отступ 80px освобождает место под кнопки окна macOS (titleBarStyle: Overlay).
 // Перетаскивание окна работает только по самой полосе и пустому месту: у вкладок атрибута нет.
-export default function TabBar() {
+// activeGit — git-данные активной вкладки (считаются один раз в App); у остальных вкладок — имя папки.
+export default function TabBar({ activeGit = null }: { activeGit?: GitInfo | null }) {
   const tabs = useTabs((s) => s.tabs)
   const active = useTabs((s) => s.active)
   const { activate, closeTab, newTab } = useTabs.getState()
-  useHome() // перерисовать заголовки, когда станет известен $HOME
-  // Git-данные дёшево есть только у активной вкладки; у остальных — имя папки.
-  const activeTab = tabs.find((t) => t.id === active)
-  const activeGit = useGitInfo(activeTab?.cwd[activeTab.focused])
+  const home = useHome()
 
   return (
     <div
@@ -60,7 +58,7 @@ export default function TabBar() {
               userSelect: 'none',
             }}
           >
-            <span>{tabTitle(t, on ? activeGit : null)}</span>
+            <span>{tabTitle(t, on ? activeGit : null, home)}</span>
             <button
               type="button"
               className="tab-close"

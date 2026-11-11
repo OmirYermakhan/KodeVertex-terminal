@@ -41,7 +41,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <TabBar />
+      <TabBar activeGit={git} />
       <div data-testid="panes" className="panes">
         {/* Все вкладки остаются смонтированными: неактивные скрыты, сессии живут. */}
         {loaded && tabs.map((t) => <PaneView key={t.id} tab={t} visible={t.id === active} />)}

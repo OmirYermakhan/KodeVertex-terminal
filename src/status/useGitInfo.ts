@@ -14,9 +14,9 @@ const parts = (p: string) => p.split(/[\\/]/).filter(Boolean)
 const trimSep = (p: string) => (p.length > 1 ? p.replace(/[\\/]+$/, '') : p)
 
 /** Имя папки корня репозитория, иначе имя папки cwd; для домашней папки — `~`. */
-export function projectName(cwd: string, git: GitInfo | null): string {
+export function projectName(cwd: string, git: GitInfo | null, home = ''): string {
   if (git?.root) return parts(git.root).pop() ?? git.root
-  if (homeCache && trimSep(cwd) === trimSep(homeCache)) return '~'
+  if (home && trimSep(cwd) === trimSep(home)) return '~'
   return parts(cwd).pop() ?? '/'
 }
 
@@ -63,13 +63,29 @@ export function useGitInfo(cwd: string | undefined): GitInfo | null {
   useEffect(() => {
     if (!cwd) return
     let alive = true
+    let inFlight = false
+    let issued = 0
+    let applied = 0
     const refresh = () => {
+      if (inFlight) return
+      inFlight = true
+      const id = ++issued
+      const done = () => {
+        inFlight = false
+      }
       try {
-        invoke<GitInfo>('git_info', { cwd })
-          .then((info) => alive && setState({ cwd, info }))
-          .catch(() => {})
+        invoke<GitInfo>('git_info', { cwd }).then(
+          (info) => {
+            done()
+            if (alive && id > applied) {
+              applied = id
+              setState({ cwd, info })
+            }
+          },
+          done,
+        )
       } catch {
-        /* вне Tauri (тесты) */
+        done() // вне Tauri (тесты)
       }
     }
     refresh()

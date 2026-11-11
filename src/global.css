@@ -71,6 +71,7 @@ body {
   border-left: 1px solid var(--rule);
   border-right: 0;
   color: var(--strong);
+  gap: 14px;
 }
 
 .sg .dirty {

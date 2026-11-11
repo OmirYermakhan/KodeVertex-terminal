@@ -35,7 +35,7 @@ export default function StatusBar(p: { cwd?: string; git: GitInfo | null; now?: 
           )}
         </div>
       )}
-      <div className="sg right" style={{ gap: 14 }}>
+      <div className="sg right">
         {p.cwd && <span>{shortPath(p.cwd, home)}</span>}
         <span>{hhmm(now)}</span>
       </div>

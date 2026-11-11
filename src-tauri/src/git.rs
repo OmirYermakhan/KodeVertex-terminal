@@ -13,12 +13,11 @@ pub struct GitInfo {
   pub dirty: bool,
 }
 
-/// Запускает `git -C <cwd> <args>` с таймаутом; None при любой ошибке или ненулевом коде.
-fn run_git(cwd: &Path, args: &[&str]) -> Option<String> {
-  let mut child = Command::new("git")
-    .arg("-C")
-    .arg(cwd)
+/// Запускает `program args` в `cwd`; убивает процесс по `deadline`. None при ошибке, таймауте или ненулевом коде.
+fn run_cmd(program: &str, args: &[&str], cwd: &Path, deadline: Instant) -> Option<String> {
+  let mut child = Command::new(program)
     .args(args)
+    .current_dir(cwd)
     .env("GIT_OPTIONAL_LOCKS", "0")
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
@@ -32,11 +31,10 @@ fn run_git(cwd: &Path, args: &[&str]) -> Option<String> {
     let _ = out.read_to_string(&mut s);
     s
   });
-  let start = Instant::now();
   let status = loop {
     match child.try_wait() {
       Ok(Some(st)) => break st,
-      Ok(None) if start.elapsed() < GIT_TIMEOUT => std::thread::sleep(Duration::from_millis(10)),
+      Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
       _ => {
         let _ = child.kill();
         let _ = child.wait();
@@ -48,14 +46,23 @@ fn run_git(cwd: &Path, args: &[&str]) -> Option<String> {
   status.success().then(|| text.trim_end().to_string())
 }
 
+/// `git -C <cwd> <args>` с общим дедлайном.
+fn run_git(cwd: &Path, args: &[&str], deadline: Instant) -> Option<String> {
+  let mut full = vec!["-C", cwd.to_str()?];
+  full.extend_from_slice(args);
+  run_cmd("git", &full, Path::new("."), deadline)
+}
+
 pub fn git_info_at(cwd: &Path) -> GitInfo {
-  let Some(root) = run_git(cwd, &["rev-parse", "--show-toplevel"]).filter(|s| !s.is_empty()) else {
+  // Один общий дедлайн на все git-команды вызова.
+  let deadline = Instant::now() + GIT_TIMEOUT;
+  let Some(root) = run_git(cwd, &["rev-parse", "--show-toplevel"], deadline).filter(|s| !s.is_empty()) else {
     return GitInfo::default();
   };
-  let branch = run_git(cwd, &["branch", "--show-current"])
+  let branch = run_git(cwd, &["branch", "--show-current"], deadline)
     .filter(|s| !s.is_empty())
-    .or_else(|| run_git(cwd, &["rev-parse", "--short", "HEAD"]).filter(|s| !s.is_empty()));
-  let dirty = run_git(cwd, &["status", "--porcelain"]).is_some_and(|s| !s.is_empty());
+    .or_else(|| run_git(cwd, &["rev-parse", "--short", "HEAD"], deadline).filter(|s| !s.is_empty()));
+  let dirty = run_git(cwd, &["status", "--porcelain"], deadline).is_some_and(|s| !s.is_empty());
   GitInfo { root: Some(root), branch, dirty }
 }
 
@@ -130,7 +137,24 @@ mod tests {
   fn detached_head_gives_short_sha() {
     let d = repo();
     git(d.path(), &["checkout", "--detach"]);
-    let sha = run_git(d.path(), &["rev-parse", "--short", "HEAD"]).unwrap();
+    let sha = run_git(d.path(), &["rev-parse", "--short", "HEAD"], Instant::now() + Duration::from_secs(2)).unwrap();
     assert_eq!(git_info_at(d.path()).branch, Some(sha));
+  }
+
+  #[test]
+  #[cfg(unix)]
+  fn slow_child_is_killed_at_deadline() {
+    let start = Instant::now();
+    let r = run_cmd("sleep", &["5"], Path::new("."), start + Duration::from_millis(200));
+    assert!(r.is_none());
+    assert!(start.elapsed() < Duration::from_secs(2), "took {:?}", start.elapsed());
+  }
+
+  #[test]
+  fn expired_deadline_skips_work_quickly() {
+    let d = repo();
+    let start = Instant::now();
+    assert!(run_git(d.path(), &["status"], start - Duration::from_millis(1)).is_none());
+    assert!(start.elapsed() < Duration::from_secs(1));
   }
 }
