@@ -501,6 +501,33 @@ mod tests {
   }
 
   #[test]
+  fn reports_zle_buffer() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, _rx) = start(&m, opts(home.path(), &[]));
+    run(&m, &id, &out, "cd sr", "\x1b]6973;5;cd sr\x07");
+    // Ctrl-U очищает строку, Enter завершает её.
+    m.write(&id, b"\x15").unwrap();
+    run(&m, &id, &out, "\n", "\x1b]6973;-\x07");
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
+  fn osc7_percent_encodes() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, _rx) = start(&m, opts(home.path(), &[]));
+    run(
+      &m,
+      &id,
+      &out,
+      "mkdir -p '100%done/при вет' && cd '100%done/при вет'\n",
+      "/100%25done/%D0%BF%D1%80%D0%B8%20%D0%B2%D0%B5%D1%82\x07",
+    );
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
   fn pty_resize_reaches_child() {
     let home = temp_home();
     let m = PtyManager::default();

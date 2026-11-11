@@ -13,6 +13,31 @@ ZDOTDIR="$KV_ZDOTDIR"
 # Сообщаем терминалу текущий каталог (OSC 7) перед каждым приглашением.
 autoload -Uz add-zsh-hook
 _kv_osc7() {
-  printf '\e]7;file://%s%s\a' "$HOST" "${PWD// /%20}"
+  # Полное кодирование пути по RFC 3986: побайтово, на чистом zsh.
+  local LC_ALL=C
+  local p=$PWD out= c i
+  for (( i = 1; i <= ${#p}; i++ )); do
+    c=${p[i]}
+    if [[ $c == [A-Za-z0-9._~/-] ]]; then
+      out+=$c
+    else
+      out+=$(printf '%%%02X' "'$c")
+    fi
+  done
+  printf '\e]7;file://%s%s\a' "$HOST" "$out"
 }
 add-zsh-hook precmd _kv_osc7
+
+# Сообщаем терминалу строку ввода ZLE (OSC 6973): позиция курсора и буфер.
+# add-zle-hook-widget складывается с хуками, уже заданными пользователем.
+autoload -Uz add-zle-hook-widget
+_kv_report_buffer() {
+  local b=${BUFFER//$'\e'/}
+  b=${b//$'\a'/}
+  print -rn -- $'\e]6973;'"$CURSOR;$b"$'\a'
+}
+_kv_report_end() {
+  print -rn -- $'\e]6973;-\a'
+}
+add-zle-hook-widget line-pre-redraw _kv_report_buffer
+add-zle-hook-widget line-finish _kv_report_end
