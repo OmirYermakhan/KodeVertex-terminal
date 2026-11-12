@@ -17,7 +17,7 @@ function setup(over: Partial<Parameters<typeof InputBar>[0]> = {}) {
     home: '/h',
     onRun: vi.fn(() => true),
     onAsk: vi.fn(),
-    onEnterClaude: vi.fn(),
+    onEnterClaude: vi.fn(() => true),
     onInterrupt: vi.fn(() => false),
     onClearFeed: vi.fn(),
     ...over,
@@ -218,6 +218,37 @@ describe('InputBar', () => {
       set('ls')
       key('Enter')
       expect(p.onRun).toHaveBeenLastCalledWith('ls')
+    })
+
+    it('⌘↵ с /exit в режиме тоже выходит; вне режима — вопрос', () => {
+      const { p, set, key, container } = setup()
+      set('/exit')
+      key('Enter', { metaKey: true })
+      expect(p.onAsk).toHaveBeenLastCalledWith('/exit')
+      set('claude')
+      key('Enter')
+      set('/exit')
+      key('Enter', { metaKey: true })
+      expect(inMode(container)).toBe(false)
+      expect(p.onAsk).toHaveBeenCalledTimes(1)
+    })
+
+    it('во время продолжения команды (PS2) `claude` уходит в оболочку', () => {
+      const { p, set, key, container } = setup({ continuation: true })
+      set('claude')
+      key('Enter')
+      expect(p.onRun).toHaveBeenCalledWith('claude')
+      expect(p.onEnterClaude).not.toHaveBeenCalled()
+      expect(inMode(container)).toBe(false)
+    })
+
+    it('не удалось запустить сессию (onEnterClaude → false) — режим не включается', () => {
+      const { p, ta, set, key, container } = setup({ onEnterClaude: vi.fn(() => false) })
+      set('claude')
+      key('Enter')
+      expect(p.onEnterClaude).toHaveBeenCalled()
+      expect(inMode(container)).toBe(false)
+      expect(ta.value).toBe('')
     })
 
     it('⌃C в режиме: onInterrupt с признаком режима, в оболочку не уходит', () => {

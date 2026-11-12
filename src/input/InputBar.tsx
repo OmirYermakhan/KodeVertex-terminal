@@ -33,8 +33,11 @@ export interface InputBarProps {
   onRun(cmd: string): boolean
   /** ⌘↵: вопрос в Claude-сессию панели. */
   onAsk(text: string): void
-  /** `claude [вопрос]` ↵: панель входит в режим Claude (сессия запускается; вопрос — если есть). */
-  onEnterClaude(question?: string): void
+  /**
+   * `claude [вопрос]` ↵: сессия запускается (вопрос — если есть). true — панель входит в режим Claude;
+   * false — не удалось (каталог неизвестен, ошибка — карточкой), режим не включается.
+   */
+  onEnterClaude(question?: string): boolean
   /**
    * ⌃C (empty — строка пуста, claude — режим Claude): true — прерван ход Claude, строку не трогаем;
    * false — строка очищается.
@@ -91,21 +94,21 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [])
 
   const submit = useCallback((text: string, ask: boolean) => {
-    if (claudeRef.current && !ask && isClaudeExit(text)) {
+    if (claudeRef.current && isClaudeExit(text)) {
       setClaudeMode(false)
     } else if (ask || claudeRef.current) {
       props.current.onAsk(text)
     } else {
-      const c = parseClaudeCommand(text)
+      // Продолжение незаконченной команды (PS2) — это не команда `claude`.
+      const c = props.current.continuation ? { kind: 'shell' as const, cmd: text } : parseClaudeCommand(text)
       if (c.kind === 'shell') {
         if (!props.current.onRun(c.cmd)) {
           setLine(text, text.length)
           return
         }
       } else {
-        setClaudeMode(true)
         completionRef.current.close()
-        props.current.onEnterClaude(c.kind === 'ask' ? c.text : undefined)
+        if (props.current.onEnterClaude(c.kind === 'ask' ? c.text : undefined)) setClaudeMode(true)
       }
       pushHistory(text)
     }

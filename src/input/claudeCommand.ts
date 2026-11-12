@@ -21,13 +21,47 @@ const SUBCOMMANDS = new Set([
   'agents',
 ])
 
-const TUI_FLAG = /(^|\s+)--tui(?=\s|$)/g
-
-/** Одна пара одинаковых внешних кавычек снимается: `"вопрос"` → `вопрос`. */
+/** Одна пара одинаковых внешних кавычек снимается, только если вся строка — одна строка в кавычках. */
 function unquote(s: string): string {
   const q = s[0]
-  if (s.length >= 2 && (q === '"' || q === "'") && s[s.length - 1] === q) return s.slice(1, -1)
-  return s
+  if (s.length < 2 || (q !== '"' && q !== "'") || s[s.length - 1] !== q) return s
+  const inner = s.slice(1, -1)
+  // `"a" "b"`, `'it''s'` — несколько строк в кавычках: оставляем как есть.
+  if (q === "'" ? inner.includes("'") : /(^|[^\\])"/.test(inner)) return s
+  return inner
+}
+
+/** Оператор оболочки (|, &, ;, <, >) вне кавычек: это конвейер/перенаправление, а не вопрос. */
+function hasShellOperator(s: string): boolean {
+  let quote: '"' | "'" | null = null
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (quote === "'") {
+      if (ch === "'") quote = null
+    } else if (ch === '\\') {
+      i++
+    } else if (quote === '"') {
+      if (ch === '"') quote = null
+    } else if (ch === '"' || ch === "'") {
+      quote = ch
+    } else if ('|&;<>'.includes(ch)) {
+      return true
+    }
+  }
+  return false
+}
+
+/** `--tui` среди ведущих флагов: убрать его. null — флага нет. */
+function dropTui(rest: string): string | null {
+  for (const m of rest.matchAll(/\S+/g)) {
+    const tok = m[0]
+    if (!tok.startsWith('-')) break
+    if (tok === '--tui') {
+      const i = m.index ?? 0
+      return (rest.slice(0, i) + rest.slice(i + tok.length)).replace(/^\s+|\s+$/g, '').replace(/\s{2,}/, ' ')
+    }
+  }
+  return null
 }
 
 export function parseClaudeCommand(text: string): ClaudeCommand {
@@ -39,12 +73,12 @@ export function parseClaudeCommand(text: string): ClaudeCommand {
   const first = rest.split(/\s/, 1)[0]
   if (first.startsWith('-')) {
     // `--tui` — запросить настоящий TUI: флаг убираем, остальное — как есть.
-    if (/(^|\s)--tui(\s|$)/.test(rest)) {
-      const args = rest.replace(TUI_FLAG, ' ').trim()
-      return { kind: 'shell', cmd: args ? `claude ${args}` : 'claude' }
-    }
-    return { kind: 'shell', cmd: text }
+    const args = dropTui(rest)
+    if (args === null) return { kind: 'shell', cmd: text }
+    return { kind: 'shell', cmd: args ? `claude ${args}` : 'claude' }
   }
+  // Конвейер, перенаправление, `&&`, `&` — команда оболочки (вопрос с такими знаками — в кавычках).
+  if (hasShellOperator(rest)) return { kind: 'shell', cmd: text }
   if (SUBCOMMANDS.has(first)) return { kind: 'shell', cmd: text }
   return { kind: 'ask', text: unquote(rest) }
 }

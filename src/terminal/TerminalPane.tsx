@@ -19,7 +19,7 @@ import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
 import { applyShell, claudeIndex, commandBytes, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
-import { askClaude, enterClaude, interruptClaude, stopClaude, useClaudeSessions } from '../claude/sessionStore'
+import { askClaude, claudeCwdKnown, enterClaude, interruptClaude, stopClaude, useClaudeSessions } from '../claude/sessionStore'
 import { InputBar, type InputBarHandle } from '../input/InputBar'
 import { AgentsPanel, type AgentsPanelHandle } from '../claude/AgentsPanel'
 import { blockText, cleanSerializedHtml } from '../feed/blockHtml'
@@ -502,8 +502,11 @@ export function TerminalPane(p: TerminalPaneProps) {
   // `claude [вопрос]` ↵ — наши карточки вместо полноэкранного TUI (в PTY ничего не уходит).
   const onEnterClaude = useCallback(
     (question?: string) => {
-      if (question === undefined) enterClaude(p.paneId, cwdRef.current)
-      else void askClaude(p.paneId, cwdRef.current, question)
+      if (question === undefined) return enterClaude(p.paneId, cwdRef.current)
+      // Каталог неизвестен — askClaude покажет ошибку карточкой, режим не включаем.
+      const ok = claudeCwdKnown(p.paneId, cwdRef.current)
+      void askClaude(p.paneId, cwdRef.current, question)
+      return ok
     },
     [p.paneId],
   )

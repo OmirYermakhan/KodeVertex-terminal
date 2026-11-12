@@ -166,14 +166,20 @@ function switchCwd(paneId: string, paneCwd: string | undefined): string | null {
  * `claude` в строке ввода: режим Claude панели. Процесс запускается сразу (если ещё не идёт),
  * в ленте — строка с каталогом и подсказкой; вопросы дальше — через askClaude.
  */
-export function enterClaude(paneId: string, paneCwd: string | undefined): void {
+export function enterClaude(paneId: string, paneCwd: string | undefined): boolean {
   const cwd = switchCwd(paneId, paneCwd)
   if (cwd === null) {
     patchState(paneId, (s) => failed(s, NO_CWD, Date.now()))
-    return
+    return false
   }
   patchState(paneId, (s) => ({ ...s, items: [...s.items, { type: 'session', cwd, mode: true }] }))
   if (!procs.has(paneId)) start(paneId)
+  return true
+}
+
+/** Каталог для сессии панели известен (из панели или прежней сессии): askClaude не упадёт на NO_CWD. */
+export function claudeCwdKnown(paneId: string, paneCwd: string | undefined): boolean {
+  return (paneCwd ?? get(paneId).cwd) !== null
 }
 
 /**

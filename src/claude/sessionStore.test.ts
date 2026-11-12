@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
 }))
 
-const { askClaude, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
+const { askClaude, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
 
 const items = (pane: string) => useClaudeSessions.getState().sessions[pane]?.state.items ?? []
 const calls = (cmd: string) => invoke.mock.calls.filter((c) => c[0] === cmd)
@@ -25,8 +25,9 @@ describe('enterClaude (команда `claude` в строке ввода)', () 
   })
 
   it('запускает сессию в каталоге панели и пишет строку с подсказкой; вопросов не шлёт', async () => {
-    enterClaude('p', '/w')
+    expect(enterClaude('p', '/w')).toBe(true)
     await flush()
+    expect(claudeCwdKnown('p', undefined)).toBe(true)
     expect(calls('claude_start')).toHaveLength(1)
     expect(calls('claude_start')[0][1]).toMatchObject({ cwd: '/w', resume: null })
     expect(calls('claude_send')).toHaveLength(0)
@@ -46,7 +47,8 @@ describe('enterClaude (команда `claude` в строке ввода)', () 
   })
 
   it('каталог неизвестен — карточка ошибки, процесс не запускается', () => {
-    enterClaude('p', undefined)
+    expect(claudeCwdKnown('p', undefined)).toBe(false)
+    expect(enterClaude('p', undefined)).toBe(false)
     expect(calls('claude_start')).toHaveLength(0)
     expect(items('p')).toEqual([{ type: 'error', text: NO_CWD }])
   })
