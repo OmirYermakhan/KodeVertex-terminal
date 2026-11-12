@@ -10,8 +10,43 @@ ZDOTDIR="${KV_ORIG_ZDOTDIR:-$HOME}"
 [[ "$ZDOTDIR" != "${KV_ORIG_ZDOTDIR:-$HOME}" ]] && KV_ORIG_ZDOTDIR="$ZDOTDIR"
 ZDOTDIR="$KV_ZDOTDIR"
 
-# Сообщаем терминалу текущий каталог (OSC 7) перед каждым приглашением.
 autoload -Uz add-zsh-hook
+
+# Режим блоков (KV_BLOCKS=1): границы команд по OSC 133 и скрытое приглашение.
+# 133;A — начало приглашения, 133;C;<base64 команды> — старт, 133;D;<код> — конец.
+if [[ -n "$KV_BLOCKS" ]]; then
+  typeset -g _kv_cmd_ran=
+  _kv_blocks_precmd() {
+    local ret=$?
+    emulate -L zsh
+    if [[ -n "$_kv_cmd_ran" ]]; then
+      printf '\e]133;D;%s\a' "$ret"
+      _kv_cmd_ran=
+    fi
+    printf '\e]133;A\a'
+  }
+  _kv_blocks_preexec() {
+    emulate -L zsh
+    _kv_cmd_ran=1
+    # base64 может переносить строки на 76 символах — склеиваем.
+    local b64
+    b64=$(print -rn -- "$1" | command base64 | command tr -d '\n')
+    printf '\e]133;C;%s\a' "$b64"
+  }
+  _kv_blocks_hide_prompt() {
+    PROMPT=''
+    RPROMPT=''
+    PROMPT_EOL_MARK=''
+  }
+  # Наш precmd идёт первым, чтобы $? не затёрли пользовательские хуки.
+  precmd_functions=(_kv_blocks_precmd ${precmd_functions:#_kv_blocks_precmd})
+  add-zsh-hook preexec _kv_blocks_preexec
+  # Скрывающий хук — последним: тема могла вернуть приглашение.
+  add-zsh-hook precmd _kv_blocks_hide_prompt
+  _kv_blocks_hide_prompt
+fi
+
+# Сообщаем терминалу текущий каталог (OSC 7) перед каждым приглашением.
 _kv_osc7() {
   emulate -L zsh
   # Полное кодирование пути по RFC 3986: побайтово, на чистом zsh.

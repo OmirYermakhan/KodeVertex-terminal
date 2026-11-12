@@ -74,6 +74,12 @@ impl PtyManager {
 
     let mut cmd = CommandBuilder::new(shell::login_shell(&opts.env));
     cmd.arg("-l");
+    // Служебные переменные Claude Code из окружения приложения оболочке не нужны.
+    for (k, _) in std::env::vars_os() {
+      if k.to_str().is_some_and(shell::is_claude_service_var) {
+        cmd.env_remove(k);
+      }
+    }
     let orig_zdotdir = std::env::var("ZDOTDIR").ok();
     for (k, v) in shell::session_env(&opts.zdotdir, orig_zdotdir).into_iter().chain(opts.env) {
       cmd.env(k, v);
@@ -552,6 +558,74 @@ mod tests {
       "mkdir -p '100%done/при вет' && cd '100%done/при вет'\n",
       "/100%25done/%D0%BF%D1%80%D0%B8%20%D0%B2%D0%B5%D1%82\x07",
     );
+    m.kill(&id).unwrap();
+  }
+
+  /// Позиция первого вхождения `needle` в выводе после `from`.
+  fn find_from(out: &Output, needle: &str, from: usize) -> Option<usize> {
+    let bytes = out.0 .0.lock().unwrap().clone();
+    bytes[from.min(bytes.len())..]
+      .windows(needle.len())
+      .position(|w| w == needle.as_bytes())
+      .map(|i| i + from)
+  }
+
+  #[test]
+  fn blocks_mode_emits_osc133() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    let from = out.len();
+    m.write(&id, b"echo hi\n").unwrap();
+    assert!(out.wait_for(b"\x1b]133;D;0\x07\x1b]133;A\x07", from), "вывод: {:?}", out.text());
+    let c = find_from(&out, "\x1b]133;C;ZWNobyBoaQ==\x07", from).expect("нет 133;C");
+    let hi = find_from(&out, "hi\r\n", c).expect("нет вывода hi");
+    let d = find_from(&out, "\x1b]133;D;0\x07", hi).expect("нет 133;D;0");
+    let a = find_from(&out, "\x1b]133;A\x07", d).expect("нет 133;A");
+    assert!(c < hi && hi < d && d < a);
+    let from = out.len();
+    m.write(&id, b"false\n").unwrap();
+    assert!(out.wait_for(b"\x1b]133;D;1\x07", from), "вывод: {:?}", out.text());
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
+  fn blocks_mode_hides_prompt() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    let from = out.len();
+    m.write(&id, b"echo hi\n").unwrap();
+    assert!(out.wait_for(b"\x1b]133;D;0\x07", from));
+    assert!(out.wait_for(b"\x1b]133;D;0\x07\x1b]133;A\x07", from));
+    std::thread::sleep(Duration::from_millis(500));
+    let text = out.text();
+    let tail = &text[text.rfind("\x1b]133;A\x07").expect("нет 133;A")..];
+    // Убираем OSC-последовательности (…\x07) и проверяем, что приглашения не осталось.
+    let mut visible = String::new();
+    let mut in_osc = false;
+    for ch in tail.chars() {
+      match (in_osc, ch) {
+        (false, '\x1b') => in_osc = true,
+        (true, '\x07') => in_osc = false,
+        (false, c) => visible.push(c),
+        _ => {}
+      }
+    }
+    assert!(!visible.contains(['%', '$', '❯']), "виден prompt: {visible:?}");
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
+  fn session_env_scrubs_claude_vars() {
+    unsafe { std::env::set_var("CLAUDE_CODE_CHILD_SESSION", "1") };
+    unsafe { std::env::set_var("CLAUDECODE", "1") };
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, _rx) = start(&m, opts(home.path(), &[]));
+    unsafe { std::env::remove_var("CLAUDE_CODE_CHILD_SESSION") };
+    unsafe { std::env::remove_var("CLAUDECODE") };
+    run(&m, &id, &out, "echo \"V=${CLAUDE_CODE_CHILD_SESSION:-none}${CLAUDECODE:-none};\"\n", "V=nonenone;");
     m.kill(&id).unwrap();
   }
 

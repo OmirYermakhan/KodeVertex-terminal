@@ -30,6 +30,11 @@ pub fn login_shell(env_overrides: &[(String, String)]) -> String {
     .unwrap_or_else(|| FALLBACK_SHELL.to_string())
 }
 
+/// Служебные переменные Claude Code, которые не должны попасть в оболочку.
+pub fn is_claude_service_var(name: &str) -> bool {
+  name == "CLAUDECODE" || name.starts_with("CLAUDE_CODE_")
+}
+
 /// Базовое окружение терминальной сессии. `zdotdir` — наш каталог интеграции,
 /// `orig_zdotdir` — ZDOTDIR, который был у пользователя (или пусто).
 pub fn session_env(zdotdir: &std::path::Path, orig_zdotdir: Option<String>) -> Vec<(String, String)> {
@@ -37,6 +42,8 @@ pub fn session_env(zdotdir: &std::path::Path, orig_zdotdir: Option<String>) -> V
     ("TERM".to_string(), "xterm-256color".to_string()),
     ("COLORTERM".to_string(), "truecolor".to_string()),
     ("TERM_PROGRAM".to_string(), "KodeVertex".to_string()),
+    // Режим блоков включён всегда: интеграция печатает OSC 133 и скрывает приглашение.
+    ("KV_BLOCKS".to_string(), "1".to_string()),
   ];
   // Без файлов интеграции подмена ZDOTDIR отключила бы dotfiles пользователя —
   // в этом случае запускаем обычную оболочку.
@@ -74,8 +81,17 @@ mod tests {
     assert_eq!(get("TERM"), Some("xterm-256color"));
     assert_eq!(get("COLORTERM"), Some("truecolor"));
     assert_eq!(get("TERM_PROGRAM"), Some("KodeVertex"));
+    assert_eq!(get("KV_BLOCKS"), Some("1"));
     assert_eq!(get("KV_ORIG_ZDOTDIR"), Some(""));
     assert_eq!(get("ZDOTDIR"), Some(dir.to_str().unwrap()));
+  }
+
+  #[test]
+  fn claude_service_vars_are_detected() {
+    assert!(is_claude_service_var("CLAUDECODE"));
+    assert!(is_claude_service_var("CLAUDE_CODE_ENTRYPOINT"));
+    assert!(!is_claude_service_var("CLAUDE_API_KEY"));
+    assert!(!is_claude_service_var("PATH"));
   }
 
   #[test]
