@@ -3,6 +3,9 @@
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { create } from 'zustand'
 import { initialClaude, reduceClaude, userSent, type ClaudeState } from './reducer'
+import { GET_SETTINGS, effortRequest, modelNote, setModelRequest, type ModelChoice } from './models'
+
+export type { ModelChoice }
 
 export interface ClaudeExit {
   code: number | null
@@ -18,6 +21,9 @@ export interface PaneClaude {
    * начинает новую сессию там (старый процесс останавливается, без --resume).
    */
   cwd: string | null
+  /** Модель и усилие, выбранные в `/model`: передаются процессу при (пере)запуске. */
+  model: string | null
+  effort: string | null
 }
 
 interface SessionsStore {
@@ -41,7 +47,7 @@ interface Proc {
 const procs = new Map<string, Proc>()
 
 function get(paneId: string): PaneClaude {
-  return useClaudeSessions.getState().sessions[paneId] ?? { state: initialClaude(), procId: null, cwd: null }
+  return useClaudeSessions.getState().sessions[paneId] ?? { state: initialClaude(), procId: null, cwd: null, model: null, effort: null }
 }
 
 function patch(paneId: string, f: (p: PaneClaude) => PaneClaude): void {
@@ -92,11 +98,13 @@ function start(paneId: string): Proc {
   const alive = () => procs.get(paneId) === proc
   const prev = get(paneId)
   const resume = prev.state.sessionId
-  const cwd = prev.cwd
+  const { cwd, model, effort } = prev
   let gotLine = false
   const onLine = new Channel<string>((line) => {
     gotLine = true
-    if (alive()) patchState(paneId, (s) => reduceClaude(s, line, Date.now()))
+    if (!alive()) return
+    if (line.includes('"control_response"')) settleControl(line)
+    patchState(paneId, (s) => reduceClaude(s, line, Date.now()))
   })
   const onExit = new Channel<ClaudeExit>((e) => {
     if (!alive()) return
@@ -117,7 +125,7 @@ function start(paneId: string): Proc {
       return { ...p, procId: null, state }
     })
   })
-  proc.ready = invoke<string>('claude_start', { cwd, resume, onLine, onExit })
+  proc.ready = invoke<string>('claude_start', { cwd, resume, model, effort, onLine, onExit })
     .then((id) => {
       if (!alive()) {
         // Панель закрыли, пока процесс запускался.
@@ -126,6 +134,8 @@ function start(paneId: string): Proc {
       }
       proc.id = id
       patch(paneId, (p) => ({ ...p, procId: id }))
+      // Текущие модель и усилие — сразу в статус-бар и карточку выбора модели (запрос бесплатный).
+      control(id, GET_SETTINGS).catch(() => {})
       return id
     })
     .catch((err: unknown) => {
@@ -138,6 +148,94 @@ function start(paneId: string): Proc {
   procs.set(paneId, proc)
   return proc
 }
+
+/** Ожидающие ответа управляющие запросы: request_id → обработчики. */
+const pendingControls = new Map<string, { resolve(r: Record<string, unknown>): void; reject(e: Error): void }>()
+let controlSeq = 0
+/** Сколько ждать control_response. */
+export const CONTROL_TIMEOUT_MS = 10000
+
+function settleControl(line: string): void {
+  let ev: unknown
+  try {
+    ev = JSON.parse(line)
+  } catch {
+    return
+  }
+  const r = (ev as { response?: Record<string, unknown> } | null)?.response
+  if (!r || typeof r.request_id !== 'string') return
+  const p = pendingControls.get(r.request_id)
+  if (!p) return
+  pendingControls.delete(r.request_id)
+  if (r.subtype === 'success') p.resolve((r.response as Record<string, unknown> | undefined) ?? {})
+  else p.reject(new Error(typeof r.error === 'string' ? r.error : 'управляющий запрос не выполнен'))
+}
+
+/** Управляющий запрос процессу `id`; ответ — тело `control_response`. */
+function control(id: string, request: object): Promise<Record<string, unknown>> {
+  const requestId = `kv-${++controlSeq}`
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingControls.delete(requestId)
+      reject(new Error('Claude не ответил на управляющий запрос'))
+    }, CONTROL_TIMEOUT_MS)
+    pendingControls.set(requestId, {
+      resolve: (r) => {
+        clearTimeout(timer)
+        resolve(r)
+      },
+      reject: (e) => {
+        clearTimeout(timer)
+        reject(e)
+      },
+    })
+    invoke('claude_control', { id, requestId, request }).catch((e: unknown) => {
+      pendingControls.delete(requestId)
+      clearTimeout(timer)
+      reject(e instanceof Error ? e : new Error(String(e)))
+    })
+  })
+}
+
+const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
+
+/**
+ * `/model`: модель (и усилие) живой сессии меняются управляющими запросами — без перезапуска;
+ * при следующем запуске процесса они же передаются флагами. Процесса нет — он запускается
+ * (с `--resume`, если сессия была). В ленте — заметка, статус-бар обновляется ответом set_model.
+ */
+export async function chooseModel(paneId: string, paneCwd: string | undefined, c: ModelChoice): Promise<void> {
+  patch(paneId, (p) => ({ ...p, model: c.alias, effort: c.effort ?? p.effort }))
+  const cwd = switchCwd(paneId, paneCwd)
+  if (cwd === null) {
+    patchState(paneId, (s) => failed(s, NO_CWD, Date.now()))
+    return
+  }
+  const proc = procs.get(paneId) ?? start(paneId)
+  const id = await proc.ready
+  if (id === null || procs.get(paneId) !== proc) return
+  try {
+    const r = await control(id, setModelRequest(c.alias))
+    if (c.effort) await control(id, effortRequest(c.effort))
+    const modelId = typeof r.model === 'string' && r.model ? r.model : (get(paneId).state.model ?? c.alias)
+    // Применённое усилие могло смениться вместе с моделью (у моделей свои настройки).
+    const applied = await control(id, GET_SETTINGS).catch(() => null)
+    const effort = (applied && (applied.applied as { effort?: string } | undefined)?.effort) || c.effort
+    patchState(paneId, (s) => ({ ...s, items: [...s.items, { type: 'note', text: modelNote(modelId, effort ?? null) }] }))
+    if (c.persist) {
+      // Default — убрать модель из настроек: Claude Code возьмёт свою по умолчанию.
+      const model = c.alias === 'default' ? null : c.alias
+      await invoke('claude_save_defaults', { model, modelId, effort: c.effort }).catch((e: unknown) =>
+        addError(paneId, `Модель не сохранена по умолчанию: ${errText(e)}`),
+      )
+    }
+  } catch (e) {
+    addError(paneId, `Не удалось сменить модель: ${errText(e)}`)
+  }
+}
+
+const addError = (paneId: string, text: string) =>
+  patchState(paneId, (s) => ({ ...s, items: [...s.items, { type: 'error', text }] }))
 
 /** Остановить процесс панели (его события дальше игнорируются). */
 function dropProc(paneId: string): void {

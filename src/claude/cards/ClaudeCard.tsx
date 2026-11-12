@@ -27,5 +27,11 @@ export const ClaudeCard = memo(function ClaudeCard({ item, agent }: { item: Clau
       return <ErrorCard id={item.id} text={it.text} />
     case 'session':
       return <SessionNote id={item.id} cwd={it.cwd} mode={it.mode} />
+    case 'note':
+      return (
+        <div className="cl-note" data-item-id={item.id}>
+          {it.text}
+        </div>
+      )
   }
 })

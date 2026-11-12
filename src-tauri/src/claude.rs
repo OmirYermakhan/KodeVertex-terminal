@@ -55,12 +55,47 @@ fn trim_tail(buf: &mut Vec<u8>) {
   }
 }
 
+/// Уровни усилия, которые принимает `claude --effort`.
+pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
+/// Параметры запуска процесса `claude`: продолжение сессии, модель и усилие сессии.
+#[derive(Default, Clone, Debug)]
+pub struct Launch {
+  pub resume: Option<String>,
+  /// Псевдоним (`opus`, `fable`, `default`) или полное имя модели.
+  pub model: Option<String>,
+  pub effort: Option<String>,
+}
+
+/// Аргументы `claude` после обязательных: `--model`, `--effort`, `--resume`.
+/// Пустые значения и неизвестное усилие пропускаются.
+pub fn launch_args(l: &Launch) -> Vec<String> {
+  let mut a = Vec::new();
+  if let Some(m) = l.model.as_deref().map(str::trim).filter(|m| !m.is_empty() && !m.starts_with('-')) {
+    a.extend(["--model".to_string(), m.to_string()]);
+  }
+  if let Some(e) = l.effort.as_deref().filter(|e| EFFORTS.contains(e)) {
+    a.extend(["--effort".to_string(), e.to_string()]);
+  }
+  if let Some(r) = l.resume.as_deref().filter(|r| !r.is_empty()) {
+    a.extend(["--resume".to_string(), r.to_string()]);
+  }
+  a
+}
+
+/// Управляющий запрос протокола stream-json одной строкой (с `\n`).
+pub fn control_line(request_id: &str, request: &serde_json::Value) -> String {
+  let mut line = serde_json::json!({ "type": "control_request", "request_id": request_id, "request": request }).to_string();
+  line.push('\n');
+  line
+}
+
 impl ClaudeManager {
   pub fn start(
     &self,
     program: &Path,
     cwd: &Path,
-    resume: Option<String>,
+    launch: Launch,
     on_line: impl Fn(String) + Send + 'static,
     on_exit: impl Fn(Option<i32>, String) + Send + 'static,
   ) -> Result<String, String> {
@@ -76,9 +111,7 @@ impl ClaudeManager {
       "--permission-mode",
       "bypassPermissions",
     ]);
-    if let Some(r) = resume {
-      cmd.args(["--resume", &r]);
-    }
+    cmd.args(launch_args(&launch));
     // Служебные переменные Claude Code из окружения приложения процессу не нужны.
     for (k, _) in std::env::vars_os() {
       if k.to_str().is_some_and(shell::is_claude_service_var) {
@@ -185,13 +218,26 @@ impl ClaudeManager {
 
   /// Пишет сообщение пользователя в stdin процесса одной JSON-строкой.
   pub fn send(&self, id: &str, text: &str) -> Result<(), String> {
-    let stdin = lock(&self.sessions).get(id).map(|s| s.stdin.clone()).ok_or_else(|| no_session(id))?;
     let msg = serde_json::json!({
       "type": "user",
       "message": { "role": "user", "content": [{ "type": "text", "text": text }] }
     });
     let mut line = msg.to_string();
     line.push('\n');
+    self.write_line(id, &line)
+  }
+
+  /// Управляющий запрос (`set_model`, `apply_flag_settings`, `get_settings`); ответ придёт строкой
+  /// `control_response` с тем же `request_id`.
+  pub fn control(&self, id: &str, request_id: &str, request: &serde_json::Value) -> Result<(), String> {
+    if !request.get("subtype").is_some_and(|s| s.is_string()) {
+      return Err("управляющий запрос без subtype".into());
+    }
+    self.write_line(id, &control_line(request_id, request))
+  }
+
+  fn write_line(&self, id: &str, line: &str) -> Result<(), String> {
+    let stdin = lock(&self.sessions).get(id).map(|s| s.stdin.clone()).ok_or_else(|| no_session(id))?;
     let mut w = lock(&stdin);
     w.write_all(line.as_bytes()).and_then(|_| w.flush()).map_err(|e| e.to_string())
   }
@@ -324,6 +370,8 @@ pub async fn claude_start(
   manager: State<'_, ClaudeManager>,
   cwd: String,
   resume: Option<String>,
+  model: Option<String>,
+  effort: Option<String>,
   on_line: Channel<String>,
   on_exit: Channel<ClaudeExit>,
 ) -> Result<String, String> {
@@ -331,7 +379,7 @@ pub async fn claude_start(
   manager.start(
     &program,
     Path::new(&cwd),
-    resume,
+    Launch { resume, model, effort },
     move |line| {
       let _ = on_line.send(line);
     },
@@ -346,6 +394,17 @@ pub async fn claude_send(manager: State<'_, ClaudeManager>, id: String, text: St
   // Запись в пайп может блокироваться (claude не читает stdin) — не держим async-поток.
   let m = manager.inner().clone();
   tauri::async_runtime::spawn_blocking(move || m.send(&id, &text)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn claude_control(
+  manager: State<'_, ClaudeManager>,
+  id: String,
+  request_id: String,
+  request: serde_json::Value,
+) -> Result<(), String> {
+  let m = manager.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || m.control(&id, &request_id, &request)).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -383,7 +442,7 @@ mod tests {
     let id = m.start(
       program,
       Path::new("/"),
-      None,
+      Launch::default(),
       move |l| {
         let _ = ltx.send(l);
       },
@@ -473,7 +532,7 @@ mod tests {
     let (_d, p) = script("printf '{\"args\":\"%s\"}\\n' \"$*\"");
     let m = ClaudeManager::default();
     let (ltx, lrx) = mpsc::channel();
-    m.start(&p, Path::new("/"), Some("abc-123".into()), move |l| {
+    m.start(&p, Path::new("/"), Launch { resume: Some("abc-123".into()), model: Some("fable".into()), effort: Some("high".into()) }, move |l| {
       let _ = ltx.send(l);
     }, |_, _| {})
     .unwrap();
@@ -481,8 +540,42 @@ mod tests {
     let a = v["args"].as_str().unwrap();
     assert_eq!(
       a,
-      "-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-mode bypassPermissions --resume abc-123"
+      "-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-mode bypassPermissions --model fable --effort high --resume abc-123"
     );
+  }
+
+  #[test]
+  fn launch_args_skip_empty_and_unknown() {
+    assert!(launch_args(&Launch::default()).is_empty());
+    let l = Launch { resume: Some(String::new()), model: Some("--evil".into()), effort: Some("huge".into()) };
+    assert!(launch_args(&l).is_empty());
+    let l = Launch { resume: None, model: Some("default".into()), effort: Some("max".into()) };
+    assert_eq!(launch_args(&l), ["--model", "default", "--effort", "max"]);
+  }
+
+  #[test]
+  fn control_line_has_protocol_shape() {
+    let req = serde_json::json!({ "subtype": "set_model", "model": "fable" });
+    let line = control_line("kv-1", &req);
+    assert!(line.ends_with('\n') && !line[..line.len() - 1].contains('\n'));
+    let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(v, serde_json::json!({ "type": "control_request", "request_id": "kv-1", "request": req }));
+  }
+
+  #[test]
+  fn control_writes_request_to_stdin() {
+    let m = ClaudeManager::default();
+    let (id, lrx, _erx) = start(&m, &fake()).unwrap();
+    take(&lrx, 38);
+    let req = serde_json::json!({ "subtype": "apply_flag_settings", "settings": { "effortLevel": "high" } });
+    m.control(&id, "r7", &req).unwrap();
+    let echo: serde_json::Value = serde_json::from_str(&lrx.recv_timeout(WAIT).unwrap()).unwrap();
+    assert_eq!(echo["line"]["type"], "control_request");
+    assert_eq!(echo["line"]["request_id"], "r7");
+    assert_eq!(echo["line"]["request"], req);
+    assert!(m.control(&id, "r8", &serde_json::json!({ "model": "x" })).is_err());
+    assert!(m.control("nope", "r9", &req).is_err());
+    m.stop(&id).unwrap();
   }
 
   #[test]
@@ -499,7 +592,7 @@ mod tests {
   #[test]
   fn missing_cwd_is_error_not_fallback() {
     let m = ClaudeManager::default();
-    let err = m.start(&fake(), Path::new("/nonexistent/kv-dir"), None, |_| {}, |_, _| {}).unwrap_err();
+    let err = m.start(&fake(), Path::new("/nonexistent/kv-dir"), Launch::default(), |_| {}, |_, _| {}).unwrap_err();
     assert!(err.contains("не существует"), "{err}");
     assert!(lock(&m.sessions).is_empty());
   }
@@ -510,7 +603,7 @@ mod tests {
     let (_d, p) = script("printf '{\"cwd\":\"%s\"}\\n' \"$PWD\"");
     let m = ClaudeManager::default();
     let (ltx, lrx) = mpsc::channel();
-    m.start(&p, dir.path(), None, move |l| {
+    m.start(&p, dir.path(), Launch::default(), move |l| {
       let _ = ltx.send(l);
     }, |_, _| {})
     .unwrap();

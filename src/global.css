@@ -191,6 +191,17 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .hp-n b { color: var(--accText); font-weight: 700; }
 .hp-d { color: var(--muted); font-family: var(--font-text); font-size: 12.5px; max-width: 52ch; }
 .hp-keys { padding: 6px 14px; border-top: 1px solid var(--rule); font-family: var(--font-code); font-size: 10.5px; line-height: normal; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Выбор модели (`/model`): та же рамка .cp.hp, номера, ✓ текущей (--add), Fable — золотом, строка усилия. */
+.mp .hp-h { padding-bottom: 2px; }
+.mp-desc { padding: 0 14px 6px; color: var(--muted); font-family: var(--font-text); font-size: 12.5px; }
+.mp .hp-list { --hp-name: 24ch; }
+.hp-row.mp-row { grid-template-columns: 1.4em var(--hp-name) minmax(0, 1fr) 1.2em; }
+.mp-row .hp-g { color: var(--muted); }
+.mp-row.sel .hp-g { color: var(--accText); }
+.mp-row.fable .hp-n { color: #e8c46a; }
+.mp-ok { color: var(--add); text-align: right; font-family: var(--font-code); }
+.mp-effort { padding: 6px 14px; border-top: 1px solid var(--rule); font-family: var(--font-code); font-size: 12px; color: var(--muted); white-space: nowrap; }
+.mp-effort b { color: var(--strong); font-weight: 500; }
 
 /* Панель: лента блоков (макет 04-main-window, .feed/.blk) */
 .pane { position: relative; display: flex; flex-direction: column; height: 100%; box-sizing: border-box; background: var(--bg); }

@@ -88,3 +88,8 @@ export function isClaudeExit(text: string): boolean {
   const t = text.trim()
   return t === '/exit' || t === 'exit'
 }
+
+/** `/model` (режим Claude или ⌘↵): карточка выбора модели вместо вопроса. */
+export function isModelCommand(text: string): boolean {
+  return text.trim() === '/model'
+}

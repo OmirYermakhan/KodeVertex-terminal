@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { projectName, shortPath } from '../status/useGitInfo'
 import StatusBar from './StatusBar'
 import { mockupScene } from '../claude/fixtures/mockupScene'
-import { initialClaude } from '../claude/reducer'
+import { initialClaude, reduceClaude } from '../claude/reducer'
 
 vi.mock('@tauri-apps/api/path', () => ({ homeDir: () => Promise.resolve('/Users/me') }))
 
@@ -78,5 +78,20 @@ describe('StatusBar', () => {
     render(<StatusBar cwd="/Users/me" git={null} now={new Date(2026, 0, 1, 9, 5)} />)
     expect(await screen.findByText('~', { selector: 'b' })).toBeInTheDocument()
     expect(screen.queryByText('me', { selector: 'b' })).toBeNull()
+  })
+})
+
+describe('StatusBar: смена модели', () => {
+  it('ответ set_model сразу меняет сегмент «модель»', () => {
+    const before = { ...initialClaude(), model: 'claude-opus-5-5' }
+    const after = reduceClaude(
+      before,
+      { type: 'control_response', response: { subtype: 'success', request_id: 'kv-1', response: { model: 'claude-fable-5-2' } } },
+      0,
+    )
+    const { container, rerender } = render(<StatusBar git={null} now={new Date(0)} claude={before} />)
+    expect(container.textContent).toContain('модель Opus 5.5')
+    rerender(<StatusBar git={null} now={new Date(0)} claude={after} />)
+    expect(container.textContent).toContain('модель Fable 5.2')
   })
 })

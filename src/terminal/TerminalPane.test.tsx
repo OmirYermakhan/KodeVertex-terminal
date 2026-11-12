@@ -407,8 +407,9 @@ describe('TerminalPane', () => {
         expect(textarea().value).toBe('')
         expect(document.querySelector('.you')?.textContent).toContain('что тут?')
         await act(async () => await flush())
+        // claude_control — запрос текущих модели и усилия после запуска.
         const names = calls().map((c) => c[0]).filter((n) => n.startsWith('claude'))
-        expect(names).toEqual(['claude_start', 'claude_send'])
+        expect(names).toEqual(['claude_start', 'claude_control', 'claude_send'])
         expect(calls().find((c) => c[0] === 'claude_start')![1]).toMatchObject({ cwd: '/w', resume: null })
         expect(calls().find((c) => c[0] === 'claude_send')![1]).toEqual({ id: 'c1', text: 'что тут?' })
         // Вопрос Claude не попадает в историю команд.
@@ -417,7 +418,7 @@ describe('TerminalPane', () => {
         type('ещё')
         keyIn('Enter', { metaKey: true })
         await act(async () => await flush())
-        expect(calls().map((c) => c[0]).filter((n) => n.startsWith('claude'))).toEqual(['claude_start', 'claude_send', 'claude_send'])
+        expect(calls().map((c) => c[0]).filter((n) => n.startsWith('claude'))).toEqual(['claude_start', 'claude_control', 'claude_send', 'claude_send'])
       })
 
       it('ответы Claude — в той же ленте, по времени: блок, вопрос, ответ, следующий блок', async () => {
@@ -925,7 +926,7 @@ describe('TerminalPane', () => {
       return r
     }
     const withSession = () =>
-      act(() => useClaudeSessions.setState({ sessions: { p: { state: mockupScene(), procId: 'c1', cwd: '/w' } } }))
+      act(() => useClaudeSessions.setState({ sessions: { p: { state: mockupScene(), procId: 'c1', cwd: '/w', model: null, effort: null } } }))
     const panel = () => document.querySelector<HTMLElement>('.dock .agents')
 
     it('без Claude-сессии панели нет; с сессией — в доке над строкой ввода', async () => {

@@ -244,3 +244,14 @@ describe('SessionNote', () => {
     expect(MODE_HINT).toBe(' — пишите вопрос, /exit — выйти')
   })
 })
+
+describe('заметка ленты', () => {
+  it('note — моноширинная строка .cl-note', () => {
+    const { container } = render(
+      <ClaudeCard item={{ kind: 'claude', id: 'n1', item: { type: 'note', text: 'Модель: Fable 5.2 · усилие high' } }} />,
+    )
+    const el = container.querySelector('[data-item-id="n1"]')!
+    expect(el).toHaveClass('cl-note')
+    expect(el.textContent).toBe('Модель: Fable 5.2 · усилие high')
+  })
+})

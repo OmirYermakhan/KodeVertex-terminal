@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isClaudeExit, parseClaudeCommand } from './claudeCommand'
+import { isClaudeExit, isModelCommand, parseClaudeCommand } from './claudeCommand'
 
 describe('parseClaudeCommand', () => {
   it('`claude` без аргументов — режим Claude', () => {
@@ -51,5 +51,14 @@ describe('isClaudeExit', () => {
     expect(isClaudeExit('/exit')).toBe(true)
     expect(isClaudeExit(' exit ')).toBe(true)
     expect(isClaudeExit('exit please')).toBe(false)
+  })
+})
+
+describe('isModelCommand', () => {
+  it('только `/model` (с пробелами по краям)', () => {
+    expect(isModelCommand('/model')).toBe(true)
+    expect(isModelCommand(' /model ')).toBe(true)
+    expect(isModelCommand('/model opus')).toBe(false)
+    expect(isModelCommand('/models')).toBe(false)
   })
 })

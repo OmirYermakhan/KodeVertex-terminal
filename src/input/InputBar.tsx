@@ -6,7 +6,9 @@ import { useCompletion } from '../completion/useCompletion'
 import { CompletionPopup, LIST_WIDTH, PREVIEW_WIDTH, popupHeight } from '../completion/CompletionPopup'
 import { useHints } from '../completion/useHints'
 import { HintsPopup } from '../completion/HintsPopup'
-import { isClaudeExit, parseClaudeCommand } from './claudeCommand'
+import { isClaudeExit, isModelCommand, parseClaudeCommand } from './claudeCommand'
+import { ModelPicker } from '../claude/ModelPicker'
+import { initialPicker, pickerKey, type ModelChoice, type PickerState } from '../claude/models'
 import { getHistory, historyStep, loadHistory, NAV_START, pushHistory, type HistoryNav } from './history'
 
 /** Поле растёт до стольких строк, дальше — прокрутка внутри. */
@@ -51,6 +53,10 @@ export interface InputBarProps {
   onClearFeed(): void
   /** ⌃D на пустой строке: EOF в оболочку. */
   onEof?(): void
+  /** `/model` (режим Claude или ⌘↵): выбор модели. Нет — `/model` уходит вопросом. */
+  onChooseModel?(choice: ModelChoice): void
+  /** Текущие модель (псевдоним, null — по умолчанию) и усилие панели — для карточки выбора. */
+  modelInfo?(): { current: string | null; effort: string | null }
 }
 
 export interface InputBarHandle {
@@ -75,6 +81,13 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     claudeRef.current = v
     setClaudeModeState(v)
   }, [])
+  /** Открытая карточка выбора модели (`/model`); null — закрыта. */
+  const [picker, setPicker] = useState<PickerState | null>(null)
+  const pickerRef = useRef<PickerState | null>(null)
+  const setPickerState = useCallback((v: PickerState | null) => {
+    pickerRef.current = v
+    setPicker(v)
+  }, [])
   /** Курсор, который надо выставить после рендера нового значения. */
   const pendingCursor = useRef<number | null>(null)
   const nav = useRef<HistoryNav>(NAV_START)
@@ -98,7 +111,13 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [])
 
   const submit = useCallback((text: string, ask: boolean) => {
-    if (claudeRef.current && isClaudeExit(text)) {
+    const q = props.current
+    if ((ask || claudeRef.current) && isModelCommand(text) && q.onChooseModel) {
+      const info = q.modelInfo?.() ?? { current: null, effort: null }
+      completionRef.current.close()
+      hintsRef.current.close()
+      setPickerState(initialPicker(info.current, info.effort))
+    } else if (claudeRef.current && isClaudeExit(text)) {
       setClaudeMode(false)
     } else if (ask || claudeRef.current) {
       props.current.onAsk(text)
@@ -120,7 +139,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     setLine('', 0)
     completionRef.current.reset()
     hintsRef.current.reset()
-  }, [setLine, setClaudeMode])
+  }, [setLine, setClaudeMode, setPickerState])
 
   const completion = useCompletion({
     cwd: () => props.current.cwd(),
@@ -185,6 +204,24 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const ta = e.currentTarget
     const ne = e.nativeEvent
+    // Карточка выбора модели забирает клавиши (кроме сочетаний с модификаторами).
+    const pk = pickerRef.current
+    if (pk && !ne.isComposing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault()
+      const r = pickerKey(pk, e.key)
+      if (r.action?.kind === 'cancel') setPickerState(null)
+      else if (r.action?.kind === 'choose') {
+        setPickerState(null)
+        const { alias, effort, persist } = r.action
+        props.current.onChooseModel?.({ alias, effort, persist })
+      } else if (r.handled) setPickerState(r.state)
+      return
+    }
+    if (pk && e.ctrlKey && e.key.toLowerCase() === 'c') {
+      e.preventDefault()
+      setPickerState(null)
+      return
+    }
     if (completionRef.current.onKey(ne) || hintsRef.current.onKey(ne)) {
       e.preventDefault()
       return
@@ -285,7 +322,14 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           onPick={completion.pick}
         />
       )}
-      {hints.state.open && p.hints && !p.disabled && !p.continuation && (
+      {picker && !p.disabled && (
+        <ModelPicker
+          state={picker}
+          current={p.modelInfo?.().current ?? 'default'}
+          onSelect={(i) => setPickerState({ ...picker, selected: i })}
+        />
+      )}
+      {!picker && hints.state.open && p.hints && !p.disabled && !p.continuation && (
         <HintsPopup state={hints.state} onPick={hints.pick} />
       )}
       {p.continuation && !p.disabled && <div className="in-note">{CONTINUATION_NOTE}</div>}
@@ -326,6 +370,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               setFocused(false)
               completionRef.current.close()
               hintsRef.current.close()
+              setPickerState(null)
             }}
           />
           {empty && (

@@ -19,7 +19,8 @@ import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
 import { applyShell, claudeIndex, commandBytes, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
-import { askClaude, claudeCwdKnown, enterClaude, interruptClaude, stopClaude, useClaudeSessions } from '../claude/sessionStore'
+import { askClaude, chooseModel, claudeCwdKnown, enterClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
+import { aliasOf } from '../claude/models'
 import { InputBar, type InputBarHandle } from '../input/InputBar'
 import { AgentsPanel, type AgentsPanelHandle } from '../claude/AgentsPanel'
 import { blockText, cleanSerializedHtml } from '../feed/blockHtml'
@@ -510,6 +511,15 @@ export function TerminalPane(p: TerminalPaneProps) {
     },
     [p.paneId],
   )
+  const onChooseModel = useCallback((c: ModelChoice) => void chooseModel(p.paneId, cwdRef.current, c), [p.paneId])
+  // Текущая модель: выбранная в `/model` для панели, иначе из настроек Claude Code, иначе Default.
+  const modelInfo = useCallback(() => {
+    const s = useClaudeSessions.getState().sessions[p.paneId]
+    return {
+      current: s?.model ?? aliasOf(s?.state.defaultModel) ?? 'default',
+      effort: s?.state.effort ?? null,
+    }
+  }, [p.paneId])
   const onInterrupt = useCallback(
     (empty: boolean, claudeMode: boolean) => {
       // Режим Claude: ⌃C прерывает ход агента (если идёт), оболочку не трогает.
@@ -623,6 +633,8 @@ export function TerminalPane(p: TerminalPaneProps) {
           onRun={onRun}
           onAsk={onAsk}
           onEnterClaude={onEnterClaude}
+          onChooseModel={onChooseModel}
+          modelInfo={modelInfo}
           onInterrupt={onInterrupt}
           onEof={onEof}
           onClearFeed={onClearFeed}

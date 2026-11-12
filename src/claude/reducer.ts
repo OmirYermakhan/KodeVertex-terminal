@@ -20,6 +20,8 @@ export type FeedClaudeItem =
     }
   | { type: 'summary'; text: string; durationMs: number; costUsd: number; isError: boolean }
   | { type: 'error'; text: string }
+  /** Тихая моноширинная строка ленты (например, «Модель: Fable 5.2 · усилие high»). */
+  | { type: 'note'; text: string }
   /** Начало новой сессии Claude: каталог, в котором она работает. */
   | { type: 'session'; cwd: string; /** Вход в режим Claude из строки ввода (`claude`): с подсказкой. */ mode?: boolean }
 
@@ -41,6 +43,10 @@ export interface Agent {
 export interface ClaudeState {
   sessionId: string | null
   model: string | null
+  /** Применённое усилие (ответ get_settings); null — ещё неизвестно. */
+  effort: string | null
+  /** `model` из настроек Claude Code (`opus[1m]`); null — не задан или неизвестно. */
+  defaultModel: string | null
   contextUsed: number
   contextMax: number
   costUsd: number
@@ -82,6 +88,8 @@ export function initialClaude(): ClaudeState {
   return {
     sessionId: null,
     model: null,
+    effort: null,
+    defaultModel: null,
     contextUsed: 0,
     contextMax: DEFAULT_CONTEXT_MAX,
     costUsd: 0,
@@ -332,6 +340,24 @@ function onResult(s: ClaudeState, ev: Rec, now: number): ClaudeState {
   return next
 }
 
+/** Ответ на управляющий запрос: set_model → { model }, get_settings → { effective, applied }. */
+function onControl(s: ClaudeState, ev: Rec): ClaudeState {
+  const r = ev.response
+  if (!isRec(r) || r.subtype !== 'success' || !isRec(r.response)) return s
+  const body = r.response
+  let next = s
+  if (isRec(body.applied)) {
+    const model = strOr(body.applied.model)
+    const effort = strOr(body.applied.effort)
+    next = { ...next, ...(model ? { model } : {}), ...(effort ? { effort } : {}) }
+    if (isRec(body.effective)) next = { ...next, defaultModel: strOr(body.effective.model) || null }
+  } else if (typeof body.model === 'string' && body.model) {
+    next = { ...next, model: body.model }
+  }
+  if (next === s) return s
+  return next.model && next.model !== s.model ? patchAgent(next, MAIN, { model: next.model }) : next
+}
+
 export function reduceClaude(s: ClaudeState, line: string | object, now: number): ClaudeState {
   const ev = parse(line)
   if (!ev) return s
@@ -363,6 +389,8 @@ export function reduceClaude(s: ClaudeState, line: string | object, now: number)
         return onUser(s, ev, now)
       case 'result':
         return onResult(s, ev, now)
+      case 'control_response':
+        return onControl(s, ev)
       default:
         return s
     }

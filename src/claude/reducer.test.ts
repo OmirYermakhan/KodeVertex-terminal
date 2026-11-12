@@ -201,3 +201,37 @@ describe('очередь сообщений', () => {
     expect(s.items.filter((i) => i.type === 'action').every((i) => (i as { status: string }).status !== 'running')).toBe(true)
   })
 })
+
+describe('control_response (выбор модели)', () => {
+  const resp = (response: object, subtype = 'success') => ({
+    type: 'control_response',
+    response: { subtype, request_id: 'kv-1', response },
+  })
+
+  it('get_settings: применённые модель и усилие, модель из настроек', () => {
+    const s = reduceClaude(
+      initialClaude(),
+      resp({ effective: { model: 'opus[1m]' }, applied: { model: 'claude-opus-5-5', effort: 'medium' } }),
+      0,
+    )
+    expect(s).toMatchObject({ model: 'claude-opus-5-5', effort: 'medium', defaultModel: 'opus[1m]' })
+    expect(s.agents[0].model).toBe('claude-opus-5-5')
+    // Без model в настройках — null.
+    expect(reduceClaude(s, resp({ effective: {}, applied: { model: 'x', effort: 'low' } }), 0).defaultModel).toBeNull()
+  })
+
+  it('set_model: модель меняется сразу (и у главного агента)', () => {
+    const s0 = run(initialClaude(), [{ type: 'system', subtype: 'init', model: 'claude-opus-5-5', session_id: 's' }])
+    const s = reduceClaude(s0, resp({ model: 'claude-fable-5-2' }), 0)
+    expect(s.model).toBe('claude-fable-5-2')
+    expect(s.agents[0].model).toBe('claude-fable-5-2')
+    expect(s.effort).toBeNull()
+  })
+
+  it('ошибки и чужие ответы не меняют состояние', () => {
+    const s = initialClaude()
+    expect(reduceClaude(s, resp({ model: 'claude-fable-5-2' }, 'error'), 0)).toBe(s)
+    expect(reduceClaude(s, { type: 'control_response', response: null }, 0)).toBe(s)
+    expect(reduceClaude(s, resp({}), 0)).toBe(s)
+  })
+})

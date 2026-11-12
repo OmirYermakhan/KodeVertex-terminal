@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
 }))
 
-const { askClaude, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
+const { askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
 
 const items = (pane: string) => useClaudeSessions.getState().sessions[pane]?.state.items ?? []
 const calls = (cmd: string) => invoke.mock.calls.filter((c) => c[0] === cmd)
@@ -51,5 +51,80 @@ describe('enterClaude (команда `claude` в строке ввода)', () 
     expect(enterClaude('p', undefined)).toBe(false)
     expect(calls('claude_start')).toHaveLength(0)
     expect(items('p')).toEqual([{ type: 'error', text: NO_CWD }])
+  })
+})
+
+describe('chooseModel (/model)', () => {
+  /** Отвечает на управляющие запросы как claude: строкой control_response в onLine. */
+  let onLine: { onmessage(m: string): void } | null
+  let saveError: string | null
+  const requests = () => calls('claude_control').map((c) => (c[1] as { request: object }).request)
+
+  beforeEach(() => {
+    stopClaude('m')
+    invoke.mockReset()
+    onLine = null
+    saveError = null
+    invoke.mockImplementation((cmd: string, a: Record<string, unknown>) => {
+      if (cmd === 'claude_start') {
+        onLine = a.onLine as typeof onLine
+        return Promise.resolve('proc-m')
+      }
+      if (cmd === 'claude_control') {
+        const req = a.request as { subtype: string; model?: string }
+        const body =
+          req.subtype === 'set_model'
+            ? { model: req.model === 'fable' ? 'claude-fable-5-2' : 'claude-opus-5-5' }
+            : req.subtype === 'get_settings'
+              ? { effective: { model: 'opus' }, applied: { model: 'claude-fable-5-2', effort: 'high' } }
+              : undefined
+        setTimeout(() =>
+          onLine?.onmessage(
+            JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: a.requestId, response: body } }),
+          ),
+        )
+        return Promise.resolve()
+      }
+      if (cmd === 'claude_save_defaults') return saveError ? Promise.reject(saveError) : Promise.resolve()
+      return Promise.resolve()
+    })
+  })
+
+  const state = () => useClaudeSessions.getState().sessions.m
+
+  it('только сессия (s): set_model и усилие живому процессу, заметка, settings.json не трогается', async () => {
+    enterClaude('m', '/w')
+    await flush()
+    await chooseModel('m', '/w', { alias: 'fable', effort: 'high', persist: false })
+    expect(requests()).toContainEqual({ subtype: 'set_model', model: 'fable' })
+    expect(requests()).toContainEqual({ subtype: 'apply_flag_settings', settings: { effortLevel: 'high' } })
+    expect(calls('claude_start')).toHaveLength(1)
+    expect(calls('claude_save_defaults')).toHaveLength(0)
+    expect(state().state.model).toBe('claude-fable-5-2')
+    expect(state().state.items).toContainEqual({ type: 'note', text: 'Модель: Fable 5.2 · усилие high' })
+    expect(state()).toMatchObject({ model: 'fable', effort: 'high' })
+  })
+
+  it('↵: сохраняет по умолчанию; Default — без модели; усилие не меняли — не пишется', async () => {
+    enterClaude('m', '/w')
+    await flush()
+    await chooseModel('m', '/w', { alias: 'fable', effort: 'max', persist: true })
+    expect(calls('claude_save_defaults')[0][1]).toEqual({ model: 'fable', modelId: 'claude-fable-5-2', effort: 'max' })
+    await chooseModel('m', '/w', { alias: 'default', effort: null, persist: true })
+    expect(calls('claude_save_defaults')[1][1]).toEqual({ model: null, modelId: 'claude-opus-5-5', effort: null })
+    expect(requests()).toContainEqual({ subtype: 'set_model', model: 'default' })
+  })
+
+  it('ошибка записи настроек — карточка ошибки', async () => {
+    saveError = 'файл настроек Claude Code — неверный JSON'
+    enterClaude('m', '/w')
+    await flush()
+    await chooseModel('m', '/w', { alias: 'haiku', effort: null, persist: true })
+    expect(state().state.items.at(-1)).toEqual({ type: 'error', text: `Модель не сохранена по умолчанию: ${saveError}` })
+  })
+
+  it('после выбора процесс перезапускается с --model/--effort', async () => {
+    await chooseModel('m', '/w', { alias: 'sonnet', effort: 'low', persist: false })
+    expect(calls('claude_start')[0][1]).toMatchObject({ model: 'sonnet', effort: 'low' })
   })
 })

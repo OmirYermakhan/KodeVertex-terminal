@@ -356,3 +356,75 @@ describe('InputBar', () => {
     })
   })
 })
+
+describe('InputBar: /model', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    invoke.mockResolvedValue([])
+    resetHistory()
+  })
+
+  const enterMode = (s: ReturnType<typeof setup>) => {
+    s.set('claude')
+    s.key('Enter')
+  }
+
+  it('в режиме Claude `/model` ↵ открывает выбор, а не отправляет вопрос', () => {
+    const s = setup({ onChooseModel: vi.fn(), modelInfo: () => ({ current: 'fable', effort: 'medium' }) })
+    enterMode(s)
+    s.set('/model')
+    s.key('Enter')
+    expect(s.p.onAsk).not.toHaveBeenCalled()
+    expect(s.container.querySelector('.mp')).not.toBeNull()
+    expect(s.ta.value).toBe('')
+    // Открыт на текущей модели.
+    expect(s.container.querySelector('.mp [aria-selected="true"] .hp-n')!.textContent).toBe('Fable 5.2')
+  })
+
+  it('↓ и s — только сессия; ←/→ усилие; выбор закрывает карточку', () => {
+    const onChooseModel = vi.fn()
+    const s = setup({ onChooseModel, modelInfo: () => ({ current: 'default', effort: 'medium' }) })
+    enterMode(s)
+    s.set('/model')
+    s.key('Enter')
+    s.key('ArrowDown')
+    s.key('ArrowRight')
+    s.key('s')
+    expect(onChooseModel).toHaveBeenCalledWith({ alias: 'opus', effort: 'high', persist: false })
+    expect(s.container.querySelector('.mp')).toBeNull()
+    expect(s.ta.value).toBe('')
+  })
+
+  it('цифра и ↵ — по умолчанию; esc — отмена, режим Claude остаётся', () => {
+    const onChooseModel = vi.fn()
+    const s = setup({ onChooseModel, modelInfo: () => ({ current: null, effort: null }) })
+    enterMode(s)
+    s.set('/model')
+    s.key('Enter')
+    s.key('3')
+    s.key('Enter')
+    expect(onChooseModel).toHaveBeenCalledWith({ alias: 'fable', effort: null, persist: true })
+    s.set('/model')
+    s.key('Enter')
+    s.key('Escape')
+    expect(s.container.querySelector('.mp')).toBeNull()
+    expect(onChooseModel).toHaveBeenCalledTimes(1)
+    expect(s.container.querySelector('.in-mode')).not.toBeNull()
+  })
+
+  it('⌘↵ `/model` вне режима Claude тоже открывает выбор', () => {
+    const s = setup({ onChooseModel: vi.fn(), modelInfo: () => ({ current: null, effort: null }) })
+    s.set('/model')
+    s.key('Enter', { metaKey: true })
+    expect(s.p.onAsk).not.toHaveBeenCalled()
+    expect(s.container.querySelector('.mp')).not.toBeNull()
+  })
+
+  it('без onChooseModel `/model` уходит вопросом, как раньше', () => {
+    const s = setup()
+    enterMode(s)
+    s.set('/model')
+    s.key('Enter')
+    expect(s.p.onAsk).toHaveBeenCalledWith('/model')
+  })
+})
