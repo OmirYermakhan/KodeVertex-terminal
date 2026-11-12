@@ -17,7 +17,7 @@ export const DEFAULTS: Settings = {
   textFont: 'Inter',
   codeFont: 'JetBrains Mono',
   textSize: 16,
-  codeSize: 14,
+  codeSize: 13,
   lineHeight: 1.7,
   ligatures: true,
   pathCompletions: true,

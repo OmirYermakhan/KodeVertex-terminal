@@ -113,6 +113,29 @@ describe('LiveTerminal', () => {
     park.remove()
   })
 
+  it('смена высоты не переносит host заново; при размонтировании onDetach сообщает о фокусе', () => {
+    const park = document.createElement('div')
+    document.body.appendChild(park)
+    const host = document.createElement('div')
+    const input = document.createElement('textarea')
+    host.appendChild(input)
+    const onAttach = vi.fn()
+    const onDetach = vi.fn()
+    const parkRef = { current: park }
+    const el = (h: number) => (
+      <LiveTerminal host={host} parkRef={parkRef} mode="block" hostHeight={h} height={40} onAttach={onAttach} onDetach={onDetach} />
+    )
+    const { rerender, unmount } = render(el(300))
+    rerender(el(400))
+    expect(onAttach).toHaveBeenCalledTimes(1)
+    expect(host.style.height).toBe('400px')
+    input.focus()
+    unmount()
+    expect(host.parentElement).toBe(park)
+    expect(onDetach).toHaveBeenCalledWith(true)
+    park.remove()
+  })
+
   it('overlay — host на всю высоту', () => {
     const host = document.createElement('div')
     const { getByTestId } = render(

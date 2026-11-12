@@ -5,7 +5,7 @@ import { applyTheme } from '../theme/applyTheme'
 
 describe('settings', () => {
   it('defaults', () => {
-    expect(DEFAULTS).toEqual({ theme: 'as', textFont: 'Inter', codeFont: 'JetBrains Mono', textSize: 16, codeSize: 14, lineHeight: 1.7, ligatures: true, pathCompletions: true })
+    expect(DEFAULTS).toEqual({ theme: 'as', textFont: 'Inter', codeFont: 'JetBrains Mono', textSize: 16, codeSize: 13, lineHeight: 1.7, ligatures: true, pathCompletions: true })
     expect(normalizeSettings(undefined)).toEqual(DEFAULTS)
     expect(normalizeSettings('мусор')).toEqual(DEFAULTS)
   })

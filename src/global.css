@@ -166,7 +166,7 @@ body {
 /* Панель: лента блоков (макет 04-main-window, .feed/.blk) */
 .pane { position: relative; display: flex; flex-direction: column; height: 100%; box-sizing: border-box; background: var(--bg); }
 .feed { flex: 1; min-height: 0; overflow: auto; padding: 16px 22px; position: relative; box-sizing: border-box; }
-.blk { box-sizing: border-box; border: 1px solid transparent; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-family: var(--font-code); font-size: 13px; line-height: 1.7; max-width: 76ch; color: var(--text); }
+.blk { box-sizing: border-box; border: 1px solid transparent; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-family: var(--font-code); font-size: var(--size-code); line-height: 1.7; max-width: 76ch; color: var(--text); }
 .blk .cmd { color: var(--strong); }
 .blk .p { color: var(--accText); }
 .blk .bh { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }

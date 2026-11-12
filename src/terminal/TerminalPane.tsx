@@ -177,11 +177,8 @@ export function TerminalPane(p: TerminalPaneProps) {
   const [livePx, setLivePx] = useState(0)
   const [feedHeight, setFeedHeight] = useState(0)
   const hostHeight = Math.max(LIVE_MIN_HEIGHT, Math.floor(feedHeight * LIVE_MAX_SHARE))
-  const running = items.some((it) => it.kind === 'shell' && it.running)
-  const runningRef = useRef(running)
-  useEffect(() => {
-    runningRef.current = running
-  })
+  // Идёт команда (между OSC 133 C и D). Ставится синхронно в обработчике OSC, не из состояния.
+  const runningRef = useRef(false)
 
   // Create xterm + PTY once per pane.
   useEffect(() => {
@@ -241,10 +238,14 @@ export function TerminalPane(p: TerminalPaneProps) {
       if (ev.t === 'start') {
         // Стираем эхо набранной строки ZLE — в живом терминале только вывод команды.
         term.reset()
+        // Синхронно: вывод из того же куска данных (onWriteParsed) уже должен считаться живым.
+        runningRef.current = true
         setLivePx(liveContentHeight(term))
         setItems((it) => applyShell(it, { t: 'start', command: ev.command, cwd: cwdRef.current ?? '', at }))
       } else {
-        const { html, lines } = freeze(term, serializer)
+        runningRef.current = false
+        // Конец пришёл при активном alt screen (программа не вышла из него) — его содержимое не замораживаем.
+        const { html, lines } = term.buffer.active.type === 'alternate' ? { html: '', lines: 0 } : freeze(term, serializer)
         setItems((it) => applyShell(it, { t: 'end', exitCode: ev.exitCode, at, html, lines }))
       }
       return true
@@ -410,6 +411,15 @@ export function TerminalPane(p: TerminalPaneProps) {
     if (callbacks.current.focused && !useUi.getState().settingsOpen) term.focus()
   }, [])
 
+  // host вернулся в парковку: перенос в DOM сбросил фокус — вернуть его в xterm (до Task 7 ввод идёт туда).
+  const onDetach = useCallback((hadFocus: boolean) => {
+    const active = document.activeElement
+    const nothingFocused = !active || active === document.body
+    if ((hadFocus || nothingFocused) && callbacks.current.focused && !useUi.getState().settingsOpen) {
+      termRef.current?.focus()
+    }
+  }, [])
+
   // Автопрокрутка: лента следует за выводом, пока пользователь у низа.
   const stickRef = useRef(true)
   const onFeedScroll = useCallback(() => {
@@ -448,7 +458,7 @@ export function TerminalPane(p: TerminalPaneProps) {
   const liveHeight = Math.min(hostHeight, livePx)
   const renderLive = (_b: ShellBlock) =>
     alt ? null : (
-      <LiveTerminal host={host} parkRef={parkRef} mode="block" hostHeight={hostHeight} height={liveHeight} onAttach={onAttach} />
+      <LiveTerminal host={host} parkRef={parkRef} mode="block" hostHeight={hostHeight} height={liveHeight} onAttach={onAttach} onDetach={onDetach} />
     )
 
   return (
@@ -458,7 +468,9 @@ export function TerminalPane(p: TerminalPaneProps) {
       onFocus={() => callbacks.current.onFocus()}
       // Клик по ленте возвращает ввод в xterm (если не выделяли текст). До строки ввода (Task 7)
       // это единственный способ печатать команды: в простое xterm невидим, но в фокусе.
-      onMouseUp={() => {
+      onMouseUp={(e) => {
+        // Кнопки ленты («Показать всё» и т. п.) и выделение текста не трогаем.
+        if ((e.target as Element).closest?.('button, a, input, textarea, select')) return
         if (window.getSelection()?.isCollapsed ?? true) termRef.current?.focus()
       }}
     >
@@ -477,7 +489,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       />
       {/* Task 7: строка ввода под лентой. */}
       {alt && (
-        <LiveTerminal host={host} parkRef={parkRef} mode="overlay" hostHeight={hostHeight} height={0} onAttach={onAttach} />
+        <LiveTerminal host={host} parkRef={parkRef} mode="overlay" hostHeight={hostHeight} height={0} onAttach={onAttach} onDetach={onDetach} />
       )}
       {popup && open && (
         <CompletionPopup

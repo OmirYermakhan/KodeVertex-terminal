@@ -33,10 +33,10 @@ describe('runAction', () => {
   it('font actions change both sizes; reset restores defaults', () => {
     runAction('fontBigger')
     expect(useSettings.getState().settings.textSize).toBe(17)
-    expect(useSettings.getState().settings.codeSize).toBe(15)
+    expect(useSettings.getState().settings.codeSize).toBe(14)
     runAction('fontReset')
     expect(useSettings.getState().settings.textSize).toBe(16)
-    expect(useSettings.getState().settings.codeSize).toBe(14)
+    expect(useSettings.getState().settings.codeSize).toBe(13)
   })
   it('openSettings sets the flag', () => {
     runAction('openSettings')

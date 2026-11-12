@@ -13,6 +13,8 @@ export interface LiveTerminalProps {
   height: number
   /** host перенесён в слот: подогнать размер, перерисовать, отдать фокус. */
   onAttach: () => void
+  /** host вернулся в парковку; hadFocus — фокус был внутри xterm (перенос в DOM его сбрасывает). */
+  onDetach?: (hadFocus: boolean) => void
 }
 
 /**
@@ -20,26 +22,37 @@ export interface LiveTerminalProps {
  * (running-блок или оверлей) и обратно в «парковку», которая держит ширину текста блока,
  * поэтому cols совпадают с шириной ленты и замороженный вывод переносится так же.
  */
-export function LiveTerminal({ host, parkRef, mode, hostHeight, height, onAttach }: LiveTerminalProps) {
+export function LiveTerminal({ host, parkRef, mode, hostHeight, height, onAttach, onDetach }: LiveTerminalProps) {
   const slotRef = useRef<HTMLDivElement>(null)
   const attachRef = useRef(onAttach)
+  const detachRef = useRef(onDetach)
+  const heightRef = useRef(hostHeight)
   useLayoutEffect(() => {
     attachRef.current = onAttach
+    detachRef.current = onDetach
+    heightRef.current = hostHeight
   })
 
+  // Перенос host — только при монтировании/смене режима; смена высоты — отдельным эффектом ниже.
   useLayoutEffect(() => {
     const slot = slotRef.current
     const park = parkRef.current
     if (!slot) return
-    host.style.height = mode === 'overlay' ? '100%' : `${hostHeight}px`
     slot.appendChild(host)
     attachRef.current()
     return () => {
       if (host.parentElement !== slot) return
-      host.style.height = `${hostHeight}px`
+      const hadFocus = host.contains(document.activeElement)
+      host.style.height = `${heightRef.current}px`
       park?.appendChild(host)
+      detachRef.current?.(hadFocus)
     }
-  }, [host, parkRef, mode, hostHeight])
+  }, [host, parkRef, mode])
+
+  // По высоте host FitAddon считает rows (ResizeObserver панели вызовет fit).
+  useLayoutEffect(() => {
+    host.style.height = mode === 'overlay' ? '100%' : `${hostHeight}px`
+  }, [host, mode, hostHeight])
 
   return (
     <div

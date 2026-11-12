@@ -1,4 +1,4 @@
-import { act, render } from '@testing-library/react'
+import { act, fireEvent, render } from '@testing-library/react'
 import { Profiler } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PtyHandle, SpawnOptions } from './ptyClient'
@@ -116,7 +116,7 @@ globalThis.ResizeObserver = class {
 const { TerminalPane } = await import('./TerminalPane')
 const { useUi } = await import('../ui/uiStore')
 const { useSettings } = await import('../settings/store')
-const { DEFAULTS } = await import('../settings/settings')
+const { DEFAULTS, terminalLineHeight } = await import('../settings/settings')
 const { codeFontStack } = await import('../theme/fontFamily')
 const { runPaneCommand } = await import('../feed/paneCommands')
 
@@ -450,6 +450,61 @@ describe('TerminalPane', () => {
       const k = (o: KeyboardEventInit) => keyHandler(term)(new KeyboardEvent('keydown', o))
       expect(k({ code: 'ArrowUp', key: 'ArrowUp', metaKey: true })).toBe(false)
       expect(k({ code: 'KeyC', key: 'C', metaKey: true, shiftKey: true })).toBe(false)
+    })
+
+    it('после конца команды фокус возвращается в xterm', async () => {
+      const { term } = await mounted()
+      osc133(term, 'C;' + b64('ls'))
+      term.focus.mockClear()
+      osc133(term, 'D;0')
+      expect(host().closest('.feed-park')).not.toBeNull()
+      expect(term.focus).toHaveBeenCalled()
+    })
+
+    it('фоновая панель фокус не забирает', async () => {
+      const { term } = await mounted(false)
+      osc133(term, 'C;' + b64('ls'))
+      osc133(term, 'D;0')
+      expect(term.focus).not.toHaveBeenCalled()
+    })
+
+    it('вывод в том же куске, что и C, сразу растит живой блок', async () => {
+      const { term } = await mounted()
+      const parsed = term.onWriteParsed.mock.calls[0][0] as () => void
+      act(() => {
+        // Один write: C, затем вывод — onWriteParsed приходит до коммита React.
+        oscHandler(term, 133)('C;' + b64('echo hi; sleep 5'))
+        term.buffer.active.cursorY = 2
+        parsed()
+      })
+      const slot = document.querySelector<HTMLElement>('[data-testid="live-block"]')!
+      const cell = DEFAULTS.codeSize * terminalLineHeight(DEFAULTS)
+      expect(slot.style.height).toBe(`${Math.ceil(3 * cell)}px`)
+    })
+
+    it('конец команды при активном alt screen — содержимое alt не замораживается', async () => {
+      const { term } = await mounted()
+      osc133(term, 'C;' + b64('vim'))
+      bufferChange(term, 'alternate')
+      term.buffer.active.type = 'alternate'
+      term.lines = ['~', '~']
+      serializeAsHTML.mockClear()
+      osc133(term, 'D;0')
+      expect(serializeAsHTML).not.toHaveBeenCalled()
+      expect(document.querySelector('.blk .out')).toBeNull()
+    })
+
+    it('клик по кнопке ленты не уводит фокус в xterm', async () => {
+      const { term } = await mounted()
+      term.focus.mockClear()
+      const feed = document.querySelector('.feed')!
+      const btn = document.createElement('button')
+      feed.appendChild(btn)
+      fireEvent.mouseUp(btn)
+      expect(term.focus).not.toHaveBeenCalled()
+      fireEvent.mouseUp(feed)
+      expect(term.focus).toHaveBeenCalled()
+      btn.remove()
     })
   })
 })

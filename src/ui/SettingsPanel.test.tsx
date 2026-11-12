@@ -47,7 +47,7 @@ describe('SettingsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Увеличить размер текста' }))
     expect(update).toHaveBeenCalledWith({ textSize: 17 })
     fireEvent.click(screen.getByRole('button', { name: 'Уменьшить размер кода' }))
-    expect(update).toHaveBeenCalledWith({ codeSize: 13 })
+    expect(update).toHaveBeenCalledWith({ codeSize: 12 })
     fireEvent.click(screen.getByRole('button', { name: '1.8' }))
     expect(update).toHaveBeenCalledWith({ lineHeight: 1.8 })
   })
