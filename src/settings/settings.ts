@@ -10,6 +10,13 @@ export interface Settings {
   ligatures: boolean
   /** Попап подсказок путей в терминале. */
   pathCompletions: boolean
+  /** Системные уведомления, когда окно не в фокусе или событие в другой вкладке. */
+  notifySystem: boolean
+  notifySound: boolean
+  /** Уведомлять о субагентах (главный — всегда). */
+  notifySubagents: boolean
+  /** Уведомлять о командах дольше 10 с. */
+  notifyLongCommands: boolean
 }
 
 export const DEFAULTS: Settings = {
@@ -21,6 +28,10 @@ export const DEFAULTS: Settings = {
   lineHeight: 1.7,
   ligatures: true,
   pathCompletions: true,
+  notifySystem: true,
+  notifySound: true,
+  notifySubagents: false,
+  notifyLongCommands: true,
 }
 
 const THEME_IDS: ThemeId[] = ['kv', 'warm', 'cold', 'light', 'as']
@@ -48,6 +59,8 @@ function fontName(v: unknown, fallback: string): string {
   return FONT_ALIASES[v.trim()] ?? v.trim()
 }
 
+const bool = (v: unknown, fallback: boolean): boolean => (typeof v === 'boolean' ? v : fallback)
+
 export function normalizeSettings(raw: unknown): Settings {
   const r = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
   return {
@@ -59,6 +72,10 @@ export function normalizeSettings(raw: unknown): Settings {
     lineHeight: nearestLineHeight(r.lineHeight),
     ligatures: typeof r.ligatures === 'boolean' ? r.ligatures : DEFAULTS.ligatures,
     pathCompletions: typeof r.pathCompletions === 'boolean' ? r.pathCompletions : DEFAULTS.pathCompletions,
+    notifySystem: bool(r.notifySystem, DEFAULTS.notifySystem),
+    notifySound: bool(r.notifySound, DEFAULTS.notifySound),
+    notifySubagents: bool(r.notifySubagents, DEFAULTS.notifySubagents),
+    notifyLongCommands: bool(r.notifyLongCommands, DEFAULTS.notifyLongCommands),
   }
 }
 

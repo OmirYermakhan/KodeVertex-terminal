@@ -160,6 +160,8 @@ export interface AgentsPanelProps {
 export interface AgentsPanelHandle {
   /** Фокус в панель: выбирается текущий агент (или первый), если ещё никто не выбран. */
   focus(): void
+  /** Выбрать агента (по клику на уведомление), не забирая фокус у ввода. */
+  select(id: string): void
 }
 
 function useTicker(fixed: number | undefined, live: boolean): number {
@@ -196,6 +198,9 @@ export const AgentsPanel = forwardRef<AgentsPanelHandle, AgentsPanelProps>(funct
   }
 
   useImperativeHandle(ref, () => ({
+    select: (id) => {
+      if (rows.some((r) => r.agent.id === id)) pick(id)
+    },
     focus: () => {
       if (!rows.some((r) => r.agent.id === sel)) {
         const cur = rows.find((r) => r.agent.id === p.state.currentAgentId) ?? rows[0]

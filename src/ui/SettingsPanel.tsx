@@ -197,6 +197,24 @@ export default function SettingsPanel(p: { open: boolean; onClose: () => void })
               <span>Подсказки путей</span>
               <input type="checkbox" checked={settings.pathCompletions} onChange={(e) => update({ pathCompletions: e.target.checked })} />
             </label>
+
+            <h3>Уведомления</h3>
+            <label className="st-row">
+              <span>Системные уведомления</span>
+              <input type="checkbox" checked={settings.notifySystem} onChange={(e) => update({ notifySystem: e.target.checked })} />
+            </label>
+            <label className="st-row">
+              <span>Звук</span>
+              <input type="checkbox" checked={settings.notifySound} onChange={(e) => update({ notifySound: e.target.checked })} />
+            </label>
+            <label className="st-row">
+              <span>Субагенты</span>
+              <input type="checkbox" checked={settings.notifySubagents} onChange={(e) => update({ notifySubagents: e.target.checked })} />
+            </label>
+            <label className="st-row">
+              <span>Долгие команды (&gt; 10 с)</span>
+              <input type="checkbox" checked={settings.notifyLongCommands} onChange={(e) => update({ notifyLongCommands: e.target.checked })} />
+            </label>
           </div>
 
           <div className="st-preview" data-testid="preview" style={{ fontFamily: textFontStack(settings.textFont), fontSize: settings.textSize, lineHeight: settings.lineHeight }}>

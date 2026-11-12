@@ -314,3 +314,34 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .detail { margin: 2px 16px 8px 40px; padding: 8px 12px; border-left: 1px solid var(--acc); font-family: var(--font-code); font-size: 12px; line-height: 1.7; color: var(--muted); overflow-wrap: anywhere; }
 .detail b { color: var(--strong); font-weight: 500; }
 .detail .now { color: var(--accText); }
+
+/* Тосты (уведомления об агентах и долгих командах) */
+.toasts {
+  position: fixed;
+  right: 14px;
+  bottom: 38px; /* над статус-баром (26px) */
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+  max-width: min(420px, calc(100vw - 28px));
+}
+.toast {
+  display: block;
+  text-align: left;
+  font-family: var(--font-code);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--muted);
+  border-radius: 8px;
+  padding: 9px 14px;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+.toast.done { border-left-color: var(--add); }
+.toast.waiting { border-left-color: var(--warn); }
+.toast.error { border-left-color: var(--del); }

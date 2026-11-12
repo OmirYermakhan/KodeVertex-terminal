@@ -51,6 +51,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_opener::init())
+    .plugin(tauri_plugin_notification::init())
     .invoke_handler(tauri::generate_handler![
       settings::settings_load,
       settings::settings_save,

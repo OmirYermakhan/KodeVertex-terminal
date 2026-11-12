@@ -10,6 +10,8 @@ import StatusBar from './ui/StatusBar'
 import SettingsPanel from './ui/SettingsPanel'
 import { useUi } from './ui/uiStore'
 import { useGitInfo } from './status/useGitInfo'
+import Toasts from './notify/Toasts'
+import { installNotifications } from './notify/notify'
 import { useClaudeSessions } from './claude/sessionStore'
 
 const REPEATABLE = new Set<Action>(['fontBigger', 'fontSmaller'])
@@ -30,6 +32,8 @@ export default function App() {
   useEffect(() => {
     useSettings.getState().load()
   }, [])
+
+  useEffect(() => installNotifications(), [])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -69,6 +73,7 @@ export default function App() {
       <div data-testid="statusbar" className="statusbar">
         <StatusBar cwd={cwd} git={git} claude={claude} />
       </div>
+      <Toasts />
       <SettingsPanel open={settingsOpen} onClose={() => useUi.getState().setSettingsOpen(false)} />
     </div>
   )

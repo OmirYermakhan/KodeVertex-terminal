@@ -16,6 +16,7 @@ import { matchKey } from '../keys/keymap'
 import { parseOsc7 } from './osc'
 import { useHome } from '../status/useGitInfo'
 import { spawnPty, type PtyHandle } from './ptyClient'
+import { notifyCommandEnd } from '../notify/notify'
 import { applyShell, commandBytes, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
 import { askClaude, interruptClaude, stopClaude, useClaudeSessions } from '../claude/sessionStore'
@@ -130,6 +131,16 @@ export function TerminalPane(p: TerminalPaneProps) {
   const settings = useSettings((st) => st.settings)
   const settingsOpen = useUi((st) => st.settingsOpen)
   const agentsHidden = useUi((st) => st.agentsHidden)
+  const agentRequest = useUi((st) => (st.agentRequest?.paneId === p.paneId ? st.agentRequest : null))
+  // Клик по тосту: выбрать агента в панели агентов (панель появляется на следующем кадре, если была скрыта).
+  useEffect(() => {
+    if (!agentRequest) return
+    const t = setTimeout(() => {
+      agentsRef.current?.select(agentRequest.agentId)
+      useUi.getState().clearAgentRequest()
+    }, 0)
+    return () => clearTimeout(t)
+  }, [agentRequest])
 
   const [items, setItems] = useState<FeedItem[]>([])
   const itemsRef = useRef(items)
@@ -252,6 +263,8 @@ export function TerminalPane(p: TerminalPaneProps) {
         setRunning(false)
         // Конец пришёл при активном alt screen (программа не вышла из него) — его содержимое не замораживаем.
         const { html, lines } = term.buffer.active.type === 'alternate' ? { html: '', lines: 0 } : freeze(term, serializer)
+        const cur = itemsRef.current.find((x): x is ShellBlock => x.kind === 'shell' && x.running)
+        if (cur) notifyCommandEnd(callbacks.current.paneId, cur.command, Math.max(0, at - cur.startedAt), ev.exitCode)
         setItems((it) => applyShell(it, { t: 'end', exitCode: ev.exitCode, at, html, lines }))
       }
       return true
