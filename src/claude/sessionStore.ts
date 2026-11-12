@@ -2,9 +2,9 @@
 // чтобы его читали лента панели, панель агентов и статус-бар.
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { create } from 'zustand'
-import { finishQuestion, gotoStep, initialClaude, questionSteps, recordAnswer, reduceClaude, userSent, type ClaudeState } from './reducer'
+import { cancelQuestions, finishQuestion, gotoStep, initialClaude, questionSteps, recordAnswer, reduceClaude, userSent, type ClaudeState } from './reducer'
 import { allowResponse, answerResponse, parsePermissionRequest } from './questions'
-import { GET_SETTINGS, effortRequest, modelNote, setModelRequest, type ModelChoice } from './models'
+import { GET_SETTINGS, effortRequest, modelNote, persistedModel, setModelRequest, type ModelChoice } from './models'
 
 export type { ModelChoice }
 
@@ -67,7 +67,9 @@ function failed(s: ClaudeState, text: string, now: number): ClaudeState {
     currentAgentId: null,
     items: [...s.items, { type: 'error', text }],
     agents: s.agents.map((a) =>
-      a.id === 'main' && a.status === 'running' ? { ...a, status: 'error', now: 'Ошибка', endedAt: now } : a,
+      a.id === 'main' && (a.status === 'running' || a.status === 'waiting') && a.startedAt > 0
+        ? { ...a, status: 'error', now: 'Ошибка', endedAt: now }
+        : a,
     ),
   }
 }
@@ -79,7 +81,9 @@ function stopped(s: ClaudeState, now: number): ClaudeState {
     busy: false,
     pending: 0,
     currentAgentId: null,
-    agents: s.agents.map((a) => (a.status === 'running' ? { ...a, status: 'done', now: 'Остановлено', endedAt: now } : a)),
+    agents: s.agents.map((a) =>
+      a.status === 'running' || (a.status === 'waiting' && a.startedAt > 0) ? { ...a, status: 'done', now: 'Остановлено', endedAt: now } : a,
+    ),
   }
 }
 
@@ -130,6 +134,8 @@ function start(paneId: string): Proc {
       // --resume упал, не сказав ни строки (сессии нет или она из другого каталога) — дальше начинаем
       // новую сессию, а не повторяем тот же resume на каждый ⌘↵.
       if (!ok && resume !== null && !gotLine) state = { ...state, sessionId: null }
+      // Вопрос без процесса не ответить: отменяем (блок над строкой ввода исчезает).
+      state = cancelQuestions(state)
       return { ...p, procId: null, state }
     })
   })
@@ -232,7 +238,7 @@ export async function chooseModel(paneId: string, paneCwd: string | undefined, c
     patchState(paneId, (s) => ({ ...s, items: [...s.items, { type: 'note', text: modelNote(modelId, effort ?? null) }] }))
     if (c.persist) {
       // Default — убрать модель из настроек: Claude Code возьмёт свою по умолчанию.
-      const model = c.alias === 'default' ? null : c.alias
+      const model = persistedModel(c.alias, get(paneId).state.defaultModel)
       await invoke('claude_save_defaults', { model, modelId, effort: c.effort }).catch((e: unknown) =>
         addError(paneId, `Модель не сохранена по умолчанию: ${errText(e)}`),
       )

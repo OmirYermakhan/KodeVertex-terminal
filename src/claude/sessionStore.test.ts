@@ -199,3 +199,49 @@ describe('один вопрос', () => {
     expect(calls('claude_respond')[0][1]).toEqual({ id: 'p1', requestId: 'r', response: { behavior: 'allow', updatedInput: { ...input, answers: { 'Да?': 'Да' } } } })
   })
 })
+
+describe('выход claude при ждущем вопросе', () => {
+  it('вопрос отменяется, агент — ошибка', async () => {
+    stopClaude('x')
+    invoke.mockReset()
+    let ch: { onLine: { onmessage(m: string): void }; onExit: { onmessage(e: unknown): void } } | null = null
+    invoke.mockImplementation((cmd: string, a: Record<string, unknown>) => {
+      if (cmd === 'claude_start') ch = a as unknown as typeof ch
+      return Promise.resolve(cmd === 'claude_start' ? 'px' : undefined)
+    })
+    await askClaude('x', '/w', 'спроси меня')
+    const input = { questions: [{ question: 'Да?', header: '', multiSelect: false, options: [{ label: 'Да', description: '' }] }] }
+    ch!.onLine.onmessage(JSON.stringify({ type: 'control_request', request_id: 'r', request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input } }))
+    const { pendingQuestion } = await import('./reducer')
+    expect(pendingQuestion(useClaudeSessions.getState().sessions.x.state)).not.toBeNull()
+    ch!.onExit.onmessage({ code: 1, stderr: 'boom' })
+    const st = useClaudeSessions.getState().sessions.x.state
+    expect(pendingQuestion(st)).toBeNull()
+    expect(st.items.find((i) => i.type === 'question')).toMatchObject({ cancelled: true, done: false })
+    expect(st.agents[0].status).toBe('error')
+  })
+})
+
+describe('по умолчанию с [1m]', () => {
+  it('Opus при opus[1m] в настройках пишется как opus[1m]', async () => {
+    stopClaude('d')
+    invoke.mockReset()
+    let onLine: { onmessage(m: string): void } | null = null
+    invoke.mockImplementation((cmd: string, a: Record<string, unknown>) => {
+      if (cmd === 'claude_start') onLine = a.onLine as typeof onLine
+      if (cmd === 'claude_control') {
+        const req = a.request as { subtype: string }
+        const body = req.subtype === 'get_settings' ? { effective: { model: 'opus[1m]' }, applied: { model: 'claude-opus-5-5[1m]', effort: 'medium' } } : { model: 'claude-opus-5-5[1m]' }
+        setTimeout(() => onLine?.onmessage(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: a.requestId, response: body } })))
+      }
+      return Promise.resolve(cmd === 'claude_start' ? 'pd' : undefined)
+    })
+    enterClaude('d', '/w')
+    await flush()
+    await flush()
+    await chooseModel('d', '/w', { alias: 'opus', effort: null, persist: true })
+    expect(calls('claude_save_defaults')[0][1]).toMatchObject({ model: 'opus[1m]' })
+    await chooseModel('d', '/w', { alias: 'fable', effort: null, persist: true })
+    expect(calls('claude_save_defaults')[1][1]).toMatchObject({ model: 'fable' })
+  })
+})

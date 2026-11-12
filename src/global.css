@@ -236,6 +236,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .card.cerr .who { color: var(--del); }
 /* Вопрос агента в ленте: пока ждёт — строка .cl-note, после ответа — свёрнутая карточка с полосой --warn. */
 .cl-note.q-wait { color: var(--warn); }
+.cl-note.q-cancel { color: var(--muted); }
 .card.qcard { border-left-color: var(--warn); }
 .card.qcard .who { color: var(--warn); }
 .qcard .q-ans { color: var(--text); }

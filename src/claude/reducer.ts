@@ -35,6 +35,8 @@ export type FeedClaudeItem =
       step: number
       answers: string[]
       done: boolean
+      /** Процесс claude завершился, не дождавшись ответа. */
+      cancelled?: boolean
     }
   /** Начало новой сессии Claude: каталог, в котором она работает. */
   | { type: 'session'; cwd: string; /** Вход в режим Claude из строки ввода (`claude`): с подсказкой. */ mode?: boolean }
@@ -399,7 +401,7 @@ function patchQuestion(
 ): ClaudeState {
   const i = s.items.findIndex((it) => it.type === 'question' && it.requestId === requestId)
   const q = s.items[i]
-  if (!q || q.type !== 'question' || q.done) return s
+  if (!q || q.type !== 'question' || q.done || q.cancelled) return s
   const next = f(q)
   if (!next) return s
   const items = s.items.slice()
@@ -435,8 +437,17 @@ export function finishQuestion(s: ClaudeState, requestId: string): ClaudeState {
 
 /** Первый ещё не отвеченный вопрос панели (для блока над строкой ввода). */
 export function pendingQuestion(s: ClaudeState): Extract<FeedClaudeItem, { type: 'question' }> | null {
-  for (const it of s.items) if (it.type === 'question' && !it.done) return it
+  for (const it of s.items) if (it.type === 'question' && !it.done && !it.cancelled) return it
   return null
+}
+
+/** Все ждущие вопросы — отменены (процесс claude завершился). */
+export function cancelQuestions(s: ClaudeState): ClaudeState {
+  if (!pendingQuestion(s)) return s
+  return {
+    ...s,
+    items: s.items.map((it) => (it.type === 'question' && !it.done && !it.cancelled ? { ...it, cancelled: true } : it)),
+  }
 }
 
 export function reduceClaude(s: ClaudeState, line: string | object, now: number): ClaudeState {

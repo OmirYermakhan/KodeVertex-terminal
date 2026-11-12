@@ -2,7 +2,7 @@ import { render } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type { Agent } from '../reducer'
 import { questionItem } from '../fixtures/questionItem'
-import { QuestionCard, WAIT_PREFIX } from './QuestionCard'
+import { CANCELLED, QuestionCard, WAIT_PREFIX } from './QuestionCard'
 
 const agent = { id: 'main', name: 'Главный', model: 'claude-opus-5-5' } as Agent
 
@@ -12,6 +12,12 @@ describe('QuestionCard (лента)', () => {
     const el = container.querySelector('[data-item-id="q1"]')!
     expect(el).toHaveClass('cl-note', 'q-wait')
     expect(el.textContent).toBe(WAIT_PREFIX + 'Какой цвет? · Что ещё?')
+  })
+
+  it('отменён — строка «✕ Вопрос отменён»', () => {
+    const { container } = render(<QuestionCard item={questionItem({ cancelled: true })} />)
+    expect(container.textContent).toBe(CANCELLED)
+    expect(CANCELLED).toBe('✕ Вопрос отменён — Claude завершился')
   })
 
   it('отвечен — свёрнутая карточка с ответами', () => {

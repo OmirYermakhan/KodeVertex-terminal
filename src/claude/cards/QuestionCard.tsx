@@ -7,9 +7,17 @@ import { agentSignature } from './AssistantCard'
 type QuestionItem = Extract<FeedClaudeItem, { type: 'question' }>
 
 export const WAIT_PREFIX = '? Ждёт ответа: '
+export const CANCELLED = '✕ Вопрос отменён — Claude завершился'
 
 export const QuestionCard = memo(function QuestionCard({ item, agent, id }: { item: QuestionItem; agent?: Agent; id?: string }) {
   const total = item.questions.length
+  if (item.cancelled && !item.done) {
+    return (
+      <div className="cl-note q-cancel" data-item-id={id}>
+        {CANCELLED}
+      </div>
+    )
+  }
   if (!item.done) {
     return (
       <div className="cl-note q-wait" data-item-id={id}>

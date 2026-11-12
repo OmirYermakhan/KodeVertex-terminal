@@ -36,6 +36,16 @@ export const setModelRequest = (alias: string) => ({ subtype: 'set_model', model
 export const effortRequest = (effort: string) => ({ subtype: 'apply_flag_settings', settings: { effortLevel: effort } })
 export const GET_SETTINGS = { subtype: 'get_settings' }
 
+/**
+ * Что записать в `model` настроек: псевдоним; суффикс контекста (`[1m]`) из прежнего значения
+ * сохраняется, если семейство то же. Default — null (ключ удаляется).
+ */
+export function persistedModel(alias: string, current: string | null | undefined): string | null {
+  if (alias === 'default') return null
+  const suffix = /\[[^\]]*\]$/.exec(current ?? '')?.[0]
+  return suffix && aliasOf(current) === alias ? alias + suffix : alias
+}
+
 /** Заметка в ленте после выбора: «Модель: Fable 5.2 · усилие high». */
 export function modelNote(model: string, effort: string | null): string {
   const m = `Модель: ${modelLabel(model)}`

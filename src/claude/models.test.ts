@@ -5,6 +5,7 @@ import {
   aliasOf,
   effortRequest,
   initialPicker,
+  persistedModel,
   modelNote,
   pickerKey,
   setModelRequest,
@@ -34,6 +35,16 @@ describe('модели', () => {
   it('заметка в ленте', () => {
     expect(modelNote('claude-fable-5-2', 'high')).toBe('Модель: Fable 5.2 · усилие high')
     expect(modelNote('claude-opus-5-5', null)).toBe('Модель: Opus 5.5')
+  })
+})
+
+describe('persistedModel', () => {
+  it('суффикс [1m] сохраняется только для того же семейства; Default — null', () => {
+    expect(persistedModel('opus', 'opus[1m]')).toBe('opus[1m]')
+    expect(persistedModel('opus', 'claude-opus-5-5[1m]')).toBe('opus[1m]')
+    expect(persistedModel('fable', 'opus[1m]')).toBe('fable')
+    expect(persistedModel('sonnet', null)).toBe('sonnet')
+    expect(persistedModel('default', 'opus[1m]')).toBeNull()
   })
 })
 
