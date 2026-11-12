@@ -1,7 +1,7 @@
 // Выбор через `@` в режиме Claude (макет 06, сцена Е): группы «Файлы» (подсказки путей),
 // «Блоки» (недавние блоки ленты по команде и выводу), «Сообщения» (ответы Claude по тексту).
 import type { FsEntryTS } from '../completion/useCompletion'
-import { blockText } from '../feed/blockHtml'
+import { blockTextOf } from '../feed/blockHtml'
 import type { ShellBlock } from '../feed/feed'
 import type { Agent } from '../claude/reducer'
 import { plainMessage } from './preview/format'
@@ -41,17 +41,42 @@ export interface AtFeed {
   messages: readonly AtMessage[]
 }
 
-const outputCache = new WeakMap<ShellBlock, string>()
-function outputOf(b: ShellBlock): string {
-  let s = outputCache.get(b)
-  if (s === undefined) {
-    s = b.html ? blockText(b.html) : ''
-    outputCache.set(b, s)
-  }
-  return s
+/** Вывода блока ищем не больше (хвост): огромный вывод не тормозит набор. */
+export const SEARCH_MAX = 64 * 1024
+
+interface Indexed {
+  text: string
+  lower: string
 }
 
 const fold = (s: string) => s.toLowerCase()
+const index = (text: string): Indexed => ({ text, lower: fold(text) })
+
+/** Индекс вывода блока: замороженный блок не меняется — кэш по объекту (новая лента — новые объекты). */
+const blockIndex = new WeakMap<ShellBlock, Indexed>()
+function outputOf(b: ShellBlock): Indexed {
+  let x = blockIndex.get(b)
+  if (!x) {
+    const t = blockTextOf(b)
+    x = index(t.length > SEARCH_MAX ? t.slice(-SEARCH_MAX) : t)
+    blockIndex.set(b, x)
+  }
+  return x
+}
+
+/** Индекс сообщения: по id, пока текст тот же (законченный ответ не меняется). */
+const messageIndex = new Map<string, { src: string } & Indexed>()
+function messageOf(m: AtMessage): Indexed {
+  const hit = messageIndex.get(m.id)
+  if (hit && hit.src === m.text) return hit
+  const x = { src: m.text, ...index(plainMessage(m.text).replace(/\s+/g, ' ')) }
+  messageIndex.set(m.id, x)
+  if (messageIndex.size > 500) messageIndex.delete(messageIndex.keys().next().value!)
+  return x
+}
+
+/** Для проверки кэша в тестах. */
+export const searchIndexSize = () => messageIndex.size
 
 /** Слово вокруг совпадения (для «npm test · form.test.tsx»). */
 function wordAround(text: string, at: number, len: number): { word: string; mark: Mark } {
@@ -69,9 +94,9 @@ function matchBlock(b: ShellBlock, q: string): Extract<AtRow, { group: 'blocks' 
   const ci = fold(cmd).indexOf(q)
   if (ci >= 0) return { group: 'blocks', key, block: b, detail: null, cmdMark: [ci, ci + q.length], detailMark: null }
   const out = outputOf(b)
-  const oi = fold(out).indexOf(q)
+  const oi = out.lower.indexOf(q)
   if (oi < 0) return null
-  const w = wordAround(out, oi, q.length)
+  const w = wordAround(out.text, oi, q.length)
   return { group: 'blocks', key, block: b, detail: w.word, cmdMark: null, detailMark: w.mark }
 }
 
@@ -81,10 +106,10 @@ function clip(s: string, max: number): string {
 }
 
 function matchMessage(m: AtMessage, q: string): Extract<AtRow, { group: 'messages' }> | null {
-  const plain = plainMessage(m.text).replace(/\s+/g, ' ')
+  const { text: plain, lower } = messageOf(m)
   const key = `m:${m.id}`
   if (q === '') return { group: 'messages', key, id: m.id, text: m.text, agent: m.agent, snippet: clip(plain, SNIPPET_MAX), mark: null }
-  const i = fold(plain).indexOf(q)
+  const i = lower.indexOf(q)
   if (i < 0) return null
   // Отрывок — с начала слова, в котором совпадение.
   let a = i

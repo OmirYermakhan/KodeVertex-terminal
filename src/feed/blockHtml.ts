@@ -16,6 +16,21 @@ export function cleanSerializedHtml(raw: string): string {
   return serializedRows(raw).join('')
 }
 
+const textCache = new WeakMap<object, string>()
+
+/**
+ * Текст замороженного блока (объект блока не меняется — кэш по нему): разбор HTML один раз
+ * на блок для ⌘L, перетаскивания и поиска `@`.
+ */
+export function blockTextOf(b: { html: string | null }): string {
+  let s = textCache.get(b)
+  if (s === undefined) {
+    s = b.html ? blockText(b.html) : ''
+    textCache.set(b, s)
+  }
+  return s
+}
+
 /** Текст блока для копирования: строки без хвостовых пробелов. */
 export function blockText(html: string): string {
   const tpl = document.createElement('template')

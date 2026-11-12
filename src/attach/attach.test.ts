@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { backspace, countTokens, docOf, forwardDelete, insertText, insertTokens, moveCaret, readable, sanitizeText, segments, splice, tokenPos } from './doc'
-import { classify, pathAttachment, REASON_IMAGE_BIG, REASON_MEDIA, REASON_MISSING, REASON_PDF_BIG } from './classify'
+import { classify, effective, overBudget, pathAttachment, REASON_FILE_BIG, REASON_IMAGE_BIG, REASON_MEDIA, REASON_MESSAGE_BIG, REASON_MISSING, REASON_PDF_BIG, sendBlocked } from './classify'
 import { BLOCK_MAX_LINES, MAX_IMAGES, atMention, relativize, serialize, tailOutput } from './serialize'
 import { TOKEN_CHAR as T, type Attachment, type Doc } from './types'
 
@@ -109,10 +109,13 @@ describe('тип вложения', () => {
     expect(classify(info('Makefile')).kind).toBe('file')
     for (const n of ['clip.mov', 'song.mp3', 'v.MP4', 'a.wav']) expect(classify(info(n))).toEqual({ kind: 'unsupported', reason: REASON_MEDIA })
   })
-  it('лимиты: картинка > 5 МБ после уменьшения, pdf > 32 МБ, нет файла', () => {
+  it('лимиты: картинка > 5 МБ после уменьшения, pdf > 20 МБ, нет файла', () => {
     expect(classify(info('big.png', { size: 50e6, preparedSize: 2e6 })).kind).toBe('image')
     expect(classify(info('big.png', { size: 50e6, preparedSize: 6e6 }))).toEqual({ kind: 'unsupported', reason: REASON_IMAGE_BIG })
-    expect(classify(info('big.pdf', { size: 33 * 1024 * 1024 }))).toEqual({ kind: 'unsupported', reason: REASON_PDF_BIG })
+    expect(classify(info('big.pdf', { size: 21 * 1024 * 1024 }))).toEqual({ kind: 'unsupported', reason: REASON_PDF_BIG })
+    expect(classify(info('ok.pdf', { size: 19 * 1024 * 1024 }))).toEqual({ kind: 'pdf' })
+    // Картинку больше 60 МБ Rust не читает — красная сразу.
+    expect(classify(info('huge.png', { size: 61 * 1024 * 1024 }))).toEqual({ kind: 'unsupported', reason: REASON_FILE_BIG })
     expect(classify(info('x.txt', { exists: false }))).toEqual({ kind: 'unsupported', reason: REASON_MISSING })
   })
   it('подпись значка: имя файла, у папки — со слэшем', () => {
@@ -178,5 +181,26 @@ describe('отправка: сериализация', () => {
     expect(s.text).toContain('cmd="echo &quot;a&quot; &amp; b" cwd="/w">')
     expect(s.text).not.toContain('exit=')
     expect(s.text.match(/<\/terminal_block>/g)).toHaveLength(1)
+  })
+})
+
+describe('лимит сообщения: вложения в base64 не больше 28 МБ', () => {
+  const MB = 1024 * 1024
+  const pdf = (id: string, mb: number) => ({ id, kind: 'pdf' as const, label: `${id}.pdf`, path: `/w/${id}.pdf`, size: mb * MB })
+  const img = (id: string, sendSize: number, size = sendSize) => ({ id, kind: 'image' as const, label: id, path: `/w/${id}.png`, size, sendSize })
+  it('значки, с которыми сообщение не помещается, — красные «сообщение слишком большое»; первые помещаются', () => {
+    // 15 МБ PDF → 20 МБ base64; второй такой же — уже 40.
+    const toks = [pdf('a', 15), { id: 'f', kind: 'file' as const, label: 'x.ts', path: '/w/x.ts' }, pdf('b', 15), img('c', 3 * MB)]
+    expect([...overBudget(toks)]).toEqual(['b'])
+    expect(effective(toks[2], overBudget(toks))).toMatchObject({ kind: 'unsupported', reason: REASON_MESSAGE_BIG })
+    expect(effective(toks[0], overBudget(toks))).toBe(toks[0])
+    expect(sendBlocked(toks)).toBe(true)
+    expect(sendBlocked([pdf('a', 15), img('c', 3 * MB)])).toBe(false)
+    // Картинка считается по размеру после подготовки, а не по исходному.
+    expect(overBudget([img('big', 2 * MB, 40 * MB), pdf('a', 15)]).size).toBe(0)
+  })
+  it('картинки сверх 20 уходят путём и в лимит не входят', () => {
+    const many = Array.from({ length: 25 }, (_, i) => img(`i${i}`, MB))
+    expect(overBudget(many).size).toBe(0)
   })
 })

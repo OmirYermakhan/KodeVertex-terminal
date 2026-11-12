@@ -1,5 +1,5 @@
 // Значки из ленты (⌘L, перетаскивание): снимок блока терминала или ответа Claude в момент вставки.
-import { blockText } from '../feed/blockHtml'
+import { blockTextOf } from '../feed/blockHtml'
 import type { FeedItem, ShellBlock } from '../feed/feed'
 import type { Agent } from '../claude/reducer'
 import { tailOutput } from './serialize'
@@ -24,7 +24,7 @@ export function blockAttachment(b: ShellBlock): Attachment {
       command: b.command,
       exitCode: b.exitCode,
       cwd: b.cwd,
-      output: b.html ? tailOutput(blockText(b.html)) : '',
+      output: b.html ? tailOutput(blockTextOf(b)) : '',
       durationMs: b.durationMs,
       at: b.startedAt,
     },

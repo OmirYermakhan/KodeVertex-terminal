@@ -20,7 +20,11 @@ use tauri::{AppHandle, Manager};
 pub const LONG_SIDE: u32 = 2000;
 /// Картинка (после уменьшения) — не больше.
 pub const IMAGE_MAX: u64 = 5 * 1024 * 1024;
-pub const PDF_MAX: u64 = 32 * 1024 * 1024;
+pub const PDF_MAX: u64 = 20 * 1024 * 1024;
+/// Картинку больше не читаем вовсе (ни для отправки, ни для размеров).
+pub const IMAGE_SOURCE_MAX: u64 = 60 * 1024 * 1024;
+/// Все картинки и PDF одного сообщения в base64 — не больше (лимит запроса API с запасом).
+pub const MESSAGE_MAX: u64 = 28 * 1024 * 1024;
 /// Миниатюра значка: 15px при 2× — 30px.
 const THUMB: u32 = 30;
 /// Больше — миниатюру не строим (декодирование огромного файла ради 30px не стоит того).
@@ -76,19 +80,29 @@ pub fn inspect(path: &str) -> PathInfo {
     height: None,
     thumb: None,
   };
-  if !info.exists || info.is_dir || !is_image(p) {
+  if !info.exists || info.is_dir || !is_image(p) || info.size > IMAGE_SOURCE_MAX {
     return info;
   }
   if let Ok((w, h)) = ImageReader::open(p).and_then(|r| r.with_guessed_format()).map_err(|_| ()).and_then(|r| r.into_dimensions().map_err(|_| ())) {
     info.width = Some(w);
     info.height = Some(h);
-    let needs = w.max(h) > LONG_SIDE || info.size > IMAGE_MAX;
-    info.prepared_size = if needs { prepare_image(p).ok().map(|(b, _)| b.len() as u64) } else { Some(info.size) };
+    info.prepared_size = Some(estimate_prepared(w, h, info.size));
   }
   if info.size <= THUMB_SOURCE_MAX {
     info.thumb = thumbnail(p);
   }
   info
+}
+
+/// Оценка размера картинки после подготовки (без уменьшения и кодирования — их делает отправка).
+/// Длинная сторона > LONG_SIDE: вес уменьшается с площадью. Больше IMAGE_MAX: PNG уйдёт JPEG-ом —
+/// не больше ~1 байта на пиксель.
+pub fn estimate_prepared(w: u32, h: u32, size: u64) -> u64 {
+  let long = w.max(h).max(1);
+  let k = if long > LONG_SIDE { LONG_SIDE as f64 / long as f64 } else { 1.0 };
+  let (nw, nh) = ((w as f64 * k).round() as u64, (h as f64 * k).round() as u64);
+  let scaled = (size as f64 * k * k).round() as u64;
+  if scaled <= IMAGE_MAX { scaled } else { scaled.min(nw * nh) }
 }
 
 fn thumbnail(p: &Path) -> Option<String> {
@@ -123,6 +137,10 @@ fn encode(img: &DynamicImage, jpeg: bool) -> Result<Vec<u8>, String> {
 /// Байты картинки для Claude и её media type. Длинная сторона > LONG_SIDE — уменьшение (PNG
 /// остаётся PNG, если влезает в лимит, иначе JPEG); маленькая и лёгкая — как есть.
 pub fn prepare_image(p: &Path) -> Result<(Vec<u8>, &'static str), String> {
+  let len = fs::metadata(p).map_err(|e| format!("{}: {e}", p.display()))?.len();
+  if len > IMAGE_SOURCE_MAX {
+    return Err(format!("{}: слишком большой файл", p.display()));
+  }
   let bytes = fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
   let format = image::guess_format(&bytes).map_err(|_| format!("{}: не картинка", p.display()))?;
   let media = media_type(format).ok_or_else(|| format!("{}: формат картинки не поддерживается", p.display()))?;
@@ -151,7 +169,7 @@ pub fn image_block(p: &Path) -> Result<Value, String> {
 pub fn document_block(p: &Path) -> Result<Value, String> {
   let len = fs::metadata(p).map_err(|e| format!("{}: {e}", p.display()))?.len();
   if len > PDF_MAX {
-    return Err(format!("{}: PDF больше 32 МБ", p.display()));
+    return Err(format!("{}: PDF больше 20 МБ", p.display()));
   }
   let bytes = fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
   if !bytes.starts_with(b"%PDF") {
@@ -173,6 +191,7 @@ pub fn build_content(text: &str, files: &[SendFile]) -> Result<(Vec<Value>, Vec<
   let mut blocks = Vec::new();
   let mut skipped = Vec::new();
   let (mut images, mut docs) = (0, 0);
+  let mut total: u64 = 0;
   for f in files {
     let p = Path::new(&f.path);
     let (label, block) = match f.kind.as_str() {
@@ -186,6 +205,13 @@ pub fn build_content(text: &str, files: &[SendFile]) -> Result<(Vec<Value>, Vec<
       }
       k => return Err(format!("неизвестный тип вложения: {k}")),
     };
+    if let Ok(b) = &block {
+      total += b["source"]["data"].as_str().map_or(0, |d| d.len() as u64);
+      // Всё сообщение не уйдёт: отказ до записи в stdin.
+      if total > MESSAGE_MAX {
+        return Err("сообщение слишком большое: вложения больше 28 МБ".to_string());
+      }
+    }
     match block {
       Ok(b) => blocks.push(b),
       Err(e) => {
@@ -379,6 +405,38 @@ mod tests {
     assert_eq!(c[0]["text"], format!("a @\"{}\" b [Изображение 1]", gone.display()));
     assert_eq!(c[1]["type"], "image");
     assert_eq!(renumber("[Изображение 3] [x] [Документ 2] [Изображение 9]"), "[Изображение 1] [x] [Документ 1] [Изображение 2]");
+  }
+
+  #[test]
+  fn estimate_and_source_cap() {
+    // Маленькая — как есть; вдвое больше по длинной стороне — вчетверо легче; тяжёлая — JPEG.
+    assert_eq!(estimate_prepared(100, 50, 1000), 1000);
+    assert_eq!(estimate_prepared(4000, 2000, 8_000_000), 2_000_000);
+    assert_eq!(estimate_prepared(4000, 2000, 80_000_000), 2000 * 1000);
+    let d = tempfile::tempdir().unwrap();
+    let big = d.path().join("huge.png");
+    fs::File::create(&big).unwrap().set_len(IMAGE_SOURCE_MAX + 1).unwrap();
+    let e = prepare_image(&big).unwrap_err();
+    assert!(e.contains("слишком большой файл"), "{e}");
+    let i = inspect(&big.to_string_lossy());
+    assert!(i.width.is_none() && i.thumb.is_none() && i.prepared_size.is_none());
+  }
+
+  #[test]
+  fn message_total_is_capped() {
+    let d = tempfile::tempdir().unwrap();
+    // Три PDF по 9 МБ: в base64 по 12 МБ — третий выходит за 28 МБ, сообщение не собирается.
+    let mut files = Vec::new();
+    for i in 0..3 {
+      let p = d.path().join(format!("{i}.pdf"));
+      let mut bytes = b"%PDF-1.4 ".to_vec();
+      bytes.resize(9 * 1024 * 1024, b'a');
+      fs::write(&p, bytes).unwrap();
+      files.push(SendFile { kind: "pdf".into(), path: p.to_string_lossy().into() });
+    }
+    let e = build_content("[Документ 1] [Документ 2] [Документ 3]", &files).unwrap_err();
+    assert!(e.contains("слишком большое"), "{e}");
+    assert!(build_content("[Документ 1] [Документ 2]", &files[..2]).is_ok());
   }
 
   #[test]

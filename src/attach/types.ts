@@ -34,6 +34,8 @@ export interface Attachment {
   /** Строка в файле (`Form.tsx:42`). */
   line?: number
   size?: number
+  /** Картинка: оценка размера после подготовки к отправке (Rust), для лимита сообщения. */
+  sendSize?: number
   width?: number
   height?: number
   /** Миниатюра картинки (data: URL от Rust), 15px в значке. */

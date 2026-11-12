@@ -14,7 +14,7 @@ import { ModelPicker } from '../claude/ModelPicker'
 import { initialPicker, pickerKey, type ModelChoice, type PickerState } from '../claude/models'
 import { getHistory, historyStep, loadHistory, NAV_START, pushHistory, type HistoryNav } from './history'
 import { backspace, countTokens, docOf, forwardDelete, insertText, insertTokens, moveCaret, readable, splice, tokenAt, tokenPos, type Edit } from '../attach/doc'
-import { blocksSend, pathAttachment } from '../attach/classify'
+import { effective, overBudget, pathAttachment, sendBlocked } from '../attach/classify'
 import { attachPaths, pasteClipboardImage, pickFiles, screenshotLabel } from '../attach/api'
 import { CLIP_PATH } from '../attach/tokenView'
 import { EMPTY_DOC, type Attachment, type Doc } from '../attach/types'
@@ -259,7 +259,9 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     const el = edRef.current
     if (!el) return
     const keep = pendingCursor.current === null && document.activeElement === el ? getSelection(el) : null
-    renderDoc(el, docRef.current, selTok.current, !props.current.preview)
+    // Вложения сверх лимита сообщения — красными, с причиной (как неподдерживаемые).
+    const over = overBudget(docRef.current.tokens)
+    renderDoc(el, docRef.current, selTok.current, !props.current.preview, (t) => effective(t, over))
     const cursor = pendingCursor.current
     pendingCursor.current = null
     if (cursor !== null) {
@@ -302,7 +304,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     } else if (ask || claudeRef.current) {
       const d = docOf(text, tokens)
       // Красный значок (видео, аудио, больше лимита) не уйдёт: сообщение остаётся в строке.
-      if (d.tokens.some(blocksSend)) {
+      if (sendBlocked(d.tokens)) {
         showNote(UNSUPPORTED_NOTE)
         return
       }
@@ -641,7 +643,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       const tel = t ? el.querySelector<HTMLElement>(`[data-tk="${t.id}"]`) : null
       if (t && tel) {
         e.preventDefault()
-        pv.toggle(t, tel, 'input')
+        pv.toggle(effective(t, overBudget(docRef.current.tokens)), tel, 'input')
         return
       }
     }
@@ -953,7 +955,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               // Наведение на значок — мини-просмотр (с задержкой, см. usePreview).
               const tk = (e.target as HTMLElement).closest?.('[data-tk]') as HTMLElement | null
               const t = tk ? docRef.current.tokens.find((x) => x.id === tk.dataset.tk) : undefined
-              if (tk && t && !props.current.disabled) props.current.preview?.hover(t, tk, 'input')
+              if (tk && t && !props.current.disabled) props.current.preview?.hover(effective(t, overBudget(docRef.current.tokens)), tk, 'input')
             }}
             onMouseOut={(e) => {
               const tk = (e.target as HTMLElement).closest?.('[data-tk]') as HTMLElement | null

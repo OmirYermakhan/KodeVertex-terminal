@@ -6,7 +6,7 @@ const ids = ['kv', 'warm', 'cold', 'light', 'as'] as ThemeId[]
 describe('themes', () => {
   it('every theme has all tokens as hex colors', () => {
     const keys = Object.keys(THEMES.as.tokens)
-    expect(keys).toHaveLength(48)
+    expect(keys).toHaveLength(49)
     for (const id of ids) {
       expect(Object.keys(THEMES[id].tokens).sort()).toEqual([...keys].sort())
       for (const v of Object.values(THEMES[id].tokens)) expect(v).toMatch(/^#[0-9a-f]{6}$/i)

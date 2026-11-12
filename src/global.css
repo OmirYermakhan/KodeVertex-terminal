@@ -415,7 +415,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .pv-bubble .shot { height: 64px; }
 .pv-side .shot, .pv-side .pdfp { height: 100px; }
 .pv .shot img, .pv .pdfp img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
-.pv .pdfp { box-sizing: border-box; height: 150px; border-radius: 4px; background: #e9e7e1; overflow: hidden; position: relative; }
+.pv .pdfp { box-sizing: border-box; height: 150px; border-radius: 4px; background: var(--pvPaper); overflow: hidden; position: relative; }
 /* ↵ целиком: картинка поверх панели. */
 .pv-full { position: absolute; inset: 0; z-index: 40; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; box-sizing: border-box; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); cursor: zoom-out; }
 .pv-full img { max-width: 100%; max-height: calc(100% - 30px); object-fit: contain; border-radius: 6px; border: 1px solid var(--rule); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55); }

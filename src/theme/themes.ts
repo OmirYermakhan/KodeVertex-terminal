@@ -53,6 +53,8 @@ export interface ThemeTokens {
   pv: string
   pvLn: string
   hlTag: string
+  /** Подложка страницы PDF (бумага под отрисованной страницей). */
+  pvPaper: string
 }
 
 export interface Theme {
@@ -116,6 +118,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       pv: '#101215',
       pvLn: '#5a5f65',
       hlTag: '#c9a0ff',
+      pvPaper: '#e9e7e1',
     },
   },
   warm: {
@@ -171,6 +174,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       pv: '#1f1e1c',
       pvLn: '#66625a',
       hlTag: '#c9a0c9',
+      pvPaper: '#e9e7e1',
     },
   },
   cold: {
@@ -226,6 +230,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       pv: '#191e26',
       pvLn: '#5b6572',
       hlTag: '#b9a2f0',
+      pvPaper: '#e9e7e1',
     },
   },
   light: {
@@ -281,6 +286,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       pv: '#f2f1ec',
       pvLn: '#a1a4a7',
       hlTag: '#8a3ffc',
+      pvPaper: '#e9e7e1',
     },
   },
   as: {
@@ -336,6 +342,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       pv: '#232427',
       pvLn: '#4f535a',
       hlTag: '#c77dbb',
+      pvPaper: '#e9e7e1',
     },
   },
 }

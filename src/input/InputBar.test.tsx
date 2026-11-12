@@ -823,6 +823,16 @@ describe('InputBar: мини-просмотр значков и `@` с груп�
     expect(s.container.querySelector('.in-mode')).not.toBeNull()
   })
 
+  it('вложения больше лимита сообщения: лишний значок красный, ↵ не отправляет', () => {
+    const s = withPreview()
+    const MB = 1024 * 1024
+    act(() => void s.ref.current!.insertTokens([tok('a', { kind: 'pdf', label: 'a.pdf', size: 15 * MB }), tok('b', { kind: 'pdf', label: 'b.pdf', size: 15 * MB })]))
+    expect([...s.ed.querySelectorAll('.tk')].map((e) => e.className)).toEqual(['tk', 'tk err'])
+    s.key('Enter')
+    expect(s.p.onAsk).not.toHaveBeenCalled()
+    expect(s.container.querySelector('.in-note')!.textContent).toBe(UNSUPPORTED_NOTE)
+  })
+
   it('карточка, открытая наведением, клавиш не берёт: ↵ отправляет, ⌫ — как ⌫⌫ части A', async () => {
     const s = withPreview()
     s.set('глянь ')

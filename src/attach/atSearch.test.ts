@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { atRows, AT_FEED_MAX, type AtFeed } from './atSearch'
+import { atRows, AT_FEED_MAX, SEARCH_MAX, searchIndexSize, type AtFeed } from './atSearch'
+import { blockTextOf } from '../feed/blockHtml'
 import type { ShellBlock } from '../feed/feed'
 
 const blk = (id: string, command: string, out: string, exitCode: number | null = 0, running = false): ShellBlock => ({
@@ -59,5 +60,21 @@ describe('выбор `@`: группы', () => {
     expect(r.filter((x) => x.group === 'files')).toHaveLength(5)
     // Только файлы — все (прокрутка).
     expect(atRows('', '', files(...Array.from({ length: 20 }, (_, i) => `f${i}`)), null)).toHaveLength(20)
+  })
+})
+
+describe('выбор `@`: индекс поиска', () => {
+  it('текст блока разбирается один раз и ищется по хвосту не длиннее 64 КБ; индекс сообщений не растёт от набора', () => {
+    const head = 'needle ' + 'x'.repeat(SEARCH_MAX + 100) + ' tailword'
+    const b = blk('big', 'cat log', head)
+    const f: AtFeed = { blocks: [b], messages: feed.messages }
+    expect(blockTextOf(b)).toBe(blockTextOf(b))
+    expect(atRows('tailword', '', [], f).some((r) => r.group === 'blocks')).toBe(true)
+    // Совпадение только в начале огромного вывода — за пределами хвоста.
+    expect(atRows('needle', '', [], f).some((r) => r.group === 'blocks')).toBe(false)
+    atRows('fo', '', [], f)
+    const n = searchIndexSize()
+    for (const q of ['f', 'fo', 'for', 'form']) atRows(q, '', [], f)
+    expect(searchIndexSize()).toBe(n)
   })
 })
