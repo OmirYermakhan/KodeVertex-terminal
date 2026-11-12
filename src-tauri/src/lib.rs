@@ -6,6 +6,7 @@ mod history;
 mod pty;
 mod settings;
 mod shell;
+mod slash_commands;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, Wry};
@@ -67,7 +68,8 @@ pub fn run() {
       claude::claude_start,
       claude::claude_send,
       claude::claude_interrupt,
-      claude::claude_stop
+      claude::claude_stop,
+      slash_commands::claude_slash_commands
     ])
     .manage(pty::PtyManager::default())
     .manage(claude::ClaudeManager::default())

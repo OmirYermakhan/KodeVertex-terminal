@@ -179,6 +179,18 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .cp-muted { color: var(--muted); }
 .cp-err { color: var(--del); white-space: normal; }
 .cp-hint { box-sizing: border-box; padding: 0 10px; border-top: 1px solid var(--rule); color: var(--muted); font-family: inherit; font-size: 11px; white-space: nowrap; }
+/* Выборка `claude …` / `/…`: рамка .cp, строки и заголовки — как в панели агентов (.dh/.row.focus). */
+.cp.hp { left: 12px; bottom: calc(100% + 4px); width: max-content; max-width: calc(100% - 24px); }
+.hp-list { max-height: min(45vh, 320px); overflow-y: auto; padding-bottom: 4px; }
+.hp-h { padding: 8px 14px 3px; font-family: var(--font-code); font-size: 10.5px; line-height: normal; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.hp-row { display: grid; grid-template-columns: 1.4em var(--hp-name, 14ch) minmax(0, 1fr); column-gap: 14px; align-items: baseline; padding: 4px 16px 4px 12px; border-left: 2px solid transparent; cursor: pointer; white-space: nowrap; }
+.hp-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.hp-row.sel { background: color-mix(in srgb, var(--acc) 12%, var(--bg)); border-left-color: var(--acc); }
+.hp-g { color: var(--accText); text-align: center; }
+.hp-n { color: var(--strong); font-family: var(--font-code); font-size: 13px; }
+.hp-n b { color: var(--accText); font-weight: 700; }
+.hp-d { color: var(--muted); font-family: var(--font-text); font-size: 12.5px; max-width: 52ch; }
+.hp-keys { padding: 6px 14px; border-top: 1px solid var(--rule); font-family: var(--font-code); font-size: 10.5px; line-height: normal; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Панель: лента блоков (макет 04-main-window, .feed/.blk) */
 .pane { position: relative; display: flex; flex-direction: column; height: 100%; box-sizing: border-box; background: var(--bg); }

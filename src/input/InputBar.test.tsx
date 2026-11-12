@@ -273,4 +273,86 @@ describe('InputBar', () => {
       expect(invoke).not.toHaveBeenCalledWith('fs_list', expect.anything())
     })
   })
+
+  describe('выборка claude … и /…', () => {
+    const opts = (c: HTMLElement) => [...c.querySelectorAll('.hp-row .hp-n')].map((e) => e.textContent)
+
+    it('`claude` — сразу весь список; ↵ без выбора входит в режим', () => {
+      const { container, set, key, p } = setup({ hints: true })
+      set('claude')
+      expect(opts(container)[0]).toBe('claude')
+      expect(opts(container)).toContain('--tui')
+      key('Enter')
+      expect(p.onEnterClaude).toHaveBeenCalledWith(undefined)
+      expect(container.querySelector('.hp')).toBeNull()
+    })
+
+    it('↓↓ ↵ — `claude --tui` в оболочку (как claude)', () => {
+      const { set, key, p } = setup({ hints: true })
+      set('claude')
+      key('ArrowDown')
+      key('ArrowDown')
+      key('Enter')
+      expect(p.onRun).toHaveBeenCalledWith('claude')
+      expect(p.onEnterClaude).not.toHaveBeenCalled()
+    })
+
+    it('Tab подставляет аргумент; вопрос без совпадений — без попапа', () => {
+      const { container, ta, set, key } = setup({ hints: true })
+      set('claude doc')
+      expect(opts(container)).toEqual(['doctor'])
+      key('Tab')
+      expect(ta.value).toBe('claude doctor ')
+      expect(container.querySelector('.hp')).toBeNull()
+      set('claude привет')
+      expect(container.querySelector('.hp')).toBeNull()
+    })
+
+    it('выключена без hints и при незаконченной команде', () => {
+      const a = setup()
+      a.set('claude')
+      expect(a.container.querySelector('.hp')).toBeNull()
+      a.unmount()
+      const b = setup({ hints: true, continuation: true })
+      b.set('claude')
+      expect(b.container.querySelector('.hp')).toBeNull()
+    })
+
+    it('режим Claude: `/` — slash-команды из Rust; выбор ↵ отправляет', async () => {
+      invoke.mockImplementation((cmd: string) =>
+        Promise.resolve(cmd === 'claude_slash_commands' ? [{ name: 'ship', description: 'Выпуск', source: 'user' }] : []),
+      )
+      const { container, set, key, p } = setup({ hints: true })
+      set('claude')
+      key('Enter')
+      set('/')
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0))
+      })
+      expect(invoke).toHaveBeenCalledWith('claude_slash_commands', { cwd: '/w' })
+      expect([...container.querySelectorAll('.hp-h')].map((h) => h.textContent)).toEqual(['Встроенные', 'Личные'])
+      expect(opts(container).at(-1)).toBe('/ship')
+      set('/mod')
+      key('ArrowDown')
+      key('Enter')
+      expect(p.onAsk).toHaveBeenCalledWith('/model')
+    })
+
+    it('режим Claude: `/exi` ↓ ↵ — выход из режима', () => {
+      const { container, set, key, p } = setup({ hints: true })
+      set('claude')
+      key('Enter')
+      set('/exi')
+      key('ArrowDown')
+      key('Enter')
+      expect(p.onAsk).not.toHaveBeenCalled()
+      expect(container.querySelector('.in-mode')).toBeNull()
+    })
+
+    it('вне режима `/` попап не открывает', () => {
+      const { container, set } = setup({ hints: true })
+      set('/')
+      expect(container.querySelector('.hp')).toBeNull()
+    })
+  })
 })

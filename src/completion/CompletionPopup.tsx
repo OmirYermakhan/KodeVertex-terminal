@@ -24,7 +24,7 @@ export function matchPositions(query: string, name: string): Set<number> {
   return out
 }
 
-function highlight(query: string, name: string): ReactNode[] {
+export function highlight(query: string, name: string): ReactNode[] {
   const hit = matchPositions(query, name)
   const out: ReactNode[] = []
   let run = ''

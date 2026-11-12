@@ -4,6 +4,8 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { useCompletion } from '../completion/useCompletion'
 import { CompletionPopup, LIST_WIDTH, PREVIEW_WIDTH, popupHeight } from '../completion/CompletionPopup'
+import { useHints } from '../completion/useHints'
+import { HintsPopup } from '../completion/HintsPopup'
 import { isClaudeExit, parseClaudeCommand } from './claudeCommand'
 import { getHistory, historyStep, loadHistory, NAV_START, pushHistory, type HistoryNav } from './history'
 
@@ -25,6 +27,8 @@ export interface InputBarProps {
   disabled: boolean
   /** Подсказки путей разрешены (панель в фокусе, настройки закрыты, включены в настройках). */
   completions: boolean
+  /** Выборка `claude …` / `/…` разрешена (панель в фокусе, настройки закрыты). */
+  hints?: boolean
   cwd: () => string | undefined
   home: string | null
   /** Оболочка ждёт продолжения команды (PS2): над полем подсказка. */
@@ -115,6 +119,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     nav.current = NAV_START
     setLine('', 0)
     completionRef.current.reset()
+    hintsRef.current.reset()
   }, [setLine, setClaudeMode])
 
   const completion = useCompletion({
@@ -131,6 +136,24 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   useEffect(() => {
     completionRef.current = completion
   })
+
+  // Выборка `claude …` (оболочка) и `/…` (режим Claude): ↵ после ↑↓ — выполнить/отправить выбранное.
+  const hints = useHints({
+    mode: () => (claudeRef.current ? 'claude' : 'shell'),
+    cwd: () => props.current.cwd(),
+    replace: (v, cursor, run) => {
+      if (run) return submit(v, false)
+      setLine(v, cursor)
+      hintsRef.current.update(v, cursor)
+    },
+  })
+  const hintsRef = useRef(hints)
+  useEffect(() => {
+    hintsRef.current = hints
+  })
+  useEffect(() => {
+    if (!p.hints || p.disabled || p.continuation) hintsRef.current.close()
+  }, [p.hints, p.disabled, p.continuation])
 
   // Попап разрешён только в активной панели.
   useEffect(() => {
@@ -152,14 +175,17 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [value])
 
   const report = (ta: HTMLTextAreaElement) => {
-    if (!props.current.completions || claudeRef.current) return
-    completionRef.current.update(ta.value, ta.selectionStart ?? ta.value.length)
+    const cursor = ta.selectionStart ?? ta.value.length
+    const q = props.current
+    if (q.hints && !q.disabled && !q.continuation) hintsRef.current.update(ta.value, cursor)
+    if (!q.completions || claudeRef.current) return
+    completionRef.current.update(ta.value, cursor)
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const ta = e.currentTarget
     const ne = e.nativeEvent
-    if (completionRef.current.onKey(ne)) {
+    if (completionRef.current.onKey(ne) || hintsRef.current.onKey(ne)) {
       e.preventDefault()
       return
     }
@@ -174,6 +200,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     if (e.key === 'Escape' && claudeRef.current && v === '' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
       e.preventDefault()
       setClaudeMode(false)
+      hintsRef.current.reset()
       return
     }
     const mods = { meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey }
@@ -204,6 +231,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       nav.current = step.nav
       setLine(step.value, step.value.length)
       completionRef.current.update(step.value, step.value.length, false)
+      hintsRef.current.update(step.value, step.value.length, false)
       return
     }
     if (only('ctrl') && e.key.toLowerCase() === 'c') {
@@ -211,6 +239,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       if (props.current.onInterrupt(v === '', claudeRef.current)) return
       nav.current = NAV_START
       completionRef.current.close()
+      hintsRef.current.close()
       setLine('', 0)
       return
     }
@@ -256,6 +285,9 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           onPick={completion.pick}
         />
       )}
+      {hints.state.open && p.hints && !p.disabled && !p.continuation && (
+        <HintsPopup state={hints.state} onPick={hints.pick} />
+      )}
       {p.continuation && !p.disabled && <div className="in-note">{CONTINUATION_NOTE}</div>}
       <div className={'input' + (p.disabled ? ' off' : '')} onMouseDown={(e) => {
         // Клик по рамке/подсказке — фокус в поле.
@@ -293,6 +325,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             onBlur={() => {
               setFocused(false)
               completionRef.current.close()
+              hintsRef.current.close()
             }}
           />
           {empty && (

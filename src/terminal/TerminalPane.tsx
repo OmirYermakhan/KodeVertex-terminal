@@ -617,6 +617,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           disabled={running || alt || awaiting}
           continuation={cont}
           completions={p.focused && !settingsOpen && settings.pathCompletions}
+          hints={p.focused && !settingsOpen}
           cwd={() => cwdRef.current}
           home={home || null}
           onRun={onRun}
