@@ -2,6 +2,7 @@ mod claude;
 mod fonts;
 mod fs_complete;
 mod git;
+mod history;
 mod pty;
 mod settings;
 mod shell;
@@ -57,6 +58,7 @@ pub fn run() {
       fs_complete::fs_list,
       fs_complete::fs_preview,
       git::git_info,
+      history::shell_history,
       pty::pty_spawn,
       pty::pty_write,
       pty::pty_resize,
