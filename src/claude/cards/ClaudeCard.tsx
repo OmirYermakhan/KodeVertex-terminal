@@ -14,13 +14,26 @@ import { UserBubble } from './UserBubble'
  * Карточка Claude-элемента ленты; agent — агент для подписи (лента находит его по agentId).
  * Отдельный объект агента, а не весь список: обновление другого агента карточку не перерисовывает.
  */
-export const ClaudeCard = memo(function ClaudeCard({ item, agent, selected }: { item: ClaudeItem; agent?: Agent; selected?: boolean }) {
+export const ClaudeCard = memo(function ClaudeCard({
+  item,
+  agent,
+  selected,
+  onAttach,
+  onCopy,
+}: {
+  item: ClaudeItem
+  agent?: Agent
+  selected?: boolean
+  /** Ответ — значком в строку ввода / копировать (панелька над карточкой). */
+  onAttach?(id: string): void
+  onCopy?(id: string): void
+}) {
   const it = item.item
   switch (it.type) {
     case 'user':
       return <UserBubble id={item.id} text={it.text} tokens={it.tokens} />
     case 'assistant':
-      return <AssistantCard id={item.id} agent={agent} text={it.text} streaming={it.streaming} selected={selected} />
+      return <AssistantCard id={item.id} agent={agent} text={it.text} streaming={it.streaming} selected={selected} onAttach={onAttach} onCopy={onCopy} />
     case 'action':
       // Вопрос агента показывает своя карточка (question), действие «AskUserQuestion» не дублируем.
       if (it.tool === 'AskUserQuestion') return null

@@ -42,7 +42,7 @@ export function tokenPos(doc: Doc, id: string): number {
 
 /** Управляющие символы, кроме \t и \n, и заместитель значка — из вставляемого текста. */
 // eslint-disable-next-line no-control-regex
-const UNSAFE = /[\x00-\x08\x0b-\x1f\x7f-\x9f￼​]/g
+const UNSAFE = /[\x00-\x08\x0b-\x1f\x7f-\x9f\ufffc\u200b]/g
 
 export function sanitizeText(s: string): string {
   return s.replace(/\r\n?/g, '\n').replace(UNSAFE, '')

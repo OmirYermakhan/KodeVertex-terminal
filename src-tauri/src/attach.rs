@@ -160,19 +160,74 @@ pub fn document_block(p: &Path) -> Result<Value, String> {
   Ok(json!({ "type": "document", "source": { "type": "base64", "media_type": "application/pdf", "data": B64.encode(bytes) } }))
 }
 
+/// `@путь` для текста сообщения; путь с пробелами — в кавычках (как atMention на стороне TS).
+fn at_mention(path: &str) -> String {
+  if path.chars().any(|c| c.is_whitespace() || c == '"') { format!("@\"{}\"", path.replace('"', "\\\"")) } else { format!("@{path}") }
+}
+
 /// Содержимое сообщения: текст (с [Изображение N]/[Документ N] на местах значков), затем
-/// картинки и документы в том же порядке.
-pub fn build_content(text: &str, files: &[SendFile]) -> Result<Vec<Value>, String> {
-  let mut content = vec![json!({ "type": "text", "text": text })];
+/// картинки и документы в том же порядке. Файл, который не прочитать (пропал, повреждён),
+/// сообщение не роняет: его метка в тексте заменяется на `@путь`, а причина — во втором значении.
+pub fn build_content(text: &str, files: &[SendFile]) -> Result<(Vec<Value>, Vec<String>), String> {
+  let mut text = text.to_string();
+  let mut blocks = Vec::new();
+  let mut skipped = Vec::new();
+  let (mut images, mut docs) = (0, 0);
   for f in files {
     let p = Path::new(&f.path);
-    content.push(match f.kind.as_str() {
-      "image" => image_block(p)?,
-      "pdf" => document_block(p)?,
+    let (label, block) = match f.kind.as_str() {
+      "image" => {
+        images += 1;
+        (format!("[Изображение {images}]"), image_block(p))
+      }
+      "pdf" => {
+        docs += 1;
+        (format!("[Документ {docs}]"), document_block(p))
+      }
       k => return Err(format!("неизвестный тип вложения: {k}")),
-    });
+    };
+    match block {
+      Ok(b) => blocks.push(b),
+      Err(e) => {
+        text = text.replacen(&label, &at_mention(&f.path), 1);
+        skipped.push(e);
+      }
+    }
   }
-  Ok(content)
+  // Номера оставшихся меток должны совпадать с порядком блоков: пропавший файл сдвигает их.
+  let text = if skipped.is_empty() { text } else { renumber(&text) };
+  let mut content = vec![json!({ "type": "text", "text": text })];
+  content.extend(blocks);
+  Ok((content, skipped))
+}
+
+/// Перенумеровать [Изображение N] и [Документ N] подряд (после замены пропавших на `@путь`).
+fn renumber(text: &str) -> String {
+  let mut out = String::with_capacity(text.len());
+  let mut rest = text;
+  let (mut images, mut docs) = (0, 0);
+  while let Some(i) = rest.find('[') {
+    out.push_str(&rest[..i]);
+    let tail = &rest[i..];
+    let hit = ["[Изображение ", "[Документ "].iter().find_map(|pre| {
+      let num = tail.strip_prefix(pre)?;
+      let end = num.find(']')?;
+      num[..end].parse::<u32>().ok().map(|_| (*pre, pre.len() + end + 1))
+    });
+    match hit {
+      Some((pre, len)) => {
+        let n = if pre.starts_with("[И") { images += 1; images } else { docs += 1; docs };
+        out.push_str(&format!("{pre}{n}]"));
+        rest = &tail[len..];
+      }
+      None => {
+        out.push('[');
+        rest = &tail[1..];
+      }
+    }
+  }
+  out.push_str(rest);
+  out
 }
 
 /// PNG из RGBA-пикселей → `<dir>/<uuid>.png`.
@@ -298,7 +353,8 @@ mod tests {
       SendFile { kind: "image".into(), path: img.to_string_lossy().into() },
       SendFile { kind: "pdf".into(), path: pdf.to_string_lossy().into() },
     ];
-    let c = build_content("вот [Изображение 1] и [Документ 1]", &files).unwrap();
+    let (c, skipped) = build_content("вот [Изображение 1] и [Документ 1]", &files).unwrap();
+    assert!(skipped.is_empty());
     assert_eq!(c.len(), 3);
     assert_eq!(c[0], json!({ "type": "text", "text": "вот [Изображение 1] и [Документ 1]" }));
     assert_eq!(c[1]["type"], "image");
@@ -306,8 +362,23 @@ mod tests {
     assert_eq!(B64.decode(c[1]["source"]["data"].as_str().unwrap()).unwrap(), fs::read(&img).unwrap());
     assert_eq!(c[2]["source"]["media_type"], "application/pdf");
     assert_eq!(B64.decode(c[2]["source"]["data"].as_str().unwrap()).unwrap(), b"%PDF-1.4 test");
-    let missing = vec![SendFile { kind: "image".into(), path: d.path().join("x.png").to_string_lossy().into() }];
-    assert!(build_content("x", &missing).is_err());
+  }
+
+  #[test]
+  fn missing_file_becomes_path_and_rest_is_sent() {
+    let d = tempfile::tempdir().unwrap();
+    let ok = png(d.path(), "ok.png", 2, 2);
+    let gone = d.path().join("нет файла.png");
+    let files = vec![
+      SendFile { kind: "image".into(), path: gone.to_string_lossy().into() },
+      SendFile { kind: "image".into(), path: ok.to_string_lossy().into() },
+    ];
+    let (c, skipped) = build_content("a [Изображение 1] b [Изображение 2]", &files).unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(c.len(), 2);
+    assert_eq!(c[0]["text"], format!("a @\"{}\" b [Изображение 1]", gone.display()));
+    assert_eq!(c[1]["type"], "image");
+    assert_eq!(renumber("[Изображение 3] [x] [Документ 2] [Изображение 9]"), "[Изображение 1] [x] [Документ 1] [Изображение 2]");
   }
 
   #[test]

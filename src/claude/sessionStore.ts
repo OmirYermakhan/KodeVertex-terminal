@@ -4,7 +4,7 @@ import { Channel, invoke } from '@tauri-apps/api/core'
 import { create } from 'zustand'
 import { cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaude, questionSteps, recordAnswer, reduceClaude, userSent, type ClaudeState } from './reducer'
 import { allowResponse, alwaysResponse, answerResponse, denyResponse, parsePermissionRequest } from './questions'
-import type { PermissionDecision } from './reducer'
+import type { FeedClaudeItem, PermissionDecision } from './reducer'
 import { GET_SETTINGS, effortRequest, modelNote, persistedModel, setModelRequest, type ModelChoice } from './models'
 import { docOf } from '../attach/doc'
 import { serialize } from '../attach/serialize'
@@ -129,6 +129,8 @@ export function exitMessage(e: ClaudeExit): string {
 
 /** Процесс claude вышел сам с кодом 0 посреди хода (без ⌃C). */
 export const EXITED_MID_TURN = 'Claude завершился, не закончив ответ'
+/** Заметка в ленте: вложение не приложено (файл пропал), ушёл путь. */
+export const NOT_ATTACHED = 'Не приложено, Claude получил путь'
 /** ⌘↵ раньше, чем панель узнала свой каталог (OSC 7). */
 export const NO_CWD = 'Каталог панели ещё неизвестен — повторите через секунду'
 
@@ -441,7 +443,11 @@ export async function askClaude(paneId: string, paneCwd: string | undefined, tex
       return
     }
     try {
-      await invoke('claude_send', { id, text: out.text, ...(out.files.length > 0 ? { files: out.files } : {}) })
+      const skipped = await invoke<string[] | undefined>('claude_send', { id, text: out.text, ...(out.files.length > 0 ? { files: out.files } : {}) })
+      // Файл пропал между вставкой и отправкой: сообщение ушло с `@путь` вместо него — заметка.
+      if (Array.isArray(skipped) && skipped.length > 0) {
+        patchState(paneId, (s) => ({ ...s, items: [...s.items, ...skipped.map((r): FeedClaudeItem => ({ type: 'note', text: `${NOT_ATTACHED}: ${r}` }))] }))
+      }
     } catch (err) {
       patch(paneId, (p) => ({ ...p, state: failed(p.state, String(err), Date.now()), ...pause(p) }))
     }

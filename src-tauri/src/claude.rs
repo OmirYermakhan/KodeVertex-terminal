@@ -423,13 +423,15 @@ pub async fn claude_send(
   id: String,
   text: String,
   files: Option<Vec<crate::attach::SendFile>>,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
   // Чтение и base64 вложений, запись в пайп (может блокироваться, если claude не читает stdin) —
   // не в async-потоке.
   let m = manager.inner().clone();
   tauri::async_runtime::spawn_blocking(move || {
-    let content = crate::attach::build_content(&text, files.as_deref().unwrap_or(&[]))?;
-    m.send_content(&id, content)
+    let (content, skipped) = crate::attach::build_content(&text, files.as_deref().unwrap_or(&[]))?;
+    m.send_content(&id, content)?;
+    // Не приложенные файлы (пропали) — заметкой в ленте; сообщение ушло без них.
+    Ok(skipped)
   })
   .await
   .map_err(|e| e.to_string())?
@@ -547,7 +549,7 @@ mod tests {
     let img = d.path().join("s.png");
     image::RgbaImage::from_pixel(3, 3, image::Rgba([1, 2, 3, 255])).save(&img).unwrap();
     let files = vec![crate::attach::SendFile { kind: "image".into(), path: img.to_string_lossy().into() }];
-    let content = crate::attach::build_content("вот [Изображение 1]", &files).unwrap();
+    let (content, _) = crate::attach::build_content("вот [Изображение 1]", &files).unwrap();
     let m = ClaudeManager::default();
     let (id, lrx, _erx) = start(&m, &fake()).unwrap();
     take(&lrx, 38);

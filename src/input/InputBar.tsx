@@ -44,6 +44,11 @@ export interface InputBarProps {
   disabled: boolean
   /** Подсказки путей разрешены (панель в фокусе, настройки закрыты, включены в настройках). */
   completions: boolean
+  /**
+   * `@путь` в режиме Claude разрешён (панель в фокусе, настройки закрыты). Это способ вставки,
+   * а не подсказка оболочки: от настройки подсказок путей не зависит. Нет — как completions.
+   */
+  atFiles?: boolean
   /** Выборка `claude …` / `/…` разрешена (панель в фокусе, настройки закрыты). */
   hints?: boolean
   cwd: () => string | undefined
@@ -286,6 +291,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     (s: string) => {
       if (!s) return
       apply(insertText(docRef.current, selection(), s))
+      // Правка строки — выход из истории.
+      nav.current = NAV_START
       report()
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -373,12 +380,20 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [p.hints, p.disabled, p.continuation])
 
   // Попап разрешён только в активной панели.
+  const pathsOn = claudeMode ? (p.atFiles ?? p.completions) : p.completions
   useEffect(() => {
-    if (!p.completions || p.disabled) completionRef.current.close()
-  }, [p.completions, p.disabled])
+    if (!pathsOn || p.disabled) completionRef.current.close()
+  }, [pathsOn, p.disabled])
+
+  // Выключенная строка (идёт команда) не держит фокус — как выключенная textarea.
+  useEffect(() => {
+    if (p.disabled && edRef.current && document.activeElement === edRef.current) edRef.current.blur()
+  }, [p.disabled])
 
   useImperativeHandle(ref, () => ({
-    focus: () => edRef.current?.focus(),
+    focus: () => {
+      if (!props.current.disabled) edRef.current?.focus()
+    },
     hasFocus,
     isEmpty: () => docRef.current.text === '',
     pickerOpen: () => pickerRef.current !== null,
@@ -407,7 +422,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     const q = props.current
     if (q.answer) return
     if (q.hints && !q.disabled && !q.continuation) hintsRef.current.update(v, cursor)
-    if (!q.completions) return
+    if (!(claudeRef.current ? (q.atFiles ?? q.completions) : q.completions)) return
     completionRef.current.update(v, cursor)
   }
 
@@ -442,6 +457,12 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const el = e.currentTarget
     const ne = e.nativeEvent
+    // Выключенная строка (идёт команда) клавиш не обрабатывает — как выключенная textarea.
+    // ⌘-сочетания (копирование выделения) остаются браузеру; хоткеи приложения ловит окно раньше.
+    if (props.current.disabled) {
+      if (!e.metaKey) e.preventDefault()
+      return
+    }
     // Карточка выбора модели забирает клавиши (кроме сочетаний с модификаторами).
     const pk = pickerRef.current
     if (pk && !ne.isComposing && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -536,6 +557,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       e.preventDefault()
       if (only('shift')) {
         apply(insertText(d, sel, '\n'))
+        nav.current = NAV_START
+        report()
         return
       }
       if (only('meta')) {
@@ -660,7 +683,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const placeholder = p.answer ? ANSWER_PLACEHOLDER : claudeMode ? CLAUDE_PLACEHOLDER : PLACEHOLDER
   return (
     <div className="input-wrap" ref={wrapRef}>
-      {open && ctx && p.completions && !p.disabled && (
+      {open && ctx && pathsOn && !p.disabled && (
         <CompletionPopup
           state={completion.state}
           x={popupX}
@@ -686,7 +709,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         // Клик по рамке/подсказке — фокус в поле.
         if (!edRef.current?.contains(e.target as Node)) {
           e.preventDefault()
-          edRef.current?.focus()
+          if (!p.disabled) edRef.current?.focus()
         }
       }}>
         <button
@@ -739,6 +762,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               setDoc(docRef.current, pos + 1, id)
             }}
             onFocus={() => {
+              // Клик по выключенной строке фокус не берёт (как выключенная textarea).
+              if (props.current.disabled) {
+                edRef.current?.blur()
+                return
+              }
               setFocused(true)
               const el = edRef.current
               if (el && savedCursor.current !== null) {

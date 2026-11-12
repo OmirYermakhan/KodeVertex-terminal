@@ -185,12 +185,16 @@ describe('TerminalPane', () => {
     }
 
     it('↵ пишет команду в PTY и добавляет её в историю; ↑ её возвращает', async () => {
-      const { write } = await mounted()
+      const { write, term } = await mounted()
       type('ls -la')
       keyIn('Enter')
       expect(write).toHaveBeenCalledWith('\x1b[200~ls -la\x1b[201~\r')
       expect(inputText()).toBe('')
       expect(getHistory()).toEqual(['ls -la'])
+      // Пока оболочка не ответила, строка выключена: ↑ не работает.
+      keyIn('ArrowUp')
+      expect(inputText()).toBe('')
+      act(() => void oscHandlerOf(term)('A'))
       keyIn('ArrowUp')
       expect(inputText()).toBe('ls -la')
     })
@@ -1016,6 +1020,41 @@ describe('TerminalPane', () => {
       })
       // Пузырь «Вы» — со значком.
       expect(document.querySelector('.you .tk')!.textContent).toBe('npm test · 1')
+    })
+
+    it('перетаскивание: «⌘L в сообщение» в строку ввода — значок; заголовок с выделенным текстом не тащится', async () => {
+      const { term } = await mounted()
+      osc133(term, 'C;' + b64('npm test'))
+      term.lines = ['out1']
+      osc133(term, 'D;0')
+      const input = document.querySelector('.input')!
+      const orig = document.elementFromPoint
+      document.elementFromPoint = () => input
+      try {
+        const move = (x: number) => fireEvent.pointerMove(window, { clientX: x, clientY: 0 })
+        // Заголовок, но мышь выделяет текст: не перетаскивание.
+        const sel = window.getSelection()!
+        sel.selectAllChildren(document.querySelector('.blk .bh .cmd')!)
+        fireEvent.pointerDown(document.querySelector('.blk .bh .cmd')!, { button: 0, clientX: 0, clientY: 0 })
+        move(2)
+        move(20)
+        fireEvent.pointerUp(window, { clientX: 20, clientY: 0 })
+        expect(textarea().querySelector('.tk')).toBeNull()
+        expect(sel.isCollapsed).toBe(false)
+        sel.removeAllRanges()
+        // Чип «⌘L в сообщение»: сдвиг ≥ 4px — перетаскивание с призраком значка, отпустили над строкой.
+        fireEvent.pointerDown(document.querySelector('.blk .hover-act button.on')!, { button: 0, clientX: 0, clientY: 0 })
+        move(2)
+        expect(document.querySelector('.tk-ghost')).toBeNull()
+        move(10)
+        expect(document.querySelector('.tk-ghost')).not.toBeNull()
+        fireEvent.pointerUp(window, { clientX: 10, clientY: 0 })
+        expect(document.querySelector('.tk-ghost')).toBeNull()
+        expect(textarea().querySelector('.tk')!.textContent).toBe('npm test')
+        expect(document.querySelector('.input .in-mode')).not.toBeNull()
+      } finally {
+        document.elementFromPoint = orig
+      }
     })
 
     it('ответ Claude тоже выбирается ⌘↑ и вкладывается ⌘L сообщением', async () => {

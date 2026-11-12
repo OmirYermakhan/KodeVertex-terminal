@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
+const dialogOpen = vi.fn(() => Promise.resolve(null))
+vi.mock('@tauri-apps/plugin-dialog', () => ({ open: () => dialogOpen() }))
 
 const { InputBar, ASK_HINT, CLAUDE_HINT, CLAUDE_PLACEHOLDER, CONTINUATION_NOTE, PLACEHOLDER, UNSUPPORTED_NOTE } = await import('./InputBar')
 const { AT_HINT } = await import('../completion/CompletionPopup')
@@ -144,6 +146,35 @@ describe('InputBar', () => {
     const { ed } = setup({ disabled: true })
     expect(ed).toHaveAttribute('aria-disabled', 'true')
     expect(ed).not.toHaveAttribute('contenteditable', 'plaintext-only')
+  })
+
+  it('выключенная строка: фокус не берёт, клавиши ничего не делают (⌫, ⇧↵, ↑, ⌃D, ⌘O, ↵)', async () => {
+    pushHistory('ls')
+    const recall = vi.fn(() => 'из очереди')
+    const onEof = vi.fn()
+    const s = setup({ onEof, queue: { recall, sendNext: vi.fn(() => true), dismissHint: vi.fn(() => false) } })
+    s.set('abc')
+    s.rerender(<InputBar ref={s.ref} {...s.p} onEof={onEof} disabled />)
+    // Фокус, бывший в поле, уходит; программный фокус и клик его не возвращают.
+    expect(document.activeElement).not.toBe(s.ed)
+    act(() => s.ref.current!.focus())
+    expect(document.activeElement).not.toBe(s.ed)
+    act(() => s.ed.focus())
+    expect(document.activeElement).not.toBe(s.ed)
+    for (const [k, o] of [['Backspace', {}], ['Delete', {}], ['Enter', { shiftKey: true }], ['ArrowUp', {}], ['Enter', {}], ['Enter', { metaKey: true }]] as const) {
+      s.key(k, o)
+    }
+    expect(s.ta.value).toBe('abc')
+    expect(recall).not.toHaveBeenCalled()
+    expect(s.p.onRun).not.toHaveBeenCalled()
+    expect(s.p.onAsk).not.toHaveBeenCalled()
+    s.rerender(<InputBar ref={s.ref} {...s.p} onEof={onEof} disabled />)
+    s.ed.textContent = ''
+    s.key('d', { ctrlKey: true })
+    expect(onEof).not.toHaveBeenCalled()
+    s.key('o', { metaKey: true, code: 'KeyO' } as KeyboardEventInit)
+    expect(invoke).not.toHaveBeenCalledWith('plugin:dialog|open', expect.anything())
+    expect(dialogOpen).not.toHaveBeenCalled()
   })
 
   describe('команда claude и режим Claude', () => {
@@ -665,5 +696,47 @@ describe('InputBar: значки вложений', () => {
     })
     s.key('Enter')
     expect(s.p.onAsk).toHaveBeenCalledWith(`глянь ${T}`, [expect.objectContaining({ path: '/w/Form.tsx', kind: 'file' })])
+  })
+})
+
+describe('InputBar: правки после ревью', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    invoke.mockResolvedValue([])
+    resetHistory()
+  })
+
+  it('вставка во время листания истории — выход из истории: ↑ и ↓ возвращают вставленное', () => {
+    pushHistory('a')
+    pushHistory('b')
+    const s = setup()
+    s.key('ArrowUp')
+    expect(s.ta.value).toBe('b')
+    setSelection(s.ed, 1)
+    fireEvent.paste(s.ed, { clipboardData: { getData: () => 'X', types: ['text/plain'], items: [] } })
+    expect(s.ta.value).toBe('bX')
+    s.key('ArrowUp')
+    expect(s.ta.value).toBe('b')
+    s.key('ArrowDown')
+    expect(s.ta.value).toBe('bX')
+  })
+
+  it('`@путь` в режиме Claude работает и при выключенных подсказках путей', async () => {
+    invoke.mockImplementation((cmd: string) => Promise.resolve(cmd === 'fs_list' ? [{ name: 'Form.tsx', isDir: false, isSymlink: false }] : []))
+    const s = setup({ completions: false, atFiles: true })
+    s.set('cat Fo')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50))
+    })
+    // В оболочке подсказки выключены настройкой.
+    expect(invoke).not.toHaveBeenCalledWith('fs_list', expect.anything())
+    s.set('claude')
+    s.key('Enter')
+    s.set('@Fo')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50))
+    })
+    expect(invoke).toHaveBeenCalledWith('fs_list', expect.objectContaining({ dir: '/w' }))
+    expect(s.container.querySelector('.cp')).not.toBeNull()
   })
 })

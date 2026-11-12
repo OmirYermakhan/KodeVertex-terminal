@@ -2,7 +2,7 @@
 // на месте одного символа TOKEN_CHAR. Сообщение — Doc: текст с этими символами + значки по порядку.
 
 /** Символ-заместитель значка в тексте (U+FFFC OBJECT REPLACEMENT CHARACTER). */
-export const TOKEN_CHAR = '￼'
+export const TOKEN_CHAR = '\ufffc'
 
 export type AttachKind = 'image' | 'pdf' | 'file' | 'folder' | 'block' | 'message' | 'unsupported'
 

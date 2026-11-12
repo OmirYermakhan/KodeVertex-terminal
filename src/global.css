@@ -211,10 +211,11 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .blk { position: relative; box-sizing: border-box; border: 1px solid transparent; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-family: var(--font-code); font-size: var(--size-code); line-height: 1.7; max-width: 76ch; color: var(--text); }
 .blk .cmd { color: var(--strong); }
 .blk .p { color: var(--accText); }
-.blk .bh { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); user-select: none; -webkit-user-select: none; }
+.blk .bh { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
 /* Панелька над блоком (макет 06, сцена Г): при наведении и у выбранного. */
 .hover-act { position: absolute; right: 8px; top: -12px; z-index: 2; display: none; gap: 4px; font-family: var(--font-code); font-size: 11px; line-height: normal; }
-.blk:hover .hover-act, .blk.sel .hover-act { display: flex; }
+.blk:hover .hover-act, .blk.sel .hover-act, .card:hover > .hover-act, .card.sel > .hover-act { display: flex; }
+.hover-act button.on { cursor: grab; }
 .hover-act button { font: inherit; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 3px 8px; color: var(--text); cursor: pointer; }
 .hover-act button.on { border-color: var(--acc); color: var(--strong); background: color-mix(in srgb, var(--acc) 12%, var(--bg)); }
 .blk.sel { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 6%, transparent); }
@@ -235,8 +236,8 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .feed .who { font-family: var(--font-code); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 6px; line-height: normal; }
 .you { box-sizing: border-box; margin: 0 0 12px auto; max-width: 60%; background: var(--you); border-radius: 10px 10px 2px 10px; padding: 9px 14px; font-family: var(--font-text); font-size: calc(var(--size-text) - 1.5px); line-height: normal; color: var(--strong); white-space: pre-wrap; overflow-wrap: anywhere; }
 .you .who { color: color-mix(in srgb, var(--accText) 45%, var(--strong)); text-align: right; white-space: normal; }
-.card { box-sizing: border-box; background: var(--panel); border: 1px solid var(--rule); border-left: 2px solid var(--acc); border-radius: 8px; padding: 11px 14px; margin-bottom: 10px; max-width: 76ch; color: var(--text); font-family: var(--font-text); }
-.card .who { color: var(--accText); user-select: none; -webkit-user-select: none; }
+.card { position: relative; box-sizing: border-box; background: var(--panel); border: 1px solid var(--rule); border-left: 2px solid var(--acc); border-radius: 8px; padding: 11px 14px; margin-bottom: 10px; max-width: 76ch; color: var(--text); font-family: var(--font-text); }
+.card .who { color: var(--accText); }
 .card.sel { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 6%, var(--panel)); }
 .card.fable { border-left-color: #e8c46a; }
 .card.fable .who { color: #e8c46a; }

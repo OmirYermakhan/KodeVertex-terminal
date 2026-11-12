@@ -50,7 +50,7 @@ describe('скрины и @', () => {
   it('`@путь` у курсора: после пробела, значка или в начале; не внутри слова', () => {
     expect(atContext('см @src/Fo', 10)).toMatchObject({ command: '@', tokenStart: 3, token: '@src/Fo', dirPart: 'src/', namePart: 'Fo' })
     expect(atContext('@', 1)).toMatchObject({ tokenStart: 0, namePart: '' })
-    expect(atContext('￼@a', 3)).toMatchObject({ tokenStart: 1 })
+    expect(atContext('\ufffc@a', 3)).toMatchObject({ tokenStart: 1 })
     expect(atContext('mail@host', 9)).toBeNull()
     expect(atContext('@ab cd', 2)).toBeNull()
     expect(atContext('нет', 3)).toBeNull()

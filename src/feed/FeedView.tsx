@@ -48,7 +48,7 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
         ) : renderClaude ? (
           <Fragment key={it.id}>{renderClaude(it)}</Fragment>
         ) : (
-          <ClaudeCard key={it.id} item={it} agent={agentOf(agents, it)} selected={it.id === selectedId} />
+          <ClaudeCard key={it.id} item={it} agent={agentOf(agents, it)} selected={it.id === selectedId} onAttach={onAttach} onCopy={onCopy} />
         ),
       )}
       {park}

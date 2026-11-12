@@ -6,7 +6,7 @@ import { segments } from '../attach/doc'
 import { tokenElement } from '../attach/tokenView'
 import { TOKEN_CHAR, type Attachment, type Doc } from '../attach/types'
 
-export const ZWSP = '​'
+export const ZWSP = '\u200b'
 const isTk = (n: Node): n is HTMLElement => n.nodeType === 1 && !!(n as HTMLElement).dataset?.tk
 const isEndBr = (n: Node) => n.nodeName === 'BR' && !n.nextSibling && !!n.parentNode && n.parentNode.lastChild === n
 const visible = (s: string) => s.replaceAll(ZWSP, '')

@@ -42,6 +42,8 @@ const LIVE_MAX_SHARE = 0.6
 const LIVE_MIN_HEIGHT = 80
 /** «У низа» ленты: автопрокрутка продолжается. */
 const STICK_PX = 24
+/** Сдвиг указателя, после которого начинается перетаскивание блока или ответа в строку ввода. */
+const DRAG_MIN_PX = 4
 /** После ↵ строка ввода ждёт ответа оболочки (133;C или 133;A) не дольше этого. */
 const AWAIT_SHELL_MS = 2000
 
@@ -645,7 +647,11 @@ export function TerminalPane(p: TerminalPaneProps) {
   const [drag, setDrag] = useState<{ token: Attachment; x: number; y: number } | null>(null)
   const onPanePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return
-    const head = (e.target as Element).closest?.('.blk .bh, .card .who')
+    // Тащить можно за «⌘L в сообщение» или за заголовок (строка команды, подпись ответа);
+    // за заголовок — только если мышь не выделяет текст (выделение заголовка остаётся).
+    const target = e.target as Element
+    const chip = !!target.closest?.('.hover-act button.on')
+    const head = chip ? target : target.closest?.('.blk .bh, .card .who')
     const host = head?.closest<HTMLElement>('[data-block-id], [data-item-id]')
     const id = host?.dataset.blockId ?? host?.dataset.itemId
     if (!id) return
@@ -660,10 +666,12 @@ export function TerminalPane(p: TerminalPaneProps) {
     }
     const move = (ev: PointerEvent) => {
       if (!token) {
-        if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return
+        if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < DRAG_MIN_PX) return
+        if (!chip && !(window.getSelection()?.isCollapsed ?? true)) return stop()
         const agents = useClaudeSessions.getState().sessions[callbacks.current.paneId]?.state.agents
         token = feedAttachment(itemsRef.current.find((x) => x.id === id), agents)
         if (!token) return stop()
+        window.getSelection()?.removeAllRanges()
       }
       ev.preventDefault()
       const box = paneRef.current?.getBoundingClientRect()
@@ -870,6 +878,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           disabled={running || alt || awaiting}
           continuation={cont}
           completions={p.focused && !settingsOpen && settings.pathCompletions}
+          atFiles={p.focused && !settingsOpen}
           hints={p.focused && !settingsOpen}
           cwd={() => cwdRef.current}
           home={home || null}

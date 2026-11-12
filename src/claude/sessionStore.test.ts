@@ -434,7 +434,7 @@ describe('вложения: отправка и очередь', () => {
       return Promise.resolve(cmd === 'claude_start' ? 'pv' : undefined)
     })
   })
-  const T = '￼'
+  const T = '\ufffc'
   const img = { id: 'i1', kind: 'image' as const, label: 'скрин', path: '/data/attachments/1.png' }
   const file = { id: 'f1', kind: 'file' as const, label: 'Form.tsx', path: '/w/src/Form.tsx' }
   const result = () => ch!.onLine.onmessage(JSON.stringify({ type: 'result', subtype: 'success', result: 'ok', session_id: 's1' }))
@@ -445,6 +445,18 @@ describe('вложения: отправка и очередь', () => {
       ['claude_send', { id: 'pv', text: 'вот [Изображение 1], проверь @src/Form.tsx', files: [{ kind: 'image', path: '/data/attachments/1.png' }] }],
     ])
     expect(items('v').at(-1)).toEqual({ type: 'user', text: `вот ${T}, проверь ${T}`, tokens: [img, file] })
+  })
+
+  it('файл пропал к отправке: сообщение уходит, в ленте — тихая заметка', async () => {
+    invoke.mockImplementation((cmd: string, a: Record<string, unknown>) => {
+      if (cmd === 'claude_start') ch = a as unknown as typeof ch
+      if (cmd === 'claude_send') return Promise.resolve(['/data/attachments/1.png: No such file'])
+      return Promise.resolve(cmd === 'claude_start' ? 'pv' : undefined)
+    })
+    await askClaude('v', '/w', `вот ${T}`, [img])
+    expect(calls('claude_send')).toHaveLength(1)
+    expect(items('v').at(-1)).toEqual({ type: 'note', text: 'Не приложено, Claude получил путь: /data/attachments/1.png: No such file' })
+    expect(items('v').some((i) => i.type === 'error')).toBe(false)
   })
 
   it('в очереди значки едут с сообщением; ↑ возвращает текст со значками; уходят при отправке', async () => {

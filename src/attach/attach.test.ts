@@ -70,7 +70,7 @@ describe('модель строки со значками', () => {
     expect(r.doc.text).toBe(`ab${T}xy\nzc${T}`)
     expect(r.doc.tokens).toEqual(doc.tokens)
     expect(r.caret).toBe(3 + 'xy\nz'.length)
-    expect(sanitizeText('a\tb​')).toBe('a\tb')
+    expect(sanitizeText('a\tb\u200b')).toBe('a\tb')
   })
 
   it('splice и позиции значков', () => {
