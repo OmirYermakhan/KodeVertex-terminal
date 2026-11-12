@@ -1,11 +1,12 @@
 import { FitAddon } from '@xterm/addon-fit'
+import { SerializeAddon } from '@xterm/addon-serialize'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type ITerminalOptions } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { terminalLineHeight, type Settings } from '../settings/settings'
 import { useSettings } from '../settings/store'
 import { useUi } from '../ui/uiStore'
@@ -18,8 +19,18 @@ import { useCompletion } from '../completion/useCompletion'
 import { CompletionPopup, LIST_WIDTH, PREVIEW_WIDTH, popupHeight } from '../completion/CompletionPopup'
 import { useHome } from '../status/useGitInfo'
 import { spawnPty, type PtyHandle } from './ptyClient'
+import { applyShell, moveSelection, parseOsc133, type FeedItem, type ShellBlock } from '../feed/feed'
+import { blockText, cleanSerializedHtml } from '../feed/blockHtml'
+import { Feed } from '../feed/FeedView'
+import { LiveTerminal } from '../feed/LiveTerminal'
+import { registerPaneCommands, type BlockAction } from '../feed/paneCommands'
 
 const RESIZE_DEBOUNCE_MS = 50
+/** Живой терминал внутри блока — не выше этой доли ленты, дальше скролл внутри xterm. */
+const LIVE_MAX_SHARE = 0.6
+const LIVE_MIN_HEIGHT = 80
+/** «У низа» ленты: автопрокрутка продолжается. */
+const STICK_PX = 24
 
 export interface TerminalPaneProps {
   paneId: string
@@ -73,8 +84,55 @@ function popupPlacement(term: Terminal | null, host: HTMLElement | null, count: 
   return { x, y, previewFits }
 }
 
+/** Число строк вывода: индекс последней непустой строки активного буфера + 1. */
+function contentLines(term: Terminal): number {
+  const buf = term.buffer.active
+  for (let i = buf.length - 1; i >= 0; i--) {
+    if (buf.getLine(i)?.translateToString(true).trim()) return i + 1
+  }
+  return 0
+}
+
+/** Конец команды: вывод из буфера xterm → HTML блока (только из SerializeAddon). */
+function freeze(term: Terminal, ser: SerializeAddon): { html: string; lines: number } {
+  const lines = contentLines(term)
+  if (lines === 0) return { html: '', lines: 0 }
+  const raw = ser.serializeAsHTML({ includeGlobalBackground: false, range: { startLine: 0, endLine: lines - 1, startCol: 0 } })
+  return { html: cleanSerializedHtml(raw), lines }
+}
+
+/** Сколько строк экрана занято, пока команда идёт: по ним — высота живого блока. */
+function usedRows(term: Terminal): number {
+  const buf = term.buffer.active
+  if (buf.baseY > 0) return term.rows
+  let used = buf.cursorY + 1
+  for (let i = term.rows - 1; i >= used; i--) {
+    if (buf.getLine(i)?.translateToString(true).trim()) return i + 1
+  }
+  return used
+}
+
+function cellHeight(term: Terminal): number {
+  const screen = term.element?.querySelector<HTMLElement>('.xterm-screen')
+  if (screen && term.rows > 0 && screen.clientHeight > 0) return screen.clientHeight / term.rows
+  const s = useSettings.getState().settings
+  return s.codeSize * terminalLineHeight(s)
+}
+
+function liveContentHeight(term: Terminal): number {
+  return Math.ceil(usedRows(term) * cellHeight(term))
+}
+
 export function TerminalPane(p: TerminalPaneProps) {
-  const hostRef = useRef<HTMLDivElement>(null)
+  // Один xterm на панель; его host переносится между «парковкой», running-блоком и оверлеем.
+  const [host] = useState(() => {
+    const el = document.createElement('div')
+    el.className = 'live-host'
+    return el
+  })
+  const hostRef = useRef<HTMLElement>(host)
+  const parkRef = useRef<HTMLDivElement>(null)
+  const feedRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const callbacks = useRef(p)
@@ -100,10 +158,37 @@ export function TerminalPane(p: TerminalPaneProps) {
   const settings = useSettings((st) => st.settings)
   const settingsOpen = useUi((st) => st.settingsOpen)
 
+  const [items, setItems] = useState<FeedItem[]>([])
+  const itemsRef = useRef(items)
+  useEffect(() => {
+    itemsRef.current = items
+  })
+  const [selected, setSelected] = useState<string | null>(null)
+  const selectedRef = useRef(selected)
+  useEffect(() => {
+    selectedRef.current = selected
+  })
+  const [alt, setAlt] = useState(false)
+  const altRef = useRef(alt)
+  useEffect(() => {
+    altRef.current = alt
+  })
+  // Высота занятых строк живого терминала, px.
+  const [livePx, setLivePx] = useState(0)
+  const [feedHeight, setFeedHeight] = useState(0)
+  const hostHeight = Math.max(LIVE_MIN_HEIGHT, Math.floor(feedHeight * LIVE_MAX_SHARE))
+  const running = items.some((it) => it.kind === 'shell' && it.running)
+  const runningRef = useRef(running)
+  useEffect(() => {
+    runningRef.current = running
+  })
+
   // Create xterm + PTY once per pane.
   useEffect(() => {
-    const host = hostRef.current
-    if (!host) return
+    const park = parkRef.current
+    if (!park) return
+    host.style.height = `${Math.max(LIVE_MIN_HEIGHT, Math.floor((feedRef.current?.clientHeight ?? 0) * LIVE_MAX_SHARE))}px`
+    park.appendChild(host)
 
     const term = new Terminal({
       ...appearance(useSettings.getState().settings),
@@ -113,6 +198,8 @@ export function TerminalPane(p: TerminalPaneProps) {
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
+    const serializer = new SerializeAddon()
+    term.loadAddon(serializer)
     term.loadAddon(new Unicode11Addon())
     term.unicode.activeVersion = '11'
     term.loadAddon(
@@ -144,6 +231,29 @@ export function TerminalPane(p: TerminalPaneProps) {
         callbacks.current.onCwd(cwd)
       }
       return true
+    })
+
+    // Блоки: zsh сообщает начало (C) и конец (D) команды.
+    term.parser.registerOscHandler(133, (data) => {
+      const ev = parseOsc133(data)
+      if (!ev || ev.t === 'prompt') return true
+      const at = Date.now()
+      if (ev.t === 'start') {
+        // Стираем эхо набранной строки ZLE — в живом терминале только вывод команды.
+        term.reset()
+        setLivePx(liveContentHeight(term))
+        setItems((it) => applyShell(it, { t: 'start', command: ev.command, cwd: cwdRef.current ?? '', at }))
+      } else {
+        const { html, lines } = freeze(term, serializer)
+        setItems((it) => applyShell(it, { t: 'end', exitCode: ev.exitCode, at, html, lines }))
+      }
+      return true
+    })
+
+    // Полноэкранные программы (vim, htop, less) — xterm поверх всей панели.
+    term.buffer.onBufferChange((b) => setAlt(b.type === 'alternate'))
+    term.onWriteParsed(() => {
+      if (runningRef.current) setLivePx(liveContentHeight(term))
     })
 
     term.parser.registerOscHandler(6973, (data) => {
@@ -195,6 +305,9 @@ export function TerminalPane(p: TerminalPaneProps) {
     }
     term.onScroll(relayout)
     term.onResize(relayout)
+    term.onResize(() => {
+      if (runningRef.current) setLivePx(liveContentHeight(term))
+    })
 
     spawnPty({
       cwd: callbacks.current.initialCwd,
@@ -230,19 +343,24 @@ export function TerminalPane(p: TerminalPaneProps) {
       resizeTimer = setTimeout(() => fit.fit(), RESIZE_DEBOUNCE_MS)
     })
     ro.observe(host)
+    const feed = feedRef.current
+    const feedRo = new ResizeObserver(() => setFeedHeight(feed?.clientHeight ?? 0))
+    if (feed) feedRo.observe(feed)
 
     return () => {
       disposed = true
       clearTimeout(resizeTimer)
       ro.disconnect()
+      feedRo.disconnect()
       host.removeEventListener('paste', onPaste, true)
       if (!exited) handle?.kill()
       handleRef.current = null
       term.dispose()
+      host.remove()
       termRef.current = null
       fitRef.current = null
     }
-  }, [])
+  }, [host])
 
   // Theme / font changes apply to the live terminal.
   useEffect(() => {
@@ -275,32 +393,101 @@ export function TerminalPane(p: TerminalPaneProps) {
 
   // Позиция попапа считается по курсору xterm после того, как пришёл новый список.
   const [popup, setPopup] = useState<ReturnType<typeof popupPlacement>>(null)
-  const { open, items } = completion.state
+  const { open, items: compItems } = completion.state
   useLayoutEffect(() => {
-    const placement = open ? popupPlacement(termRef.current, hostRef.current, items.length) : null
+    const placement = open ? popupPlacement(termRef.current, hostRef.current, compItems.length) : null
     setPopup(placement)
     // Курсор вне видимой области: невидимый попап не должен съедать клавиши.
     if (open && !placement) completionRef.current.close()
-  }, [open, items, layoutTick])
+  }, [open, compItems, layoutTick])
+
+  // host перенесён в слот (блок/оверлей): размер, перерисовка, фокус.
+  const onAttach = useCallback(() => {
+    const term = termRef.current
+    if (!term) return
+    fitRef.current?.fit()
+    term.refresh(0, term.rows - 1)
+    if (callbacks.current.focused && !useUi.getState().settingsOpen) term.focus()
+  }, [])
+
+  // Автопрокрутка: лента следует за выводом, пока пользователь у низа.
+  const stickRef = useRef(true)
+  const onFeedScroll = useCallback(() => {
+    const f = feedRef.current
+    if (f) stickRef.current = f.scrollHeight - f.scrollTop - f.clientHeight < STICK_PX
+  }, [])
+  useLayoutEffect(() => {
+    const f = feedRef.current
+    if (f && stickRef.current) f.scrollTop = f.scrollHeight
+  }, [items, livePx])
+
+  // Выбранный блок держим в видимой области.
+  useEffect(() => {
+    if (!selected) return
+    const el = feedRef.current?.querySelector<HTMLElement>(`[data-block-id="${selected}"]`)
+    el?.scrollIntoView?.({ block: 'nearest' })
+  }, [selected])
+
+  useEffect(
+    () =>
+      registerPaneCommands(p.paneId, (a: BlockAction) => {
+        // Полноэкранная программа: лента скрыта, выбирать нечего.
+        if (altRef.current) return
+        if (a === 'blockCopy') {
+          const b = itemsRef.current.find((it): it is ShellBlock => it.kind === 'shell' && it.id === selectedRef.current)
+          if (b?.html) navigator.clipboard?.writeText(blockText(b.html)).catch(() => {})
+          return
+        }
+        const m = moveSelection(itemsRef.current, selectedRef.current, a === 'blockPrev' ? 'up' : 'down')
+        setSelected(m.id)
+        // m.leave: ⌘↓ с последнего блока — фокус в панель агентов (Task 8).
+      }),
+    [p.paneId],
+  )
+
+  const liveHeight = Math.min(hostHeight, livePx)
+  const renderLive = (_b: ShellBlock) =>
+    alt ? null : (
+      <LiveTerminal host={host} parkRef={parkRef} mode="block" hostHeight={hostHeight} height={liveHeight} onAttach={onAttach} />
+    )
 
   return (
     <div
+      className="pane"
       data-pane-id={p.paneId}
       onFocus={() => callbacks.current.onFocus()}
-      style={{ height: '100%', boxSizing: 'border-box', padding: '10px 12px', background: 'var(--bg)' }}
+      // Клик по ленте возвращает ввод в xterm (если не выделяли текст). До строки ввода (Task 7)
+      // это единственный способ печатать команды: в простое xterm невидим, но в фокусе.
+      onMouseUp={() => {
+        if (window.getSelection()?.isCollapsed ?? true) termRef.current?.focus()
+      }}
     >
-      <div style={{ position: 'relative', height: '100%', width: '100%' }}>
-        <div ref={hostRef} style={{ height: '100%', width: '100%' }} />
-        {popup && open && (
-          <CompletionPopup
-            state={completion.state}
-            x={popup.x}
-            y={popup.y}
-            previewFits={popup.previewFits}
-            onPick={completion.pick}
-          />
-        )}
-      </div>
+      <Feed
+        ref={feedRef}
+        items={items}
+        selectedId={selected}
+        renderLive={renderLive}
+        onScroll={onFeedScroll}
+        park={
+          // Пока xterm не показан, он стоит здесь: невидим, но сохраняет ширину текста блока (cols).
+          <div className="feed-park">
+            <div className="blk" ref={parkRef} />
+          </div>
+        }
+      />
+      {/* Task 7: строка ввода под лентой. */}
+      {alt && (
+        <LiveTerminal host={host} parkRef={parkRef} mode="overlay" hostHeight={hostHeight} height={0} onAttach={onAttach} />
+      )}
+      {popup && open && (
+        <CompletionPopup
+          state={completion.state}
+          x={popup.x}
+          y={popup.y}
+          previewFits={popup.previewFits}
+          onPick={completion.pick}
+        />
+      )}
     </div>
   )
 }

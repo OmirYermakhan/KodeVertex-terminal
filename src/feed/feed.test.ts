@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyShell, COLLAPSE_LINES, formatDuration, parseOsc133, type FeedItem, type ShellBlock } from './feed'
+import { applyShell, COLLAPSE_LINES, formatDuration, moveSelection, parseOsc133, type FeedItem, type ShellBlock } from './feed'
 
 const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
 
@@ -66,4 +66,22 @@ describe('formatDuration', () => {
   })
   it('граница минуты', () => expect(formatDuration(60000)).toBe('1м 00с'))
   it('константа', () => expect(COLLAPSE_LINES).toBe(2000))
+})
+
+describe('moveSelection', () => {
+  const blk = (id: string, running = false): ShellBlock => ({
+    kind: 'shell', id, command: id, cwd: '/w', startedAt: 0, durationMs: 1, exitCode: 0, html: '', lines: 0, running,
+  })
+  const items: FeedItem[] = [blk('a'), { kind: 'claude', id: 'c', item: { type: 'user', text: 'hi' } }, blk('b'), blk('r', true)]
+  it('⌘↑ без выбора — последний завершённый блок, дальше вверх до первого', () => {
+    expect(moveSelection(items, null, 'up')).toEqual({ id: 'b', leave: false })
+    expect(moveSelection(items, 'b', 'up')).toEqual({ id: 'a', leave: false })
+    expect(moveSelection(items, 'a', 'up')).toEqual({ id: 'a', leave: false })
+  })
+  it('⌘↓ вниз; с последнего — снять выбор и уйти из ленты', () => {
+    expect(moveSelection(items, 'a', 'down')).toEqual({ id: 'b', leave: false })
+    expect(moveSelection(items, 'b', 'down')).toEqual({ id: null, leave: true })
+    expect(moveSelection(items, null, 'down')).toEqual({ id: null, leave: true })
+  })
+  it('пустая лента', () => expect(moveSelection([], null, 'up')).toEqual({ id: null, leave: false }))
 })

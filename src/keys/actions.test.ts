@@ -43,3 +43,16 @@ describe('runAction', () => {
     expect(useUi.getState().settingsOpen).toBe(true)
   })
 })
+
+describe('block actions', () => {
+  it('уходят в фокусную панель', async () => {
+    const { registerPaneCommands } = await import('../feed/paneCommands')
+    const t = useTabs.getState().tabs[0]
+    const got: string[] = []
+    const off = registerPaneCommands(t.focused, (a) => got.push(a))
+    runAction('blockPrev'); runAction('blockNext'); runAction('blockCopy')
+    off()
+    runAction('blockPrev')
+    expect(got).toEqual(['blockPrev', 'blockNext', 'blockCopy'])
+  })
+})

@@ -101,3 +101,25 @@ export function formatDuration(ms: number): string {
   const s = total % 60
   return `${m}м ${String(s).padStart(2, '0')}с`
 }
+
+/** Сколько строк показывает свёрнутый длинный блок. */
+export const COLLAPSED_ROWS = 200
+
+export type SelectionMove = { id: string | null; leave: boolean }
+
+/**
+ * ⌘↑/⌘↓ по завершённым shell-блокам. Без выбора ⌘↑ берёт последний блок.
+ * ⌘↓ с последнего блока снимает выбор и сообщает leave — дальше фокус уходит из ленты
+ * (в панель агентов, Task 8).
+ */
+export function moveSelection(items: FeedItem[], selected: string | null, dir: 'up' | 'down'): SelectionMove {
+  const ids = items.filter((it): it is ShellBlock => it.kind === 'shell' && !it.running).map((b) => b.id)
+  const i = selected === null ? -1 : ids.indexOf(selected)
+  if (dir === 'up') {
+    if (ids.length === 0) return { id: null, leave: false }
+    return { id: i < 0 ? ids[ids.length - 1] : ids[Math.max(0, i - 1)], leave: false }
+  }
+  if (i < 0) return { id: null, leave: selected === null }
+  if (i === ids.length - 1) return { id: null, leave: true }
+  return { id: ids[i + 1], leave: false }
+}

@@ -49,3 +49,12 @@ describe('matchKey', () => {
     expect(matchKey(ev({ code: 'KeyD' }))).toBeNull()
   })
 })
+
+describe('block keys', () => {
+  it('⌘↑/⌘↓ выбор блока, ⌘⇧C копирование', () => {
+    expect(matchKey(ev({ code: 'ArrowUp', metaKey: true }))).toBe('blockPrev')
+    expect(matchKey(ev({ code: 'ArrowDown', metaKey: true }))).toBe('blockNext')
+    expect(matchKey(ev({ code: 'KeyC', key: 'с', metaKey: true, shiftKey: true }))).toBe('blockCopy')
+    expect(matchKey(ev({ code: 'KeyC', metaKey: true }))).toBeNull()
+  })
+})

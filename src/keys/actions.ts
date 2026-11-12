@@ -2,6 +2,7 @@ import { useTabs } from '../layout/tabsStore'
 import { DEFAULTS, stepSize } from '../settings/settings'
 import { useSettings } from '../settings/store'
 import { useUi } from '../ui/uiStore'
+import { runPaneCommand } from '../feed/paneCommands'
 import type { Action } from './keymap'
 
 export function runAction(a: Action): void {
@@ -34,6 +35,12 @@ export function runAction(a: Action): void {
     }
     case 'fontReset': return settings.update({ textSize: DEFAULTS.textSize, codeSize: DEFAULTS.codeSize })
     case 'openSettings': return useUi.getState().setSettingsOpen(true)
+    case 'blockPrev':
+    case 'blockNext':
+    case 'blockCopy': {
+      const t = tabs.tabs.find((x) => x.id === tabs.active)
+      return t && runPaneCommand(t.focused, a)
+    }
     default: {
       // tab1..tab9; ⌘9 — последняя вкладка
       const n = Number(a.slice(3))

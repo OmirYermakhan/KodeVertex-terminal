@@ -25,8 +25,29 @@ class FakeTerminal {
   onData = vi.fn()
   onResize = vi.fn()
   onScroll = vi.fn()
+  onWriteParsed = vi.fn()
   clearTextureAtlas = vi.fn()
-  buffer = { active: { cursorX: 5, cursorY: 3, baseY: 0, viewportY: 0 } }
+  reset = vi.fn()
+  refresh = vi.fn()
+  /** Строки активного буфера (для заморозки блока). */
+  lines: string[] = []
+  buffer = ((t: FakeTerminal) => ({
+    active: {
+      type: 'normal',
+      cursorX: 5,
+      cursorY: 3,
+      baseY: 0,
+      viewportY: 0,
+      get length() {
+        return t.lines.length
+      },
+      getLine: (i: number) => {
+        const l = t.lines[i]
+        return l === undefined ? undefined : { translateToString: () => l }
+      },
+    },
+    onBufferChange: vi.fn(),
+  }))(this)
   element: HTMLElement | undefined = undefined
   constructor(opts: Record<string, unknown>) {
     const history = this.fontHistory
@@ -58,6 +79,14 @@ vi.mock('@xterm/addon-fit', () => ({ FitAddon: FakeAddon }))
 vi.mock('@xterm/addon-unicode11', () => ({ Unicode11Addon: FakeAddon }))
 vi.mock('@xterm/addon-webgl', () => ({ WebglAddon: FakeAddon }))
 vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: FakeAddon }))
+const serializeAsHTML = vi.fn(
+  () => "<html><body><!--StartFragment--><pre><div style='color: #000000; background-color: #ffffff;'><div><span>out1</span></div><div><span>out2</span></div></div></pre><!--EndFragment--></body></html>",
+)
+vi.mock('@xterm/addon-serialize', () => ({
+  SerializeAddon: class extends FakeAddon {
+    serializeAsHTML = serializeAsHTML
+  },
+}))
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn() }))
 vi.mock('@tauri-apps/api/path', () => ({ homeDir: () => Promise.resolve('/h') }))
 const invoke = vi.fn()
@@ -89,6 +118,7 @@ const { useUi } = await import('../ui/uiStore')
 const { useSettings } = await import('../settings/store')
 const { DEFAULTS } = await import('../settings/settings')
 const { codeFontStack } = await import('../theme/fontFamily')
+const { runPaneCommand } = await import('../feed/paneCommands')
 
 const flush = (ms = 0) => new Promise((r) => setTimeout(r, ms))
 
@@ -329,5 +359,97 @@ describe('TerminalPane', () => {
     act(() => onScroll())
     expect(document.querySelector('.cp')).toBeNull()
     expect(keyHandler(term)(new KeyboardEvent('keydown', { key: 'Enter' }))).toBe(true)
+  })
+
+  describe('лента', () => {
+    const b64 = (x: string) => btoa(x)
+    async function mounted(focused = true) {
+      const r = render(<TerminalPane {...props()} focused={focused} initialCwd="/w" />)
+      spawns[0].resolve()
+      await flush()
+      return { ...r, term: terms[0] }
+    }
+    const osc133 = (term: FakeTerminal, data: string) => act(() => void oscHandler(term, 133)(data))
+    const bufferChange = (term: FakeTerminal, type: string) =>
+      act(() => (term.buffer.onBufferChange.mock.calls[0][0] as (b: { type: string }) => void)({ type }))
+    const host = () => document.querySelector('.live-host')!
+
+    it('без команды xterm стоит в невидимой парковке ленты', async () => {
+      await mounted()
+      expect(host().closest('.feed-park')).not.toBeNull()
+      expect(document.querySelector('.blk.run')).toBeNull()
+    })
+
+    it('start: reset и running-блок с живым терминалом; end: замороженный HTML без обёртки', async () => {
+      const { term } = await mounted()
+      osc133(term, 'C;' + b64('ls -la'))
+      expect(term.reset).toHaveBeenCalledTimes(1)
+      const blk = document.querySelector('.blk.run')!
+      expect(blk.querySelector('.cmd')!.textContent).toBe('ls -la')
+      expect(blk.querySelector('[data-testid="live-block"]')!.contains(host())).toBe(true)
+      expect(term.focus).toHaveBeenCalled()
+
+      term.lines = ['out1', 'out2', '', '']
+      osc133(term, 'D;0')
+      expect(serializeAsHTML).toHaveBeenLastCalledWith({
+        includeGlobalBackground: false,
+        range: { startLine: 0, endLine: 1, startCol: 0 },
+      })
+      expect(document.querySelector('.blk.run')).toBeNull()
+      const out = document.querySelector('.blk .out')!
+      expect(out.innerHTML).toBe('<div><span>out1</span></div><div><span>out2</span></div>')
+      expect(host().closest('.feed-park')).not.toBeNull()
+    })
+
+    it('ненулевой код выхода — блок .err и «exit N»', async () => {
+      const { term } = await mounted()
+      osc133(term, 'C;' + b64('false'))
+      osc133(term, 'D;1')
+      const blk = document.querySelector('.blk')!
+      expect(blk).toHaveClass('err')
+      expect(blk.querySelector('.exit')!.textContent).toBe('exit 1')
+    })
+
+    it('alt screen: xterm поверх панели с фокусом, после выхода — обратно в блок', async () => {
+      const { term } = await mounted()
+      osc133(term, 'C;' + b64('vim'))
+      term.focus.mockClear()
+      bufferChange(term, 'alternate')
+      const overlay = document.querySelector('[data-testid="live-overlay"]')!
+      expect(overlay.contains(host())).toBe(true)
+      expect(document.querySelector('[data-testid="live-block"]')).toBeNull()
+      expect(term.focus).toHaveBeenCalled()
+      bufferChange(term, 'normal')
+      expect(document.querySelector('[data-testid="live-overlay"]')).toBeNull()
+      expect(document.querySelector('[data-testid="live-block"]')!.contains(host())).toBe(true)
+    })
+
+    it('⌘↑/⌘↓ выбирают блок, ⌘⇧C копирует его вывод текстом', async () => {
+      const writeText = vi.fn(() => Promise.resolve())
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+      const { term } = await mounted()
+      for (const c of ['a', 'b']) {
+        osc133(term, 'C;' + b64(c))
+        term.lines = ['out1', 'out2']
+        osc133(term, 'D;0')
+      }
+      const blocks = () => Array.from(document.querySelectorAll('.blk:not(.feed-park .blk)'))
+      act(() => runPaneCommand('p', 'blockPrev'))
+      expect(blocks().map((b) => b.classList.contains('sel'))).toEqual([false, true])
+      act(() => runPaneCommand('p', 'blockPrev'))
+      expect(blocks().map((b) => b.classList.contains('sel'))).toEqual([true, false])
+      act(() => runPaneCommand('p', 'blockCopy'))
+      expect(writeText).toHaveBeenCalledWith('out1\nout2')
+      act(() => runPaneCommand('p', 'blockNext'))
+      act(() => runPaneCommand('p', 'blockNext'))
+      expect(document.querySelector('.blk.sel')).toBeNull()
+    })
+
+    it('хоткеи блоков не уходят в xterm', async () => {
+      const { term } = await mounted()
+      const k = (o: KeyboardEventInit) => keyHandler(term)(new KeyboardEvent('keydown', o))
+      expect(k({ code: 'ArrowUp', key: 'ArrowUp', metaKey: true })).toBe(false)
+      expect(k({ code: 'KeyC', key: 'C', metaKey: true, shiftKey: true })).toBe(false)
+    })
   })
 })

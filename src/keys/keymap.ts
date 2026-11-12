@@ -4,6 +4,7 @@ export type Action =
   | 'tab1' | 'tab2' | 'tab3' | 'tab4' | 'tab5' | 'tab6' | 'tab7' | 'tab8' | 'tab9'
   | 'prevTab' | 'nextTab'
   | 'fontBigger' | 'fontSmaller' | 'fontReset' | 'openSettings'
+  | 'blockPrev' | 'blockNext' | 'blockCopy'
 
 export interface Binding {
   action: Action
@@ -41,6 +42,9 @@ export const KEYMAP: Binding[] = [
   cmd('fontSmaller', 'NumpadSubtract'),
   cmd('fontReset', 'Digit0'),
   cmd('openSettings', 'Comma'),
+  cmd('blockPrev', 'ArrowUp'),
+  cmd('blockNext', 'ArrowDown'),
+  cmd('blockCopy', 'KeyC', { shift: true }),
 ]
 
 export function matchKey(

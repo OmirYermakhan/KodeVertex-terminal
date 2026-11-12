@@ -162,3 +162,24 @@ body {
 .cp-muted { color: var(--muted); }
 .cp-err { color: var(--del); white-space: normal; }
 .cp-hint { box-sizing: border-box; padding: 0 10px; border-top: 1px solid var(--rule); color: var(--muted); font-family: inherit; font-size: 11px; white-space: nowrap; }
+
+/* Панель: лента блоков (макет 04-main-window, .feed/.blk) */
+.pane { position: relative; display: flex; flex-direction: column; height: 100%; box-sizing: border-box; background: var(--bg); }
+.feed { flex: 1; min-height: 0; overflow: auto; padding: 16px 22px; position: relative; box-sizing: border-box; }
+.blk { box-sizing: border-box; border: 1px solid transparent; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-family: var(--font-code); font-size: 13px; line-height: 1.7; max-width: 76ch; color: var(--text); }
+.blk .cmd { color: var(--strong); }
+.blk .p { color: var(--accText); }
+.blk .bh { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+.blk.sel { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 6%, transparent); }
+.blk.err { border-left: 2px solid var(--del); padding-left: 11px; }
+.blk .exit { color: var(--del); }
+.blk .out { white-space: pre-wrap; overflow-wrap: anywhere; font-variant-ligatures: var(--liga); }
+.blk-more { font: inherit; font-size: 11px; color: var(--accText); background: transparent; border: 1px solid var(--rule); border-radius: 6px; padding: 2px 10px; margin-top: 6px; cursor: pointer; }
+.blk-more:hover { border-color: var(--acc); }
+/* Живой xterm: в running-блоке — по содержимому (высоту задаёт TerminalPane); при alt screen — поверх панели. */
+.live { overflow: hidden; }
+.live-host { width: 100%; }
+.live-overlay { position: absolute; inset: 0; z-index: 10; box-sizing: border-box; padding: 10px 12px; background: var(--bg); }
+/* «Парковка» xterm: невидима, но в потоке ленты и шириной с текст блока — FitAddon получает верные cols. */
+.feed-park { height: 0; overflow: hidden; opacity: 0; pointer-events: none; }
+.feed-park .blk { margin: 0; padding-top: 0; padding-bottom: 0; }
