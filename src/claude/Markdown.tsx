@@ -1,0 +1,93 @@
+// Режим чтения для ответов Claude: markdown (GFM) → React.
+// HTML из текста не исполняется: без rehype-raw react-markdown выводит его как обычный текст.
+import { openUrl } from '@tauri-apps/plugin-opener'
+import { memo, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import ReactMarkdown, { type Components } from 'react-markdown'
+import rehypeHighlight from 'rehype-highlight'
+import remarkGfm from 'remark-gfm'
+
+// Минимальные типы hast: сам пакет типов — транзитивная зависимость.
+type HNode = { type: string; tagName?: string; children?: HNode[]; properties?: Record<string, unknown>; value?: string }
+
+/** Блоки, внутрь которых спускается курсор стриминга, чтобы встать после последнего слова. */
+const DESCEND = new Set(['ul', 'ol', 'li', 'blockquote', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'pre'])
+
+function lastElement(n: HNode): HNode | undefined {
+  const kids = n.children ?? []
+  for (let i = kids.length - 1; i >= 0; i--) {
+    const k = kids[i]
+    if (k.type === 'element') return k
+    if (k.type === 'text' && k.value?.trim()) return undefined
+  }
+  return undefined
+}
+
+/** rehype-плагин: мигающий курсор в конце текста. */
+function rehypeCaret() {
+  return (tree: HNode) => {
+    let n: HNode = tree
+    for (;;) {
+      const last = lastElement(n)
+      if (!last) break
+      n = last
+      if (!DESCEND.has(last.tagName ?? '')) break
+    }
+    n.children = [...(n.children ?? []), { type: 'element', tagName: 'span', properties: { className: ['caret'] }, children: [] }]
+  }
+}
+
+const SAFE_URL = /^(https?:|mailto:)/i
+
+function onLinkClick(e: MouseEvent<HTMLAnchorElement>, href: string | undefined) {
+  // Ссылки не открываются внутри окна приложения — только в системном браузере.
+  e.preventDefault()
+  if (href && SAFE_URL.test(href)) openUrl(href).catch(() => {})
+}
+
+function CodeBlock({ children }: { children?: ReactNode }) {
+  const ref = useRef<HTMLPreElement>(null)
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const t = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(t)
+  }, [copied])
+  const copy = () => {
+    const text = (ref.current?.textContent ?? '').replace(/\n$/, '')
+    navigator.clipboard
+      ?.writeText(text)
+      .then(() => setCopied(true))
+      .catch(() => {})
+  }
+  return (
+    <div className="md-code">
+      <button type="button" className="md-copy" onClick={copy}>
+        {copied ? 'Скопировано' : 'Копировать'}
+      </button>
+      <pre ref={ref}>{children}</pre>
+    </div>
+  )
+}
+
+const components: Components = {
+  a: ({ href, children }) => (
+    <a href={href} onClick={(e) => onLinkClick(e, href)}>
+      {children}
+    </a>
+  ),
+  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+}
+
+const REMARK = [remarkGfm]
+const REHYPE = [rehypeHighlight]
+const REHYPE_STREAMING = [rehypeHighlight, rehypeCaret]
+
+export const Markdown = memo(function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
+  return (
+    <div className="md">
+      <ReactMarkdown remarkPlugins={REMARK} rehypePlugins={streaming ? REHYPE_STREAMING : REHYPE} components={components}>
+        {text}
+      </ReactMarkdown>
+    </div>
+  )
+})

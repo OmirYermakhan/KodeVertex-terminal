@@ -1,24 +1,20 @@
 // Файл не Feed.tsx: на регистронезависимой ФС macOS он конфликтует с feed.ts (модель ленты).
 import { forwardRef, Fragment, type ReactNode } from 'react'
+import { ClaudeCard } from '../claude/cards/ClaudeCard'
+import type { Agent } from '../claude/reducer'
 import type { ClaudeItem, FeedItem, ShellBlock } from './feed'
 import { ShellBlockView } from './ShellBlockView'
 
-/** Временный вид Claude-элемента; настоящие карточки — Task 6 (подменяется через renderClaude). */
-export function ClaudeItemView({ item }: { item: ClaudeItem }) {
-  const it = item.item
-  const text = 'text' in it ? it.text : it.type === 'action' ? it.title : ''
-  return (
-    <div className={`claude-item claude-${it.type}`} data-item-id={item.id}>
-      {text}
-    </div>
-  )
-}
+const NO_AGENTS: readonly Agent[] = []
 
 export interface FeedProps {
   items: FeedItem[]
   selectedId: string | null
   /** Живой терминал для running-блока (null — блок без терминала, например при alt screen). */
   renderLive: (block: ShellBlock) => ReactNode
+  /** Агенты сессии — для подписи «Имя · Модель» на карточках. */
+  agents?: readonly Agent[]
+  /** Вид Claude-элемента; по умолчанию — карточки ClaudeCard. */
   renderClaude?: (item: ClaudeItem) => ReactNode
   onScroll?: () => void
   /** Слот для xterm, пока он не показан (держит ширину блока, см. TerminalPane). */
@@ -26,7 +22,7 @@ export interface FeedProps {
 }
 
 export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
-  { items, selectedId, renderLive, renderClaude = (it) => <ClaudeItemView item={it} />, onScroll, park },
+  { items, selectedId, renderLive, agents = NO_AGENTS, renderClaude, onScroll, park },
   ref,
 ) {
   return (
@@ -39,8 +35,10 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
             selected={it.id === selectedId}
             live={it.running ? renderLive(it) : undefined}
           />
-        ) : (
+        ) : renderClaude ? (
           <Fragment key={it.id}>{renderClaude(it)}</Fragment>
+        ) : (
+          <ClaudeCard key={it.id} item={it} agents={agents} />
         ),
       )}
       {park}

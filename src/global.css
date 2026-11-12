@@ -183,3 +183,72 @@ body {
 /* «Парковка» xterm: невидима, но в потоке ленты и шириной с текст блока — FitAddon получает верные cols. */
 .feed-park { height: 0; overflow: hidden; opacity: 0; pointer-events: none; }
 .feed-park .blk { margin: 0; padding-top: 0; padding-bottom: 0; }
+
+/* Карточки Claude (макет 04 .you/.card/.act, макет 02 вариант B .sum/.diff) */
+.feed .who { font-family: var(--font-code); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 6px; line-height: normal; }
+.you { box-sizing: border-box; margin: 0 0 12px auto; max-width: 60%; background: var(--you); border-radius: 10px 10px 2px 10px; padding: 9px 14px; font-family: var(--font-text); font-size: calc(var(--size-text) - 1.5px); line-height: normal; color: var(--strong); white-space: pre-wrap; overflow-wrap: anywhere; }
+.you .who { color: color-mix(in srgb, var(--accText) 45%, var(--strong)); text-align: right; white-space: normal; }
+.card { box-sizing: border-box; background: var(--panel); border: 1px solid var(--rule); border-left: 2px solid var(--acc); border-radius: 8px; padding: 11px 14px; margin-bottom: 10px; max-width: 76ch; color: var(--text); font-family: var(--font-text); }
+.card .who { color: var(--accText); }
+.card.fable { border-left-color: #e8c46a; }
+.card.fable .who { color: #e8c46a; }
+.card.cerr { border-color: var(--del); }
+.card.cerr .who { color: var(--del); }
+.cerr-text { margin: 0; font-size: calc(var(--size-text) - 1.5px); line-height: var(--lh-text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.act { box-sizing: border-box; border: 1px dashed var(--rule); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-family: var(--font-code); font-size: calc(var(--size-code) - 0.5px); line-height: normal; color: var(--muted); max-width: 76ch; overflow-wrap: anywhere; }
+.act .who { color: var(--info); }
+.act b { color: var(--strong); font-weight: 500; }
+.act.run { border-left: 2px solid var(--acc); padding-left: 11px; }
+.act.fail .who { color: var(--del); }
+.act-now { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.spin { width: 10px; height: 10px; box-sizing: border-box; border: 1.5px solid var(--rule); border-top-color: var(--acc); border-radius: 50%; animation: kv-spin 0.8s linear infinite; flex: none; }
+@keyframes kv-spin { to { transform: rotate(360deg); } }
+.diff { font-family: var(--font-code); font-size: calc(var(--size-code) - 1px); line-height: 1.6; background: var(--bg); border-radius: 6px; padding: 8px 10px; margin-top: 6px; white-space: pre-wrap; }
+.diff .a { color: var(--add); }
+.diff .d { color: var(--del); }
+.diff .n { color: var(--com); }
+.diff-more { display: block; }
+.sum { box-sizing: border-box; background: var(--sumBg); border: 1px solid var(--sumRule); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; max-width: 76ch; color: var(--text); font-family: var(--font-text); }
+.sum .who { display: flex; justify-content: space-between; gap: 12px; color: var(--accText); }
+.sum .sum-meta { color: var(--muted); text-transform: none; letter-spacing: 0; }
+.sum.err { border-color: var(--del); }
+.sum.err .who > span:first-child { color: var(--del); }
+
+/* Режим чтения (макет 01, вариант B): markdown в карточках */
+.md { font-size: calc(var(--size-text) - 1.5px); line-height: var(--lh-text); color: var(--text); overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 10px; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 14px 0 8px; color: var(--strong); font-weight: 600; letter-spacing: -0.01em; line-height: 1.35; }
+.md h1 { font-size: 19px; }
+.md h2 { font-size: 17px; }
+.md h3 { font-size: 15.5px; }
+.md h4, .md h5, .md h6 { font-size: 1em; }
+.md ul, .md ol { margin: 0 0 10px; padding-left: 20px; }
+.md li::marker { color: var(--accText); font-family: var(--font-code); font-size: 0.9em; }
+.md li > p { margin: 0; }
+.md strong { color: var(--strong); font-weight: 600; }
+.md a { color: var(--accText); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.md blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 2px solid var(--rule); color: var(--muted); }
+.md hr { border: 0; border-top: 1px solid var(--rule); margin: 12px 0; }
+.md :not(pre) > code { font-family: var(--font-code); font-size: calc(var(--size-code) - 0.5px); background: var(--bg); color: var(--accText); padding: 1px 5px; border-radius: 4px; font-variant-ligatures: var(--liga); }
+.md table { border-collapse: collapse; margin: 0 0 10px; font-size: 0.93em; display: block; max-width: 100%; overflow-x: auto; }
+.md th, .md td { border: 1px solid var(--rule); padding: 4px 10px; text-align: left; vertical-align: top; }
+.md th { background: var(--panel2); color: var(--strong); font-weight: 600; }
+.md-code { position: relative; margin: 0 0 10px; }
+.md pre { margin: 0; padding: 12px 14px; background: var(--bg); border-radius: 6px; font-family: var(--font-code); font-size: var(--size-code); line-height: 1.6; color: var(--strong); overflow-x: auto; font-variant-ligatures: var(--liga); }
+.md pre code { font: inherit; background: none; padding: 0; color: inherit; }
+.md-copy { position: absolute; top: 6px; right: 6px; font-family: var(--font-text); font-size: 11px; color: var(--muted); background: var(--panel); border: 1px solid var(--rule); border-radius: 5px; padding: 1px 8px; cursor: pointer; opacity: 0; transition: opacity 0.12s; }
+.md-code:hover .md-copy, .md-copy:focus-visible { opacity: 1; }
+.md-copy:hover { color: var(--strong); border-color: var(--acc); }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-type, .hljs-meta .hljs-keyword { color: var(--kw); }
+.hljs-string, .hljs-regexp, .hljs-symbol, .hljs-char, .hljs-template-tag, .hljs-addition { color: var(--str); }
+.hljs-title, .hljs-function, .hljs-built_in, .hljs-attr, .hljs-attribute, .hljs-property, .hljs-selector-class, .hljs-selector-id { color: var(--fn); }
+.hljs-number, .hljs-variable.constant_ { color: var(--num); }
+.hljs-comment, .hljs-quote, .hljs-meta { color: var(--com); }
+.hljs-deletion { color: var(--del); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
+/* Мигающий курсор стриминга (макет 04, .input .caret). */
+@keyframes kv-pulse { 50% { opacity: 0.35; } }
+.md .caret { display: inline-block; width: 8px; height: 1em; margin-left: 2px; background: var(--accText); vertical-align: -0.15em; animation: kv-pulse 1s steps(1) infinite; }
