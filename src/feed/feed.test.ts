@@ -1,0 +1,69 @@
+import { describe, expect, it } from 'vitest'
+import { applyShell, COLLAPSE_LINES, formatDuration, parseOsc133, type FeedItem, type ShellBlock } from './feed'
+
+const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
+
+describe('parseOsc133', () => {
+  it('A -> prompt', () => expect(parseOsc133('A')).toEqual({ t: 'prompt' }))
+  it('C -> команда', () => expect(parseOsc133('C;ZWNobyBoaQ==')).toEqual({ t: 'start', command: 'echo hi' }))
+  it('C с кириллицей (UTF-8)', () =>
+    expect(parseOsc133('C;' + b64('echo привет'))).toEqual({ t: 'start', command: 'echo привет' }))
+  it('D -> код', () => expect(parseOsc133('D;127')).toEqual({ t: 'end', exitCode: 127 }))
+  it('мусор -> null', () => {
+    for (const s of ['', 'X', 'D;abc', 'D', 'C;!!!', 'C', 'A;1x']) expect(parseOsc133(s)).toBeNull()
+  })
+})
+
+const start = (command: string, at: number) => ({ t: 'start' as const, command, cwd: '/w', at })
+const end = (at: number, exitCode = 0) => ({ t: 'end' as const, exitCode, at, html: '<b>x</b>', lines: 3 })
+const sh = (items: FeedItem[], i: number) => items[i] as ShellBlock
+
+describe('applyShell', () => {
+  it('start добавляет running-блок', () => {
+    const r = applyShell([], start('ls', 100))
+    expect(r).toHaveLength(1)
+    expect(r[0]).toMatchObject({ kind: 'shell', command: 'ls', cwd: '/w', startedAt: 100, running: true, exitCode: null, durationMs: null, html: null })
+  })
+  it('end закрывает последний running', () => {
+    const r = applyShell(applyShell([], start('ls', 100)), end(350, 2))
+    expect(sh(r, 0)).toMatchObject({ running: false, exitCode: 2, durationMs: 250, html: '<b>x</b>', lines: 3 })
+  })
+  it('end без start игнорируется', () => {
+    const items: FeedItem[] = []
+    expect(applyShell(items, end(1))).toEqual([])
+    const done = applyShell(applyShell([], start('a', 0)), end(5))
+    expect(applyShell(done, end(9))).toEqual(done)
+  })
+  it('prompt ничего не меняет', () => {
+    const items = applyShell([], start('a', 0))
+    expect(applyShell(items, { t: 'prompt' })).toEqual(items)
+  })
+  it('start при running закрывает прежний с exitCode null', () => {
+    const r = applyShell(applyShell([], start('a', 100)), start('b', 400))
+    expect(r).toHaveLength(2)
+    expect(sh(r, 0)).toMatchObject({ running: false, exitCode: null, durationMs: 300 })
+    expect(sh(r, 1)).toMatchObject({ running: true, command: 'b' })
+    expect(r.filter((x) => x.kind === 'shell' && x.running)).toHaveLength(1)
+    expect(sh(r, 0).id).not.toBe(sh(r, 1).id)
+  })
+  it('не мутирует вход', () => {
+    const a = applyShell([], start('a', 0))
+    const snap = JSON.stringify(a)
+    applyShell(a, end(5))
+    expect(JSON.stringify(a)).toBe(snap)
+  })
+  it('end закрывает running после claude-элемента', () => {
+    const items: FeedItem[] = [...applyShell([], start('a', 0)), { kind: 'claude', id: 'c', item: { type: 'user', text: 'hi' } }]
+    expect(sh(applyShell(items, end(5)), 0).running).toBe(false)
+  })
+})
+
+describe('formatDuration', () => {
+  it('примеры', () => {
+    expect(formatDuration(80)).toBe('0.1 с')
+    expect(formatDuration(1500)).toBe('1.5 с')
+    expect(formatDuration(65000)).toBe('1м 05с')
+  })
+  it('граница минуты', () => expect(formatDuration(60000)).toBe('1м 00с'))
+  it('константа', () => expect(COLLAPSE_LINES).toBe(2000))
+})
