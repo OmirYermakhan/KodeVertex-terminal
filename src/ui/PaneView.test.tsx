@@ -53,6 +53,16 @@ describe('PaneView mounting', () => {
     expect(unmounts[second]).toBe(1)
   })
 
+  it('полоса фокуса только при нескольких панелях', () => {
+    const { getByTestId } = render(<Harness />)
+    const first = useTabs.getState().tabs[0].focused
+    expect(getByTestId(`pane-${first}`).style.borderTop).toBe('')
+    act(() => useTabs.getState().split('row'))
+    const second = useTabs.getState().tabs[0].focused
+    expect(getByTestId(`pane-${second}`).style.borderTop).toBe('2px solid var(--acc)')
+    expect(getByTestId(`pane-${first}`).style.borderTop).toBe('2px solid transparent')
+  })
+
   it('does not remount panes when switching tabs', () => {
     render(<Harness />)
     const first = useTabs.getState().tabs[0].focused

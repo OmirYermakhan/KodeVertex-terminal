@@ -159,7 +159,7 @@ describe('карточки', () => {
     const act = container.querySelector('.act')!
     expect(act.querySelector('.who')?.textContent).toBe('▶ Поиск · Haiku 5.5')
     expect(act.querySelector('b')?.textContent).toBe('onSubmit')
-    expect(act.textContent).toBe('▶ Поиск · Haiku 5.5Искал onSubmit · Form.tsx:42')
+    expect(act.textContent).toBe('▶ Поиск · Haiku 5.5Искал onSubmit — Form.tsx:42')
   })
 
   it('действие субагента без модели — только имя; правка файла — ✎', () => {

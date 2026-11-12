@@ -57,6 +57,7 @@ export default function PaneView({ tab, visible }: { tab: Tab; visible: boolean 
     window.addEventListener('pointercancel', up)
   }
 
+  const split = Object.keys(rects).length > 1
   return (
     <div
       ref={hostRef}
@@ -74,7 +75,8 @@ export default function PaneView({ tab, visible }: { tab: Tab; visible: boolean 
             width: pct(r.w),
             height: pct(r.h),
             boxSizing: 'border-box',
-            borderTop: `2px solid ${tab.focused === id ? 'var(--acc)' : 'transparent'}`,
+            // Полоса фокуса — только когда панелей несколько: у одиночной панели её нет (макет 04).
+            borderTop: split ? `2px solid ${tab.focused === id ? 'var(--acc)' : 'transparent'}` : undefined,
           }}
         >
           <TerminalPane

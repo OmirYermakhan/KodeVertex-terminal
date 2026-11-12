@@ -69,7 +69,8 @@ export const ActionCard = memo(function ActionCard({ item, agent, id }: { item: 
       {item.detail && <b>{item.detail}</b>}
       {res && (
         <>
-          {(item.detail || isSub) && ' · '}
+          {/* Результат — после тире, как в макете 04: «Нашёл Form.tsx:42 — обработчик кнопки». */}
+          {(item.detail || isSub) && ' — '}
           {res}
         </>
       )}
