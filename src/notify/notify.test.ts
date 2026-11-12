@@ -3,7 +3,7 @@ import type { Agent } from '../claude/reducer'
 import { useTabs } from '../layout/tabsStore'
 import { useUi } from '../ui/uiStore'
 import {
-  agentEvents, agentText, commandText, needsSystemNotice, openToast, shouldNotifyAgent, shouldNotifyCommand,
+  agentEvents, agentText, audioContext, emit, handleWindowFocus, lastQuestion, commandText, needsSystemNotice, openToast, shouldNotifyAgent, shouldNotifyCommand,
   soundFor, TOAST_MS, useToasts, waitingCount,
 } from './notify'
 
@@ -50,7 +50,7 @@ describe('правила «когда уведомлять»', () => {
   it('тексты', () => {
     expect(agentText({ kind: 'waiting', agent: ag({}) })).toBe('! Главный ждёт ответа')
     expect(agentText({ kind: 'error', agent: ag({ name: 'Стили' }) })).toBe('✕ Стили: ошибка')
-    expect(agentText({ kind: 'done', agent: ag({ name: 'Архитектор', history: ['Читает pay.kt'] }) })).toBe('✓ Архитектор закончил: прочитал pay.kt')
+    expect(agentText({ kind: 'done', agent: ag({ id: 't1', name: 'Архитектор', history: ['Читает pay.kt'] }) })).toBe('✓ Архитектор закончил: прочитал pay.kt')
     expect(commandText('npm test', 12400, 0)).toBe('✓ npm test · 12,4 с')
     expect(commandText('make', 15000, 2)).toBe('✕ make · код 2 · 15,0 с')
   })
@@ -88,5 +88,73 @@ describe('тосты', () => {
     expect(useTabs.getState().active).toBe(first.id)
     expect(useUi.getState().agentRequest).toMatchObject({ paneId: first.focused, agentId: 'a1' })
     expect(useToasts.getState().toasts).toEqual([])
+  })
+})
+
+describe('фокус окна после системного уведомления', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    useUi.setState({ agentRequest: null })
+  })
+  afterEach(() => vi.useRealTimers())
+
+  async function notifyFrom(paneId: string) {
+    const { useSettings } = await import('../settings/store')
+    useSettings.setState({ settings: { ...useSettings.getState().settings, notifySystem: true, notifySound: false } })
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    emit('waiting', '! Главный ждёт ответа', paneId, 'main')
+  }
+
+  it('в пределах 30 с — переход к вкладке и агенту, затем забывается', async () => {
+    useTabs.getState().newTab()
+    const first = useTabs.getState().tabs[0]
+    useTabs.getState().newTab()
+    await notifyFrom(first.focused)
+    vi.advanceTimersByTime(29_000)
+    handleWindowFocus()
+    expect(useTabs.getState().active).toBe(first.id)
+    expect(useUi.getState().agentRequest?.agentId).toBe('main')
+    useUi.setState({ agentRequest: null })
+    handleWindowFocus()
+    expect(useUi.getState().agentRequest).toBeNull()
+  })
+
+  it('позже 30 с — не переходит', async () => {
+    useTabs.getState().newTab()
+    const first = useTabs.getState().tabs[0]
+    await notifyFrom(first.focused)
+    vi.advanceTimersByTime(31_000)
+    handleWindowFocus()
+    expect(useUi.getState().agentRequest).toBeNull()
+  })
+})
+
+describe('текст «закончил»', () => {
+  it('главный — последний вопрос, до 60 знаков с …', () => {
+    const q = lastQuestion([{ type: 'user', text: 'первый' }, { type: 'assistant' }, { type: 'user', text: 'сделай модуль оплаты' }])
+    expect(agentText({ kind: 'done', agent: ag({}) }, q)).toBe('✓ Главный закончил: сделай модуль оплаты')
+    const long = agentText({ kind: 'done', agent: ag({}) }, 'я'.repeat(100))
+    expect(long).toBe(`✓ Главный закончил: ${'я'.repeat(59)}…`)
+  })
+})
+
+describe('звук', () => {
+  it('приостановленный контекст возобновляется', () => {
+    const resume = vi.fn(() => Promise.resolve())
+    vi.stubGlobal('AudioContext', class { state = 'suspended'; resume = resume })
+    expect(audioContext()).not.toBeNull()
+    expect(resume).toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+})
+
+describe('долгие команды в alt screen', () => {
+  it('vim/less не уведомляют', async () => {
+    const { notifyCommandEnd } = await import('./notify')
+    useToasts.setState({ toasts: [] })
+    notifyCommandEnd('p', 'vim a', 60_000, 0, true)
+    expect(useToasts.getState().toasts).toEqual([])
+    notifyCommandEnd('p', 'make', 60_000, 0, false)
+    expect(useToasts.getState().toasts).toHaveLength(1)
   })
 })

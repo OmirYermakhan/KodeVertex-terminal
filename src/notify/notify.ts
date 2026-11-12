@@ -60,12 +60,28 @@ export const soundFor = (kind: NotifyKind) => kind === 'done' || kind === 'waiti
 
 const MARK: Record<NotifyKind, string> = { done: '✓', waiting: '!', error: '✕' }
 
-export function agentText(ev: AgentEvent): string {
+const trim60 = (t: string) => {
+  const one = t.replace(/\s+/g, ' ').trim()
+  return one.length > 60 ? one.slice(0, 59).trimEnd() + '…' : one
+}
+
+/** Последний вопрос пользователя в сессии (что делал главный агент). */
+export function lastQuestion(items: { type: string; text?: string }[]): string {
+  for (let i = items.length - 1; i >= 0; i--) if (items[i].type === 'user') return items[i].text ?? ''
+  return ''
+}
+
+/**
+ * «Закончил: что»: у главного — последний вопрос пользователя (до ~60 знаков); у субагента имя уже
+ * взято из description задачи, отдельного поля нет — берём последнее действие из истории.
+ */
+export function agentText(ev: AgentEvent, question = ''): string {
   const { agent, kind } = ev
   if (kind === 'waiting') return `${MARK.waiting} ${agent.name} ждёт ответа`
   if (kind === 'error') return `${MARK.error} ${agent.name}: ошибка`
   const last = agent.history[agent.history.length - 1]
-  return `${MARK.done} ${agent.name} закончил${last ? `: ${pastLabel(last)}` : ''}`
+  const what = agent.id === 'main' ? trim60(question) : last ? pastLabel(last) : ''
+  return `${MARK.done} ${agent.name} закончил${what ? `: ${what}` : ''}`
 }
 
 export function commandText(command: string, durationMs: number, exitCode: number): string {
@@ -114,11 +130,22 @@ export function openToast(t: Toast): void {
 }
 
 let audio: AudioContext | null = null
+/** Контекст создаётся лениво и возобновляется: без жеста WKWebView держит его в 'suspended'. */
+export function audioContext(): AudioContext | null {
+  try {
+    audio ??= new AudioContext()
+    if (audio.state === 'suspended') void audio.resume()
+    return audio
+  } catch {
+    return null
+  }
+}
+
 /** Короткий тихий тон; «готово» — выше, «ждёт» — ниже. */
 function beep(kind: NotifyKind): void {
   try {
-    audio ??= new AudioContext()
-    const ctx = audio
+    const ctx = audioContext()
+    if (!ctx) return
     const osc = ctx.createOscillator()
     const gain = ctx.createGain()
     osc.frequency.value = kind === 'done' ? 880 : 660
@@ -144,13 +171,28 @@ async function systemNotice(text: string): Promise<void> {
   }
 }
 
+export const FOCUS_NAV_MS = 30_000
+let pending: { toast: Omit<Toast, 'id'>; at: number } | null = null
+
+/** Окно получило фокус: если недавно было системное уведомление — перейти к его вкладке/агенту. */
+export function handleWindowFocus(): void {
+  const p = pending
+  pending = null
+  if (!p || Date.now() - p.at > FOCUS_NAV_MS) return
+  useTabs.getState().focus(p.toast.paneId)
+  if (p.toast.agentId) useUi.getState().requestAgent(p.toast.paneId, p.toast.agentId)
+}
+
 /** Показать событие: тост всегда; система и звук — по настройкам и правилам. */
 export function emit(kind: NotifyKind, text: string, paneId: string, agentId: string | null): void {
   const s = useSettings.getState().settings
   const inActive = isInActiveTab(paneId)
   useToasts.getState().push({ kind, text, paneId, agentId })
   if (s.notifySound && soundFor(kind)) beep(kind)
-  if (s.notifySystem && needsSystemNotice(document.hasFocus(), inActive)) void systemNotice(text)
+  if (s.notifySystem && needsSystemNotice(document.hasFocus(), inActive)) {
+    pending = { toast: { kind, text, paneId, agentId }, at: Date.now() }
+    void systemNotice(text)
+  }
 }
 
 function isInActiveTab(paneId: string): boolean {
@@ -160,7 +202,9 @@ function isInActiveTab(paneId: string): boolean {
 }
 
 /** Завершилась shell-команда: долгая — уведомление. */
-export function notifyCommandEnd(paneId: string, command: string, durationMs: number, exitCode: number): void {
+export function notifyCommandEnd(paneId: string, command: string, durationMs: number, exitCode: number, usedAlt = false): void {
+  // vim, less, ssh на весь экран — не «долгая команда».
+  if (usedAlt) return
   if (!shouldNotifyCommand(durationMs, useSettings.getState().settings)) return
   emit(exitCode === 0 ? 'done' : 'error', commandText(command, durationMs, exitCode), paneId, null)
 }
@@ -168,13 +212,17 @@ export function notifyCommandEnd(paneId: string, command: string, durationMs: nu
 /** Подписка на сессии Claude: тосты по переходам статусов и счётчик в Dock. */
 export function installNotifications(): () => void {
   let lastBadge = -1
+  const wake = () => void audioContext()
+  window.addEventListener('keydown', wake, { once: true, capture: true })
+  window.addEventListener('pointerdown', wake, { once: true, capture: true })
+  window.addEventListener('focus', handleWindowFocus)
   const unsub = useClaudeSessions.subscribe((st, prev) => {
     const settings = useSettings.getState().settings
     for (const [paneId, s] of Object.entries(st.sessions)) {
       const before = prev.sessions[paneId]?.state.agents
       if (before === s.state.agents) continue
       for (const ev of agentEvents(before ?? [], s.state.agents)) {
-        if (shouldNotifyAgent(ev, settings)) emit(ev.kind, agentText(ev), paneId, ev.agent.id)
+        if (shouldNotifyAgent(ev, settings)) emit(ev.kind, agentText(ev, lastQuestion(s.state.items)), paneId, ev.agent.id)
       }
     }
     const n = waitingCount(st.sessions)
@@ -183,5 +231,10 @@ export function installNotifications(): () => void {
       getCurrentWindow().setBadgeCount(n > 0 ? n : undefined).catch(() => {})
     }
   })
-  return unsub
+  return () => {
+    unsub()
+    window.removeEventListener('keydown', wake, true)
+    window.removeEventListener('pointerdown', wake, true)
+    window.removeEventListener('focus', handleWindowFocus)
+  }
 }

@@ -154,6 +154,8 @@ export function TerminalPane(p: TerminalPaneProps) {
   })
   const [alt, setAlt] = useState(false)
   const altRef = useRef(alt)
+  /** Команда заходила в alt screen (vim, less…) — не «долгая команда» для уведомления. */
+  const altUsedRef = useRef(false)
   useEffect(() => {
     altRef.current = alt
   })
@@ -255,6 +257,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         term.reset()
         // Синхронно: вывод из того же куска данных (onWriteParsed) уже должен считаться живым.
         runningRef.current = true
+        altUsedRef.current = false
         setRunning(true)
         setLivePx(liveContentHeight(term))
         setItems((it) => applyShell(it, { t: 'start', command: ev.command, cwd: cwdRef.current ?? '', at }))
@@ -264,14 +267,17 @@ export function TerminalPane(p: TerminalPaneProps) {
         // Конец пришёл при активном alt screen (программа не вышла из него) — его содержимое не замораживаем.
         const { html, lines } = term.buffer.active.type === 'alternate' ? { html: '', lines: 0 } : freeze(term, serializer)
         const cur = itemsRef.current.find((x): x is ShellBlock => x.kind === 'shell' && x.running)
-        if (cur) notifyCommandEnd(callbacks.current.paneId, cur.command, Math.max(0, at - cur.startedAt), ev.exitCode)
+        if (cur) notifyCommandEnd(callbacks.current.paneId, cur.command, Math.max(0, at - cur.startedAt), ev.exitCode, altUsedRef.current)
         setItems((it) => applyShell(it, { t: 'end', exitCode: ev.exitCode, at, html, lines }))
       }
       return true
     })
 
     // Полноэкранные программы (vim, htop, less) — xterm поверх всей панели.
-    term.buffer.onBufferChange((b) => setAlt(b.type === 'alternate'))
+    term.buffer.onBufferChange((b) => {
+      if (b.type === 'alternate') altUsedRef.current = true
+      setAlt(b.type === 'alternate')
+    })
     term.onWriteParsed(() => {
       if (runningRef.current) setLivePx(liveContentHeight(term))
     })
