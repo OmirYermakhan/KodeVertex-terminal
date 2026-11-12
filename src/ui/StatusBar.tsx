@@ -1,5 +1,10 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { projectName, shortPath, useHome, type GitInfo } from '../status/useGitInfo'
+import { useEffect, useState } from 'react'
+import { projectName, useHome, type GitInfo } from '../status/useGitInfo'
+import { modelLabel, type ClaudeState } from '../claude/reducer'
+import { tokensLabel } from '../claude/AgentsPanel'
+
+/** Доля контекста, после которой полоска желтеет. */
+export const CONTEXT_WARN = 0.8
 
 const hhmm = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 
@@ -13,13 +18,21 @@ function useClock(fixed?: Date): Date {
   return fixed ?? now
 }
 
-// `leading` — место под сегменты Claude (режим, агент, модель, контекст) из плана 3.
-export default function StatusBar(p: { cwd?: string; git: GitInfo | null; now?: Date; leading?: ReactNode }) {
+// Статус-бар (макет 04-main-window `.sbar`). Сегменты Claude — только при сессии в фокусной панели.
+export default function StatusBar(p: { cwd?: string; git: GitInfo | null; now?: Date; claude?: ClaudeState | null }) {
   const home = useHome()
   const now = useClock(p.now)
+  const c = p.claude
+  const current = c && c.currentAgentId ? c.agents.find((a) => a.id === c.currentAgentId) : undefined
+  const share = c && c.contextMax > 0 ? Math.min(1, c.contextUsed / c.contextMax) : 0
   return (
     <div className="sbar">
-      {p.leading}
+      {c && <div className="sg v">◆ CLAUDE</div>}
+      {current && (
+        <div className="sg">
+          сейчас <b>{current.name}</b>
+        </div>
+      )}
       {p.cwd && (
         <div className="sg">
           проект <b>{projectName(p.cwd, p.git, home)}</b>
@@ -35,10 +48,23 @@ export default function StatusBar(p: { cwd?: string; git: GitInfo | null; now?: 
           )}
         </div>
       )}
-      <div className="sg right">
-        {p.cwd && <span>{shortPath(p.cwd, home)}</span>}
-        <span>{hhmm(now)}</span>
-      </div>
+      {c?.model && (
+        <div className="sg">
+          модель <b>{modelLabel(c.model)}</b>
+        </div>
+      )}
+      {c && (
+        <div className="sg">
+          контекст
+          <span className={share > CONTEXT_WARN ? 'cbar warn' : 'cbar'} data-testid="context-bar">
+            <i style={{ width: `${Math.round(share * 1000) / 10}%` }} />
+          </span>
+          {/* Как в макете: «84k» и «/200k» — отдельные элементы сегмента (с тем же зазором). */}
+          <b>{tokensLabel(c.contextUsed)}</b>
+          {`/${tokensLabel(c.contextMax)}`}
+        </div>
+      )}
+      <div className="sg right">{hhmm(now)}</div>
     </div>
   )
 }

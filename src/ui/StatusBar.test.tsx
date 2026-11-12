@@ -2,6 +2,8 @@ import { render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { projectName, shortPath } from '../status/useGitInfo'
 import StatusBar from './StatusBar'
+import { mockupScene } from '../claude/fixtures/mockupScene'
+import { initialClaude } from '../claude/reducer'
 
 vi.mock('@tauri-apps/api/path', () => ({ homeDir: () => Promise.resolve('/Users/me') }))
 
@@ -22,15 +24,48 @@ describe('helpers', () => {
 })
 
 describe('StatusBar', () => {
-  it('shows project, branch, dirty marker, path and time', async () => {
+  const segs = (c: HTMLElement) => Array.from(c.querySelectorAll('.sg')).map((x) => x.textContent)
+
+  it('без Claude-сессии: проект, ветка, отметка изменений и время справа — без сегментов Claude', () => {
     const { container } = render(
       <StatusBar cwd="/Users/me/shop-app/src" git={git} now={new Date(2026, 0, 1, 14, 32)} />,
     )
-    expect(container.textContent).toContain('проект shop-app')
-    expect(container.textContent).toContain('⎇ feature/form')
+    expect(segs(container)).toEqual(['проект shop-app', '⎇ feature/form●', '14:32'])
     expect(screen.getByLabelText('есть изменения')).toBeInTheDocument()
-    expect(await screen.findByText('~/shop-app/src')).toBeInTheDocument()
-    expect(screen.getByText('14:32')).toBeInTheDocument()
+    expect(container.querySelector('.sg.right')!.textContent).toBe('14:32')
+    expect(container.querySelector('.sg.v')).toBeNull()
+  })
+
+  it('с сессией — как в макете: ◆ CLAUDE · сейчас · проект · ветка · модель · контекст · время', () => {
+    const { container } = render(
+      <StatusBar
+        cwd="/Users/me/shop-app"
+        git={{ ...git, branch: 'feature/payments', dirty: false }}
+        claude={mockupScene()}
+        now={new Date(2026, 0, 1, 14, 32)}
+      />,
+    )
+    expect(segs(container)).toEqual([
+      '◆ CLAUDE',
+      'сейчас Архитектор',
+      'проект shop-app',
+      '⎇ feature/payments',
+      'модель Opus 5.5',
+      'контекст84k/200k',
+      '14:32',
+    ])
+    expect(container.querySelector('.sg.v')!.textContent).toBe('◆ CLAUDE')
+    const bar = screen.getByTestId('context-bar')
+    expect(bar).not.toHaveClass('warn')
+    expect((bar.firstChild as HTMLElement).style.width).toBe('42%')
+  })
+
+  it('контекст больше 80% — полоска желтеет; без текущего агента нет «сейчас»', () => {
+    const c = { ...initialClaude(), model: 'claude-opus-5-5', contextUsed: 170_000, contextMax: 200_000 }
+    const { container } = render(<StatusBar cwd="/x/y" git={null} claude={c} now={new Date(2026, 0, 1, 9, 5)} />)
+    expect(screen.getByTestId('context-bar')).toHaveClass('warn')
+    expect(container.textContent).not.toContain('сейчас')
+    expect(container.textContent).toContain('170k/200k')
   })
 
   it('omits the branch segment without git', () => {

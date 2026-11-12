@@ -126,6 +126,8 @@ const { codeFontStack } = await import('../theme/fontFamily')
 const { runPaneCommand } = await import('../feed/paneCommands')
 const { getHistory, resetHistory } = await import('../input/history')
 const { useClaudeSessions } = await import('../claude/sessionStore')
+const { mockupScene } = await import('../claude/fixtures/mockupScene')
+const { runAction } = await import('../keys/actions')
 
 const flush = (ms = 0) => new Promise((r) => setTimeout(r, ms))
 
@@ -133,6 +135,7 @@ type OscHandler = (data: string) => boolean
 type KeyHandler = (e: KeyboardEvent) => boolean
 const oscHandler = (t: FakeTerminal, id: number) =>
   t.parser.registerOscHandler.mock.calls.find((c) => c[0] === id)![1] as OscHandler
+const oscHandlerOf = (t: FakeTerminal) => oscHandler(t, 133)
 const keyHandler = (t: FakeTerminal) => t.attachCustomKeyEventHandler.mock.calls[0][0] as KeyHandler
 const textarea = () => document.querySelector<HTMLTextAreaElement>('.in-ta')!
 /** Набор в строке ввода: значение и курсор в конце. */
@@ -148,7 +151,7 @@ describe('TerminalPane', () => {
     terms.length = 0
     spawns.length = 0
     addons.length = 0
-    useUi.setState({ settingsOpen: false })
+    useUi.setState({ settingsOpen: false, agentsHidden: false })
     useSettings.setState({ settings: { ...DEFAULTS } })
     invoke.mockReset()
     resetHistory()
@@ -738,6 +741,78 @@ describe('TerminalPane', () => {
       fireEvent.mouseUp(feed)
       expect(term.focus).toHaveBeenCalled()
       btn.remove()
+    })
+  })
+
+  describe('панель агентов', () => {
+    async function mounted() {
+      const r = render(<TerminalPane {...props()} focused initialCwd="/w" />)
+      spawns[0].resolve()
+      await flush()
+      return r
+    }
+    const withSession = () =>
+      act(() => useClaudeSessions.setState({ sessions: { p: { state: mockupScene(), procId: 'c1', cwd: '/w' } } }))
+    const panel = () => document.querySelector<HTMLElement>('.dock .agents')
+
+    it('без Claude-сессии панели нет; с сессией — в доке над строкой ввода', async () => {
+      await mounted()
+      expect(panel()).toBeNull()
+      withSession()
+      expect(panel()).not.toBeNull()
+      expect(panel()!.nextElementSibling!.contains(textarea())).toBe(true)
+      expect(panel()!.querySelectorAll('.row')).toHaveLength(4)
+    })
+
+    it('⌘↓ из строки ввода — фокус в панель, ↑↓ выбор, esc — назад к вводу', async () => {
+      await mounted()
+      withSession()
+      expect(document.activeElement).toBe(textarea())
+      act(() => runPaneCommand('p', 'blockNext'))
+      expect(document.activeElement).toBe(panel())
+      expect(document.querySelector('.row.focus')!.getAttribute('data-agent-id')).toBe('arch')
+      fireEvent.keyDown(panel()!, { key: 'ArrowDown' })
+      expect(document.querySelector('.row.focus')!.getAttribute('data-agent-id')).toBe('css')
+      fireEvent.keyDown(panel()!, { key: 'Escape' })
+      expect(document.activeElement).toBe(textarea())
+    })
+
+    it('⌘↓ с последнего блока — тоже в панель', async () => {
+      const { container } = await mounted()
+      withSession()
+      const term = terms[0]
+      act(() => void oscHandlerOf(term)('C;' + btoa('ls')))
+      act(() => void oscHandlerOf(term)('D;0'))
+      act(() => runPaneCommand('p', 'blockPrev'))
+      expect(container.querySelector('.blk.sel')).not.toBeNull()
+      act(() => runPaneCommand('p', 'blockNext'))
+      expect(container.querySelector('.blk.sel')).toBeNull()
+      expect(document.activeElement).toBe(panel())
+    })
+
+    it('⌘J скрывает и показывает панель; фокус из скрытой панели — в строку ввода', async () => {
+      await mounted()
+      withSession()
+      act(() => runPaneCommand('p', 'blockNext'))
+      expect(document.activeElement).toBe(panel())
+      act(() => runAction('toggleAgents'))
+      expect(panel()).toBeNull()
+      expect(document.activeElement).toBe(textarea())
+      // Скрытая панель: ⌘↓ фокус не уводит.
+      act(() => runPaneCommand('p', 'blockNext'))
+      expect(document.activeElement).toBe(textarea())
+      act(() => runAction('toggleAgents'))
+      expect(panel()).not.toBeNull()
+    })
+
+    it('клик по строке агента не уводит фокус в строку ввода', async () => {
+      await mounted()
+      withSession()
+      const row = document.querySelector('[data-agent-id="main"]')!
+      fireEvent.mouseUp(row)
+      fireEvent.click(row)
+      expect(document.activeElement).toBe(panel())
+      expect(row).toHaveClass('focus')
     })
   })
 })

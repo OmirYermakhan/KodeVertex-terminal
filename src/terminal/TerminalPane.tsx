@@ -20,6 +20,7 @@ import { applyShell, commandBytes, moveSelection, parseOsc133, syncClaude, type 
 import type { FeedClaudeItem } from '../claude/reducer'
 import { askClaude, interruptClaude, stopClaude, useClaudeSessions } from '../claude/sessionStore'
 import { InputBar, type InputBarHandle } from '../input/InputBar'
+import { AgentsPanel, type AgentsPanelHandle } from '../claude/AgentsPanel'
 import { blockText, cleanSerializedHtml } from '../feed/blockHtml'
 import { Feed } from '../feed/FeedView'
 import { LiveTerminal } from '../feed/LiveTerminal'
@@ -121,12 +122,14 @@ export function TerminalPane(p: TerminalPaneProps) {
 
   const handleRef = useRef<PtyHandle | null>(null)
   const inputRef = useRef<InputBarHandle>(null)
+  const agentsRef = useRef<AgentsPanelHandle>(null)
   // cwd панели (подсказки путей, Claude-сессия): initialCwd, затем OSC 7.
   const cwdRef = useRef(p.initialCwd)
   const home = useHome()
 
   const settings = useSettings((st) => st.settings)
   const settingsOpen = useUi((st) => st.settingsOpen)
+  const agentsHidden = useUi((st) => st.agentsHidden)
 
   const [items, setItems] = useState<FeedItem[]>([])
   const itemsRef = useRef(items)
@@ -382,6 +385,13 @@ export function TerminalPane(p: TerminalPaneProps) {
     if (nothingFocused || paneRef.current?.contains(active)) focusActive()
   }, [running, alt, focusActive])
 
+  // ⌘J скрыл панель агентов, пока фокус был в ней (элемент уже удалён) — вернуть ввод.
+  useEffect(() => {
+    if (!agentsHidden || !p.focused) return
+    const active = document.activeElement
+    if (!active || active === document.body) focusActive()
+  }, [agentsHidden, p.focused, focusActive])
+
   // host перенесён в слот (блок/оверлей): размер, перерисовка, фокус.
   const onAttach = useCallback(() => {
     const term = termRef.current
@@ -460,7 +470,8 @@ export function TerminalPane(p: TerminalPaneProps) {
         }
         const m = moveSelection(itemsRef.current, selectedRef.current, a === 'blockPrev' ? 'up' : 'down')
         setSelected(m.id)
-        // m.leave: ⌘↓ с последнего блока — фокус в панель агентов (Task 8).
+        // ⌘↓ с последнего блока или из строки ввода — фокус в панель агентов (если она показана).
+        if (m.leave) agentsRef.current?.focus()
       }),
     [p.paneId],
   )
@@ -480,7 +491,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       // Клик по ленте возвращает ввод туда, где он идёт: в строку ввода, а пока идёт команда — в xterm.
       onMouseUp={(e) => {
         // Кнопки ленты («Показать всё» и т. п.), само поле и выделение текста не трогаем.
-        if ((e.target as Element).closest?.('button, a, input, textarea, select, .input')) return
+        if ((e.target as Element).closest?.('button, a, input, textarea, select, .input, .agents')) return
         if (window.getSelection()?.isCollapsed ?? true) {
           if (runningRef.current || altRef.current) termRef.current?.focus()
           else inputRef.current?.focus()
@@ -502,6 +513,9 @@ export function TerminalPane(p: TerminalPaneProps) {
         }
       />
       <div className="dock">
+        {claude && !agentsHidden && (
+          <AgentsPanel ref={agentsRef} state={claude.state} onExit={() => inputRef.current?.focus()} />
+        )}
         <InputBar
           ref={inputRef}
           disabled={running || alt}

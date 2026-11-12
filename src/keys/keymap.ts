@@ -5,6 +5,7 @@ export type Action =
   | 'prevTab' | 'nextTab'
   | 'fontBigger' | 'fontSmaller' | 'fontReset' | 'openSettings'
   | 'blockPrev' | 'blockNext' | 'blockCopy'
+  | 'toggleAgents'
 
 export interface Binding {
   action: Action
@@ -45,6 +46,7 @@ export const KEYMAP: Binding[] = [
   cmd('blockPrev', 'ArrowUp'),
   cmd('blockNext', 'ArrowDown'),
   cmd('blockCopy', 'KeyC', { shift: true }),
+  cmd('toggleAgents', 'KeyJ'),
 ]
 
 export function matchKey(

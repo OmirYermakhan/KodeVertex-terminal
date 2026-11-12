@@ -10,6 +10,7 @@ import StatusBar from './ui/StatusBar'
 import SettingsPanel from './ui/SettingsPanel'
 import { useUi } from './ui/uiStore'
 import { useGitInfo } from './status/useGitInfo'
+import { useClaudeSessions } from './claude/sessionStore'
 
 const REPEATABLE = new Set<Action>(['fontBigger', 'fontSmaller'])
 
@@ -21,7 +22,9 @@ export default function App() {
     const t = s.tabs.find((x) => x.id === s.active)
     return t?.cwd[t.focused]
   })
+  const focusedPane = useTabs((s) => s.tabs.find((x) => x.id === s.active)?.focused)
   const git = useGitInfo(cwd)
+  const claude = useClaudeSessions((s) => (focusedPane ? s.sessions[focusedPane]?.state : undefined))
   const settingsOpen = useUi((s) => s.settingsOpen)
 
   useEffect(() => {
@@ -64,7 +67,7 @@ export default function App() {
         )}
       </div>
       <div data-testid="statusbar" className="statusbar">
-        <StatusBar cwd={cwd} git={git} />
+        <StatusBar cwd={cwd} git={git} claude={claude} />
       </div>
       <SettingsPanel open={settingsOpen} onClose={() => useUi.getState().setSettingsOpen(false)} />
     </div>

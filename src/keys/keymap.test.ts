@@ -58,3 +58,10 @@ describe('block keys', () => {
     expect(matchKey(ev({ code: 'KeyC', metaKey: true }))).toBeNull()
   })
 })
+
+describe('agents panel keys', () => {
+  it('⌘J скрывает/показывает панель агентов (в любой раскладке)', () => {
+    expect(matchKey(ev({ code: 'KeyJ', key: 'о', metaKey: true }))).toBe('toggleAgents')
+    expect(matchKey(ev({ code: 'KeyJ', key: 'j' }))).toBeNull()
+  })
+})
