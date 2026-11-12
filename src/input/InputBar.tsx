@@ -1,8 +1,10 @@
 // Строка ввода панели (как в Warp, макет 04-main-window `.input`): ↵ — команда в оболочку,
 // ⌘↵ — вопрос Claude, ↑/↓ — история, подсказки путей — попап над полем.
+// `claude` ↵ — режим Claude: ↵ шлёт вопросы агенту, `/exit`, `exit` или esc на пустой строке — выход.
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import { useCompletion } from '../completion/useCompletion'
 import { CompletionPopup, LIST_WIDTH, PREVIEW_WIDTH, popupHeight } from '../completion/CompletionPopup'
+import { isClaudeExit, parseClaudeCommand } from './claudeCommand'
 import { getHistory, historyStep, loadHistory, NAV_START, pushHistory, type HistoryNav } from './history'
 
 /** Поле растёт до стольких строк, дальше — прокрутка внутри. */
@@ -12,6 +14,10 @@ const POPUP_GAP = 4
 
 export const PLACEHOLDER = 'Команда или вопрос Claude…'
 export const ASK_HINT = '⌘↵ отправить агенту'
+export const CLAUDE_PLACEHOLDER = 'Вопрос Claude…'
+export const CLAUDE_HINT = '↵ отправить агенту · /exit выйти'
+/** Метка режима Claude слева в поле. */
+export const CLAUDE_MARK = '◆'
 export const CONTINUATION_NOTE = 'Команда не закончена — допишите или ⌃C'
 
 export interface InputBarProps {
@@ -27,8 +33,13 @@ export interface InputBarProps {
   onRun(cmd: string): boolean
   /** ⌘↵: вопрос в Claude-сессию панели. */
   onAsk(text: string): void
-  /** ⌃C (empty — строка пуста): true — прерван ход Claude, строку не трогаем; false — строка очищается. */
-  onInterrupt(empty: boolean): boolean
+  /** `claude [вопрос]` ↵: панель входит в режим Claude (сессия запускается; вопрос — если есть). */
+  onEnterClaude(question?: string): void
+  /**
+   * ⌃C (empty — строка пуста, claude — режим Claude): true — прерван ход Claude, строку не трогаем;
+   * false — строка очищается.
+   */
+  onInterrupt(empty: boolean, claude: boolean): boolean
   /** ⌃L: очистить ленту. */
   onClearFeed(): void
   /** ⌃D на пустой строке: EOF в оболочку. */
@@ -50,6 +61,13 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const wrapRef = useRef<HTMLDivElement>(null)
   const [value, setValue] = useState('')
   const [focused, setFocused] = useState(false)
+  /** Режим Claude панели: ↵ — вопрос агенту, подсказки путей выключены. */
+  const [claudeMode, setClaudeModeState] = useState(false)
+  const claudeRef = useRef(false)
+  const setClaudeMode = useCallback((v: boolean) => {
+    claudeRef.current = v
+    setClaudeModeState(v)
+  }, [])
   /** Курсор, который надо выставить после рендера нового значения. */
   const pendingCursor = useRef<number | null>(null)
   const nav = useRef<HistoryNav>(NAV_START)
@@ -73,19 +91,28 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [])
 
   const submit = useCallback((text: string, ask: boolean) => {
-    if (ask) {
+    if (claudeRef.current && !ask && isClaudeExit(text)) {
+      setClaudeMode(false)
+    } else if (ask || claudeRef.current) {
       props.current.onAsk(text)
     } else {
-      if (!props.current.onRun(text)) {
-        setLine(text, text.length)
-        return
+      const c = parseClaudeCommand(text)
+      if (c.kind === 'shell') {
+        if (!props.current.onRun(c.cmd)) {
+          setLine(text, text.length)
+          return
+        }
+      } else {
+        setClaudeMode(true)
+        completionRef.current.close()
+        props.current.onEnterClaude(c.kind === 'ask' ? c.text : undefined)
       }
       pushHistory(text)
     }
     nav.current = NAV_START
     setLine('', 0)
     completionRef.current.reset()
-  }, [setLine])
+  }, [setLine, setClaudeMode])
 
   const completion = useCompletion({
     cwd: () => props.current.cwd(),
@@ -122,7 +149,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [value])
 
   const report = (ta: HTMLTextAreaElement) => {
-    if (!props.current.completions) return
+    if (!props.current.completions || claudeRef.current) return
     completionRef.current.update(ta.value, ta.selectionStart ?? ta.value.length)
   }
 
@@ -140,6 +167,12 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     }
     if (ne.isComposing || ne.keyCode === 229) return
     const v = ta.value
+    // esc на пустой строке — выход из режима Claude (сессия продолжает жить).
+    if (e.key === 'Escape' && claudeRef.current && v === '' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+      e.preventDefault()
+      setClaudeMode(false)
+      return
+    }
     const mods = { meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey }
     const only = (m: keyof typeof mods | null) =>
       (Object.keys(mods) as (keyof typeof mods)[]).every((k) => mods[k] === (k === m))
@@ -172,7 +205,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     }
     if (only('ctrl') && e.key.toLowerCase() === 'c') {
       e.preventDefault()
-      if (props.current.onInterrupt(v === '')) return
+      if (props.current.onInterrupt(v === '', claudeRef.current)) return
       nav.current = NAV_START
       completionRef.current.close()
       setLine('', 0)
@@ -207,9 +240,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [open, ctx, buffer, lineStart])
 
   const empty = value === ''
+  const placeholder = claudeMode ? CLAUDE_PLACEHOLDER : PLACEHOLDER
   return (
     <div className="input-wrap" ref={wrapRef}>
-      {open && ctx && p.completions && !p.disabled && (
+      {open && ctx && p.completions && !p.disabled && !claudeMode && (
         <CompletionPopup
           state={completion.state}
           x={popupX}
@@ -227,6 +261,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           taRef.current?.focus()
         }
       }}>
+        {claudeMode && (
+          <span className="in-mode" aria-hidden="true">
+            {CLAUDE_MARK}
+          </span>
+        )}
         <div className="in-field">
           <textarea
             ref={taRef}
@@ -234,7 +273,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             value={value}
             rows={Math.min(MAX_ROWS, value.split('\n').length)}
             disabled={p.disabled}
-            aria-label={PLACEHOLDER}
+            aria-label={placeholder}
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
@@ -255,13 +294,13 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           />
           {empty && (
             <span className="ph" aria-hidden="true">
-              {PLACEHOLDER}
+              {placeholder}
               {focused && !p.disabled && <span className="caret" />}
             </span>
           )}
           <span className="in-measure" ref={measureRef} aria-hidden="true" />
         </div>
-        <span className="in-hint">{ASK_HINT}</span>
+        <span className="in-hint">{claudeMode ? CLAUDE_HINT : ASK_HINT}</span>
       </div>
     </div>
   )

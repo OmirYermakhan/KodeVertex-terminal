@@ -19,7 +19,7 @@ import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
 import { applyShell, claudeIndex, commandBytes, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
-import { askClaude, interruptClaude, stopClaude, useClaudeSessions } from '../claude/sessionStore'
+import { askClaude, enterClaude, interruptClaude, stopClaude, useClaudeSessions } from '../claude/sessionStore'
 import { InputBar, type InputBarHandle } from '../input/InputBar'
 import { AgentsPanel, type AgentsPanelHandle } from '../claude/AgentsPanel'
 import { blockText, cleanSerializedHtml } from '../feed/blockHtml'
@@ -499,8 +499,18 @@ export function TerminalPane(p: TerminalPaneProps) {
   // ⌃D на пустой строке — EOF в оболочку, как в обычном терминале (zsh с ignoreeof его проигнорирует).
   const onEof = useCallback(() => handleRef.current?.write('\x04'), [])
   const onAsk = useCallback((text: string) => void askClaude(p.paneId, cwdRef.current, text), [p.paneId])
+  // `claude [вопрос]` ↵ — наши карточки вместо полноэкранного TUI (в PTY ничего не уходит).
+  const onEnterClaude = useCallback(
+    (question?: string) => {
+      if (question === undefined) enterClaude(p.paneId, cwdRef.current)
+      else void askClaude(p.paneId, cwdRef.current, question)
+    },
+    [p.paneId],
+  )
   const onInterrupt = useCallback(
-    (empty: boolean) => {
+    (empty: boolean, claudeMode: boolean) => {
+      // Режим Claude: ⌃C прерывает ход агента (если идёт), оболочку не трогает.
+      if (claudeMode) return interruptClaude(p.paneId)
       // Незаконченная команда (PS2): ⌃C сбрасывает строку ZLE.
       if (contRef.current) {
         handleRef.current?.write('\x03')
@@ -608,6 +618,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           home={home || null}
           onRun={onRun}
           onAsk={onAsk}
+          onEnterClaude={onEnterClaude}
           onInterrupt={onInterrupt}
           onEof={onEof}
           onClearFeed={onClearFeed}

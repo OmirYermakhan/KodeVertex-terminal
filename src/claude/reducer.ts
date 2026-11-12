@@ -21,7 +21,7 @@ export type FeedClaudeItem =
   | { type: 'summary'; text: string; durationMs: number; costUsd: number; isError: boolean }
   | { type: 'error'; text: string }
   /** Начало новой сессии Claude: каталог, в котором она работает. */
-  | { type: 'session'; cwd: string }
+  | { type: 'session'; cwd: string; /** Вход в режим Claude из строки ввода (`claude`): с подсказкой. */ mode?: boolean }
 
 export interface Agent {
   id: string // 'main' | toolUseId

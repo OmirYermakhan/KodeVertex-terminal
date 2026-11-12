@@ -233,3 +233,14 @@ describe('карточки', () => {
     expect(container.querySelector('.who')?.textContent).toBe('Архитектор · Fable 5.2')
   })
 })
+
+describe('SessionNote', () => {
+  it('строка сессии; при входе командой `claude` — с подсказкой', async () => {
+    const { SessionNote, MODE_HINT } = await import('./SessionNote')
+    const { container, rerender } = render(<SessionNote cwd="/w/proj" />)
+    expect(container.textContent).toBe('Claude · /w/proj')
+    rerender(<SessionNote cwd="/w/proj" mode />)
+    expect(container.textContent).toBe('Claude · /w/proj — пишите вопрос, /exit — выйти')
+    expect(MODE_HINT).toBe(' — пишите вопрос, /exit — выйти')
+  })
+})

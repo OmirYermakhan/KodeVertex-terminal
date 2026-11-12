@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 
-const { InputBar, ASK_HINT, CONTINUATION_NOTE, PLACEHOLDER } = await import('./InputBar')
+const { InputBar, ASK_HINT, CLAUDE_HINT, CLAUDE_PLACEHOLDER, CONTINUATION_NOTE, PLACEHOLDER } = await import('./InputBar')
 const { resetHistory, pushHistory } = await import('./history')
 type Handle = import('./InputBar').InputBarHandle
 
@@ -17,6 +17,7 @@ function setup(over: Partial<Parameters<typeof InputBar>[0]> = {}) {
     home: '/h',
     onRun: vi.fn(() => true),
     onAsk: vi.fn(),
+    onEnterClaude: vi.fn(),
     onInterrupt: vi.fn(() => false),
     onClearFeed: vi.fn(),
     ...over,
@@ -116,7 +117,7 @@ describe('InputBar', () => {
     const { p, ta, set, key } = setup()
     set('abc')
     key('c', { ctrlKey: true })
-    expect(p.onInterrupt).toHaveBeenCalledWith(false)
+    expect(p.onInterrupt).toHaveBeenCalledWith(false, false)
     expect(ta.value).toBe('')
     vi.mocked(p.onInterrupt).mockReturnValue(true)
     set('abc')
@@ -124,7 +125,7 @@ describe('InputBar', () => {
     expect(ta.value).toBe('abc')
     set('')
     key('c', { ctrlKey: true })
-    expect(p.onInterrupt).toHaveBeenLastCalledWith(true)
+    expect(p.onInterrupt).toHaveBeenLastCalledWith(true, false)
     key('l', { ctrlKey: true })
     expect(p.onClearFeed).toHaveBeenCalled()
   })
@@ -132,5 +133,113 @@ describe('InputBar', () => {
   it('неактивна, пока идёт команда', () => {
     const { ta } = setup({ disabled: true })
     expect(ta).toBeDisabled()
+  })
+
+  describe('команда claude и режим Claude', () => {
+    const inMode = (c: HTMLElement) => c.querySelector('.input .in-mode') !== null
+
+    it('`claude` ↵ — режим Claude: в PTY ничего, команда в истории, вид режима', () => {
+      const { p, ta, set, key, container } = setup()
+      set('claude')
+      key('Enter')
+      expect(p.onEnterClaude).toHaveBeenCalledWith(undefined)
+      expect(p.onRun).not.toHaveBeenCalled()
+      expect(ta.value).toBe('')
+      expect(inMode(container)).toBe(true)
+      expect(container.querySelector('.input .in-mode')!.textContent).toBe('◆')
+      expect(container.querySelector('.input .ph')!.textContent).toBe(CLAUDE_PLACEHOLDER)
+      expect(CLAUDE_PLACEHOLDER).toBe('Вопрос Claude…')
+      expect(container.querySelector('.input .in-hint')!.textContent).toBe(CLAUDE_HINT)
+      expect(CLAUDE_HINT).toBe('↵ отправить агенту · /exit выйти')
+      key('ArrowUp')
+      expect(ta.value).toBe('claude')
+    })
+
+    it('`claude "вопрос"` — вопрос без кавычек и режим Claude', () => {
+      const { p, set, key, container } = setup()
+      set('claude "что тут?"')
+      key('Enter')
+      expect(p.onEnterClaude).toHaveBeenCalledWith('что тут?')
+      expect(p.onRun).not.toHaveBeenCalled()
+      expect(inMode(container)).toBe(true)
+    })
+
+    it('`claude --tui -c` пишет `claude -c` в оболочку, `claude mcp list` — как есть', () => {
+      const { p, set, key, container } = setup()
+      set('claude --tui -c')
+      key('Enter')
+      expect(p.onRun).toHaveBeenLastCalledWith('claude -c')
+      set('claude mcp list')
+      key('Enter')
+      expect(p.onRun).toHaveBeenLastCalledWith('claude mcp list')
+      expect(p.onEnterClaude).not.toHaveBeenCalled()
+      expect(inMode(container)).toBe(false)
+    })
+
+    it('в режиме ↵ и ⌘↵ — вопрос Claude, не в оболочку', () => {
+      const { p, ta, set, key } = setup()
+      set('claude')
+      key('Enter')
+      set('ls')
+      key('Enter')
+      expect(p.onAsk).toHaveBeenLastCalledWith('ls')
+      expect(ta.value).toBe('')
+      set('ещё')
+      key('Enter', { metaKey: true })
+      expect(p.onAsk).toHaveBeenLastCalledWith('ещё')
+      // Внутри режима `claude` — тоже вопрос, а не повторный вход.
+      set('claude')
+      key('Enter')
+      expect(p.onAsk).toHaveBeenLastCalledWith('claude')
+      expect(p.onRun).not.toHaveBeenCalled()
+    })
+
+    it('/exit, exit и esc на пустой строке выходят из режима', () => {
+      const { p, set, key, container } = setup()
+      for (const cmd of ['/exit', 'exit']) {
+        set('claude')
+        key('Enter')
+        set(cmd)
+        key('Enter')
+        expect(inMode(container)).toBe(false)
+        expect(container.querySelector('.input .ph')!.textContent).toBe(PLACEHOLDER)
+        expect(container.querySelector('.input .in-hint')!.textContent).toBe(ASK_HINT)
+      }
+      expect(p.onAsk).not.toHaveBeenCalled()
+      set('claude')
+      key('Enter')
+      set('x')
+      key('Escape')
+      expect(inMode(container)).toBe(true)
+      set('')
+      key('Escape')
+      expect(inMode(container)).toBe(false)
+      // После выхода ↵ снова идёт в оболочку.
+      set('ls')
+      key('Enter')
+      expect(p.onRun).toHaveBeenLastCalledWith('ls')
+    })
+
+    it('⌃C в режиме: onInterrupt с признаком режима, в оболочку не уходит', () => {
+      const { p, ta, set, key } = setup()
+      set('claude')
+      key('Enter')
+      set('abc')
+      key('c', { ctrlKey: true })
+      expect(p.onInterrupt).toHaveBeenLastCalledWith(false, true)
+      expect(ta.value).toBe('')
+    })
+
+    it('подсказки путей в режиме выключены', async () => {
+      const { set, key } = setup({ completions: true })
+      set('claude')
+      key('Enter')
+      invoke.mockClear()
+      set('cat s')
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50))
+      })
+      expect(invoke).not.toHaveBeenCalledWith('fs_list', expect.anything())
+    })
   })
 })

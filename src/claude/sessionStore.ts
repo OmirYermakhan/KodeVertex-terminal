@@ -147,22 +147,46 @@ function dropProc(paneId: string): void {
 }
 
 /**
- * ⌘↵: вопрос в Claude-сессию панели. Карточка «Вы» — сразу; процесс запускается при первом
- * сообщении (и заново после выхода — с `--resume`, если id сессии известен). Если панель
- * с тех пор перешла в другой каталог — новая сессия там; начало новой сессии отмечается в ленте.
+ * Каталог сессии для вопроса из панели в paneCwd: если панель перешла в другой каталог —
+ * старый процесс останавливается и дальше будет новая сессия там. null — каталог неизвестен.
  */
-export async function askClaude(paneId: string, paneCwd: string | undefined, text: string): Promise<void> {
+function switchCwd(paneId: string, paneCwd: string | undefined): string | null {
   const cur = get(paneId)
   const cwd = paneCwd ?? cur.cwd
-  if (cwd === null) {
-    patchState(paneId, (s) => failed(userSent(s, text, Date.now()), NO_CWD, Date.now()))
-    return
-  }
+  if (cwd === null) return null
   if (cur.cwd !== null && cwd !== cur.cwd) {
     dropProc(paneId)
     patchState(paneId, (s) => ({ ...stopped(s, Date.now()), sessionId: null, contextUsed: 0 }))
   }
   if (cur.cwd !== cwd) patch(paneId, (p) => ({ ...p, cwd }))
+  return cwd
+}
+
+/**
+ * `claude` в строке ввода: режим Claude панели. Процесс запускается сразу (если ещё не идёт),
+ * в ленте — строка с каталогом и подсказкой; вопросы дальше — через askClaude.
+ */
+export function enterClaude(paneId: string, paneCwd: string | undefined): void {
+  const cwd = switchCwd(paneId, paneCwd)
+  if (cwd === null) {
+    patchState(paneId, (s) => failed(s, NO_CWD, Date.now()))
+    return
+  }
+  patchState(paneId, (s) => ({ ...s, items: [...s.items, { type: 'session', cwd, mode: true }] }))
+  if (!procs.has(paneId)) start(paneId)
+}
+
+/**
+ * ⌘↵: вопрос в Claude-сессию панели. Карточка «Вы» — сразу; процесс запускается при первом
+ * сообщении (и заново после выхода — с `--resume`, если id сессии известен). Если панель
+ * с тех пор перешла в другой каталог — новая сессия там; начало новой сессии отмечается в ленте.
+ */
+export async function askClaude(paneId: string, paneCwd: string | undefined, text: string): Promise<void> {
+  const cwd = switchCwd(paneId, paneCwd)
+  if (cwd === null) {
+    patchState(paneId, (s) => failed(userSent(s, text, Date.now()), NO_CWD, Date.now()))
+    return
+  }
   // Новая сессия (не продолжение): в ленте — строка с её каталогом.
   if (!procs.has(paneId) && get(paneId).state.sessionId === null) {
     patchState(paneId, (s) => ({ ...s, items: [...s.items, { type: 'session', cwd }] }))
