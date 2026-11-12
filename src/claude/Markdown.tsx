@@ -39,7 +39,8 @@ function rehypeCaret() {
 const SAFE_URL = /^(https?:|mailto:)/i
 
 function onLinkClick(e: MouseEvent<HTMLAnchorElement>, href: string | undefined) {
-  // Ссылки не открываются внутри окна приложения — только в системном браузере.
+  // Ссылки не открываются внутри окна приложения — только в системном браузере
+  // (обычный клик и ⌘-клик одинаково; средний клик гасится в onAuxClick).
   e.preventDefault()
   if (href && SAFE_URL.test(href)) openUrl(href).catch(() => {})
 }
@@ -61,7 +62,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   }
   return (
     <div className="md-code">
-      <button type="button" className="md-copy" onClick={copy}>
+      <button type="button" className="md-copy" aria-label="Копировать код" onClick={copy}>
         {copied ? 'Скопировано' : 'Копировать'}
       </button>
       <pre ref={ref}>{children}</pre>
@@ -71,7 +72,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
 
 const components: Components = {
   a: ({ href, children }) => (
-    <a href={href} onClick={(e) => onLinkClick(e, href)}>
+    <a href={href} onClick={(e) => onLinkClick(e, href)} onAuxClick={(e) => e.preventDefault()}>
       {children}
     </a>
   ),

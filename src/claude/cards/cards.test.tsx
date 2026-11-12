@@ -59,9 +59,11 @@ describe('Markdown', () => {
     expect(code).not.toBeNull()
     expect(code!.textContent).toBe('const x = 1 // один\n')
     expect(container.querySelector('pre .hljs-keyword')?.textContent).toBe('const')
-    fireEvent.click(screen.getByRole('button', { name: 'Копировать' }))
+    const btn = screen.getByRole('button', { name: 'Копировать код' })
+    expect(btn).toHaveTextContent('Копировать')
+    fireEvent.click(btn)
     expect(writeText).toHaveBeenCalledWith('const x = 1 // один')
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Скопировано' })).toBeInTheDocument())
+    await waitFor(() => expect(btn).toHaveTextContent('Скопировано'))
   })
 
   it('HTML в тексте не исполняется: <script> выводится как текст', () => {
@@ -85,6 +87,15 @@ describe('Markdown', () => {
     const ev = fireEvent.click(a)
     expect(ev).toBe(false) // preventDefault
     expect(openUrl).toHaveBeenCalledWith('https://example.com/docs')
+  })
+
+  it('⌘-клик открывает через opener, средний клик не уводит webview', () => {
+    render(<Markdown text={'[доки](https://example.com/docs)'} />)
+    const a = screen.getByRole('link', { name: 'доки' })
+    expect(fireEvent.click(a, { metaKey: true })).toBe(false)
+    expect(openUrl).toHaveBeenCalledWith('https://example.com/docs')
+    expect(fireEvent(a, new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }))).toBe(false)
+    expect(openUrl).toHaveBeenCalledTimes(1)
   })
 
   it('ссылки javascript: не открываются', () => {
@@ -140,11 +151,21 @@ describe('карточки', () => {
     expect(container.querySelector('.act')?.textContent).not.toContain('много строк')
   })
 
-  it('действие субагента — имя агента в подписи', () => {
+  it('действие субагента: подпись «Имя · Модель», в теле — название и деталь', () => {
+    const item = action({ agentId: 'tu1', tool: 'Grep', title: 'Искал', detail: 'onSubmit', result: 'Form.tsx:42' })
     const { container } = render(
-      <ActionCard item={action({ agentId: 'tu1' })} agent={agent({ id: 'tu1', name: 'Поиск', model: 'claude-haiku-5-5' })} />,
+      <ActionCard item={item} agent={agent({ id: 'tu1', name: 'Поиск', model: 'claude-haiku-5-5' })} />,
     )
-    expect(container.querySelector('.act .who')?.textContent).toBe('▶ Запустил команду · Поиск')
+    const act = container.querySelector('.act')!
+    expect(act.querySelector('.who')?.textContent).toBe('▶ Поиск · Haiku 5.5')
+    expect(act.querySelector('b')?.textContent).toBe('onSubmit')
+    expect(act.textContent).toBe('▶ Поиск · Haiku 5.5Искал onSubmit · Form.tsx:42')
+  })
+
+  it('действие субагента без модели — только имя; правка файла — ✎', () => {
+    const item = action({ agentId: 'tu1', tool: 'Edit', title: 'Изменил файл', detail: 'a.ts' })
+    const { container } = render(<ActionCard item={item} agent={agent({ id: 'tu1', name: 'Стили', model: null })} />)
+    expect(container.querySelector('.act .who')?.textContent).toBe('✎ Стили')
   })
 
   it('идущее действие — .run и «Сейчас выполняю…»', () => {

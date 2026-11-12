@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import { modelLabel } from '../labels'
 import type { Agent, FeedClaudeItem } from '../reducer'
 
 type Action = Extract<FeedClaudeItem, { type: 'action' }>
@@ -52,20 +53,23 @@ function shortResult(result: string | undefined): string {
 /** Действие агента (макет 02 B / 04, .act): пунктирная рамка, подпись --info, деталь моноширинным. */
 export const ActionCard = memo(function ActionCard({ item, agent, id }: { item: Action; agent: Agent | undefined; id?: string }) {
   const icon = EDIT_TOOLS.has(item.tool) || item.diff ? '✎' : '▶'
-  const sub = agent && agent.id !== 'main' ? ` · ${agent.name}` : ''
+  // Субагент: подпись — «Имя · Модель» (макет 04 «▶ Поиск · Haiku 5.5»), название действия уходит в тело.
+  const isSub = !!agent && agent.id !== 'main'
+  const label = isSub ? (agent.model ? `${agent.name} · ${modelLabel(agent.model)}` : agent.name) : item.title
   const running = item.status === 'running'
   const res = running ? '' : shortResult(item.result)
   const cls = ['act', running && 'run', item.status === 'error' && 'fail'].filter(Boolean).join(' ')
   return (
     <div className={cls} data-item-id={id}>
       <div className="who">
-        {icon} {item.title}
-        {sub}
+        {icon} {label}
       </div>
+      {isSub && item.title}
+      {isSub && item.detail && ' '}
       {item.detail && <b>{item.detail}</b>}
       {res && (
         <>
-          {item.detail && ' · '}
+          {(item.detail || isSub) && ' · '}
           {res}
         </>
       )}
