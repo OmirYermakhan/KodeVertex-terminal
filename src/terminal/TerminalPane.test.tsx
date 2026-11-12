@@ -421,6 +421,33 @@ describe('TerminalPane', () => {
         expect(calls().map((c) => c[0]).filter((n) => n.startsWith('claude'))).toEqual(['claude_start', 'claude_control', 'claude_send', 'claude_send'])
       })
 
+      it('`claude` и `claude <вопрос>` сначала очищают ленту от прежних команд', async () => {
+        claudeOk()
+        const { term } = await mounted()
+        const blocks = () => document.querySelectorAll('.feed [data-block-id]').length
+        for (const c of ['ls', 'pwd']) {
+          act(() => void oscHandler(term, 133)('C;' + btoa(c)))
+          act(() => void oscHandler(term, 133)('D;0'))
+        }
+        expect(blocks()).toBe(2)
+        type('claude')
+        keyIn('Enter')
+        await act(async () => await flush())
+        expect(blocks()).toBe(0)
+        expect(document.querySelector('.feed .cl-note')?.textContent).toContain('Claude')
+        // Новые блоки после выхода из режима видны, id не повторяются.
+        type('/exit')
+        keyIn('Enter')
+        act(() => void oscHandler(term, 133)('C;' + btoa('date')))
+        act(() => void oscHandler(term, 133)('D;0'))
+        expect(blocks()).toBe(1)
+        type('claude что тут?')
+        keyIn('Enter')
+        await act(async () => await flush())
+        expect(blocks()).toBe(0)
+        expect(document.querySelector('.feed .you')?.textContent).toContain('что тут?')
+      })
+
       it('ответы Claude — в той же ленте, по времени: блок, вопрос, ответ, следующий блок', async () => {
         claudeOk()
         const { term } = await mounted()

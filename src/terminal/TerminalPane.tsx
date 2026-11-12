@@ -500,16 +500,26 @@ export function TerminalPane(p: TerminalPaneProps) {
   // ⌃D на пустой строке — EOF в оболочку, как в обычном терминале (zsh с ignoreeof его проигнорирует).
   const onEof = useCallback(() => handleRef.current?.write('\x04'), [])
   const onAsk = useCallback((text: string) => void askClaude(p.paneId, cwdRef.current, text), [p.paneId])
+  const onClearFeed = useCallback(() => {
+    // Идущий блок и незаконченный ответ Claude (с ним — всё после него) не трогаем:
+    // иначе продолжение ответа после ⌃L не появилось бы.
+    const from = firstUnfinished(claudePrev.current)
+    claudeFrom.current = from
+    setItems((it) => it.filter((x) => (x.kind === 'shell' ? x.running : claudeIndex(x.id) >= from)))
+    setSelected(null)
+  }, [])
   // `claude [вопрос]` ↵ — наши карточки вместо полноэкранного TUI (в PTY ничего не уходит).
   const onEnterClaude = useCallback(
     (question?: string) => {
+      // Вход в режим Claude начинается с чистой ленты (как ⌃L: идущий блок остаётся).
+      if (claudeCwdKnown(p.paneId, cwdRef.current)) onClearFeed()
       if (question === undefined) return enterClaude(p.paneId, cwdRef.current)
       // Каталог неизвестен — askClaude покажет ошибку карточкой, режим не включаем.
       const ok = claudeCwdKnown(p.paneId, cwdRef.current)
       void askClaude(p.paneId, cwdRef.current, question)
       return ok
     },
-    [p.paneId],
+    [p.paneId, onClearFeed],
   )
   const onChooseModel = useCallback((c: ModelChoice) => void chooseModel(p.paneId, cwdRef.current, c), [p.paneId])
   // Текущая модель: выбранная в `/model` для панели, иначе из настроек Claude Code, иначе Default.
@@ -536,14 +546,6 @@ export function TerminalPane(p: TerminalPaneProps) {
     },
     [p.paneId],
   )
-  const onClearFeed = useCallback(() => {
-    // Идущий блок и незаконченный ответ Claude (с ним — всё после него) не трогаем:
-    // иначе продолжение ответа после ⌃L не появилось бы.
-    const from = firstUnfinished(claudePrev.current)
-    claudeFrom.current = from
-    setItems((it) => it.filter((x) => (x.kind === 'shell' ? x.running : claudeIndex(x.id) >= from)))
-    setSelected(null)
-  }, [])
 
   // Автопрокрутка: лента следует за выводом, пока пользователь у низа.
   const stickRef = useRef(true)
