@@ -35,6 +35,11 @@ import { feedAttachment } from '../attach/fromFeed'
 import { DROP_TITLE, DROP_TITLE_SHELL, DROP_TITLE_SHELL_MANY, dropSubline, registerDropTarget, setAttachCount, useDrop } from '../attach/dragDrop'
 import { DROP_PATH, Token } from '../attach/tokenView'
 import type { Attachment } from '../attach/types'
+import { PreviewContext, usePreview } from '../attach/preview/usePreview'
+import { PreviewLayer } from '../attach/preview/PreviewLayer'
+import { openPath } from '../attach/preview/api'
+import type { PreviewAction } from '../attach/preview/actions'
+import type { AtFeed, AtMessage } from '../attach/atSearch'
 
 const RESIZE_DEBOUNCE_MS = 50
 /** Живой терминал внутри блока — не выше этой доли ленты, дальше скролл внутри xterm. */
@@ -637,6 +642,38 @@ export function TerminalPane(p: TerminalPaneProps) {
     const tok = feedAttachment(it, agents)
     if (tok) inputRef.current?.insertTokens([tok], { claude: true })
   }, [])
+  // Мини-просмотр значков (строка ввода и пузыри «Вы»): ↵ — открыть файл, к блоку/сообщению, ⌫ — убрать.
+  const onPreviewAction = useCallback((a: PreviewAction) => {
+    const note = (t: string) => inputRef.current?.note(t)
+    switch (a.type) {
+      case 'open':
+        openPath(a.path, a.how, a.line).catch((e: unknown) => note(`Не удалось открыть: ${String(e)}`))
+        return
+      case 'jump':
+        if (itemsRef.current.some((x) => x.id === a.id)) setSelected(a.id)
+        else note(a.kind === 'block' ? 'Этого блока уже нет в ленте' : 'Этого сообщения уже нет в ленте')
+        return
+      case 'remove':
+        inputRef.current?.removeToken(a.id)
+        return
+    }
+  }, [])
+  const preview = usePreview({ onAction: onPreviewAction })
+  /** Блоки и законченные ответы Claude ленты — для групп `@`. */
+  const atFeed = useCallback((): AtFeed => {
+    const blocks: ShellBlock[] = []
+    const messages: AtMessage[] = []
+    const agents = useClaudeSessions.getState().sessions[callbacks.current.paneId]?.state.agents ?? []
+    for (const it of itemsRef.current) {
+      if (it.kind === 'shell') blocks.push(it)
+      else if (it.item.type === 'assistant' && !it.item.streaming && it.item.text.trim()) {
+        const agentId = it.item.agentId
+        messages.push({ id: it.id, text: it.item.text, agent: agents.find((g) => g.id === agentId) })
+      }
+    }
+    return { blocks, messages }
+  }, [])
+
   const copyItem = useCallback((id: string | null) => {
     const it = id ? itemsRef.current.find((x) => x.id === id) : undefined
     const text = it?.kind === 'shell' ? (it.html ? blockText(it.html) : '') : it?.item.type === 'assistant' ? it.item.text : ''
@@ -819,6 +856,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         }
       }}
     >
+      <PreviewContext.Provider value={preview.api}>
       <Feed
         ref={feedRef}
         items={items}
@@ -836,6 +874,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           </div>
         }
       />
+      </PreviewContext.Provider>
       <div className="dock">
         {claude && !agentsHidden && (
           <AgentsPanel ref={agentsRef} state={claude.state} queued={queue.length} onExit={() => inputRef.current?.focus()} />
@@ -892,6 +931,8 @@ export function TerminalPane(p: TerminalPaneProps) {
           onInterrupt={onInterrupt}
           onEof={onEof}
           onClearFeed={onClearFeed}
+          preview={preview.api}
+          atFeed={atFeed}
         />
       </div>
       {alt && (
@@ -908,6 +949,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           </div>
         </div>
       )}
+      <PreviewLayer state={preview.state} api={preview.api} container={paneRef} cwd={() => cwdRef.current} home={home} />
       {drag && (
         <div className="tk-ghost" style={{ left: drag.x + 12, top: drag.y + 10 }} aria-hidden="true">
           <Token token={drag.token} />

@@ -54,7 +54,7 @@ export function tokenClass(t: Attachment, selected = false): string {
   return 'tk' + kind + (selected ? ' sel' : '')
 }
 
-/** Подсказка при наведении (до мини-просмотра части B): причина или путь. */
+/** Подсказка при наведении там, где мини-просмотра нет (очередь): причина или путь. */
 export function tokenTitle(t: Attachment): string {
   if (t.reason) return `${t.label} — ${t.reason}`
   if (t.path) return t.path
@@ -65,12 +65,13 @@ export function tokenTitle(t: Attachment): string {
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
 /** DOM значка для поля ввода (contenteditable=false: значок ведёт себя как одна буква). */
-export function tokenElement(t: Attachment, selected = false): HTMLSpanElement {
+export function tokenElement(t: Attachment, selected = false, title = true): HTMLSpanElement {
   const el = document.createElement('span')
   el.className = tokenClass(t, selected)
   el.setAttribute('contenteditable', 'false')
   el.dataset.tk = t.id
-  el.title = tokenTitle(t)
+  // С мини-просмотром подсказка title не нужна (она легла бы поверх карточки).
+  if (title) el.title = tokenTitle(t)
   if (t.kind === 'image') {
     const mini = document.createElement('span')
     mini.className = t.thumb ? 'mini pic' : 'mini'

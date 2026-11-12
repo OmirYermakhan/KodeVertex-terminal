@@ -3,7 +3,7 @@
 // `claude` ↵ — режим Claude: ↵ шлёт вопросы агенту, `/exit`, `exit` или esc на пустой строке — выход.
 // В режиме Claude в текст встают значки вложений (макет 06-attachments): поле — contenteditable,
 // модель — Doc (текст + значки), см. src/attach/doc.ts и richDom.ts.
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useCompletion } from '../completion/useCompletion'
 import { CompletionPopup, LIST_WIDTH, PREVIEW_WIDTH, popupHeight } from '../completion/CompletionPopup'
 import { useHints } from '../completion/useHints'
@@ -13,12 +13,17 @@ import { isClaudeExit, isModelCommand, parseClaudeCommand } from './claudeComman
 import { ModelPicker } from '../claude/ModelPicker'
 import { initialPicker, pickerKey, type ModelChoice, type PickerState } from '../claude/models'
 import { getHistory, historyStep, loadHistory, NAV_START, pushHistory, type HistoryNav } from './history'
-import { backspace, countTokens, docOf, forwardDelete, insertText, insertTokens, moveCaret, readable, splice, tokenPos, type Edit } from '../attach/doc'
+import { backspace, countTokens, docOf, forwardDelete, insertText, insertTokens, moveCaret, readable, splice, tokenAt, tokenPos, type Edit } from '../attach/doc'
 import { blocksSend, pathAttachment } from '../attach/classify'
 import { attachPaths, pasteClipboardImage, pickFiles, screenshotLabel } from '../attach/api'
 import { CLIP_PATH } from '../attach/tokenView'
 import { EMPTY_DOC, type Attachment, type Doc } from '../attach/types'
 import { domPoint, getSelection, readDoc, renderDoc, setSelection } from './richDom'
+import { atContext, AT_COMMAND, type CompletionContext } from '../completion/completion'
+import { atRows, type AtFeed, type AtRow } from '../attach/atSearch'
+import { AtPicker } from '../attach/AtPicker'
+import { blockAttachment, messageAttachment } from '../attach/fromFeed'
+import type { PreviewApi } from '../attach/preview/usePreview'
 
 /** Поле растёт до стольких строк, дальше — прокрутка внутри. */
 export const MAX_ROWS = 8
@@ -37,6 +42,10 @@ export const CONTINUATION_NOTE = 'Команда не закончена — д�
 /** ↵ при красном значке: сообщение не уходит. */
 export const UNSUPPORTED_NOTE = 'Красные вложения Claude не примет — уберите их (⌫⌫), чтобы отправить'
 export const CLIP_LABEL = 'Вложить файлы (⌘O)'
+/** Курсор рядом со значком (макет 06, сцена Б). */
+export const PREVIEW_HINT = '␣ просмотр'
+/** Боковой просмотр в `@` — только если строка не уже этого. */
+const AT_SIDE_MIN = 600
 const NOTE_MS = 3500
 
 export interface InputBarProps {
@@ -91,6 +100,10 @@ export interface InputBarProps {
   onTokens?(n: number): void
   /** Строка стала (или перестала) принимать значки: режим Claude и не ответ на вопрос. */
   onAcceptsTokens?(yes: boolean): void
+  /** Мини-просмотр значков (наведение, ␣ у значка); клавиши в открытый просмотр идут отсюда. */
+  preview?: PreviewApi
+  /** Блоки и ответы Claude ленты — группы «Блоки» и «Сообщения» в `@`. */
+  atFeed?(): AtFeed
 }
 
 export interface InputBarHandle {
@@ -112,6 +125,10 @@ export interface InputBarHandle {
   insertTokens(tokens: Attachment[], opts?: { claude?: boolean }): boolean
   /** Файлы у курсора: в режиме Claude — значками, в оболочке — экранированными путями. */
   insertPaths(paths: string[]): void
+  /** Убрать значок (⌫ в мини-просмотре); false — его уже нет. */
+  removeToken(id: string): boolean
+  /** Подсказка над полем (ошибка открытия файла, блока нет в ленте). */
+  note(text: string): void
 }
 
 const onFirstLine = (v: string, pos: number) => !v.slice(0, pos).includes('\n')
@@ -155,6 +172,25 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     setPicker(v)
   }, [])
   const nav = useRef<HistoryNav>(NAV_START)
+  /** `@…` у курсора в режиме Claude (выбор с группами); null — нет. */
+  const [at, setAtState] = useState<{ ctx: CompletionContext; lineStart: number } | null>(null)
+  const atRef = useRef<typeof at>(null)
+  const setAt = useCallback((v: { ctx: CompletionContext; lineStart: number } | null) => {
+    const c = atRef.current
+    if (c === v || (c && v && c.lineStart === v.lineStart && c.ctx.tokenStart === v.ctx.tokenStart && c.ctx.token === v.ctx.token)) return
+    atRef.current = v
+    setAtState(v)
+  }, [])
+  /** Строка (`курсор;текст`), на которой выбор `@` закрыли по esc: до её изменения не открываем. */
+  const atDismissed = useRef<string | null>(null)
+  const [atSel, setAtSelState] = useState(0)
+  const atSelRef = useRef(0)
+  const setAtSel = useCallback((i: number) => {
+    atSelRef.current = i
+    setAtSelState(i)
+  }, [])
+  /** Курсор у значка: ␣ откроет просмотр (подсказка справа). */
+  const [nearTok, setNearTok] = useState(false)
   const props = useRef(p)
   useEffect(() => {
     props.current = p
@@ -168,6 +204,20 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [])
 
   const hasFocus = () => !!edRef.current && document.activeElement === edRef.current
+
+  /** Значок у курсора: выделенный, иначе слева или справа от курсора (без выделения текста). */
+  const nearToken = useCallback((): Attachment | null => {
+    const d = docRef.current
+    if (selTok.current) {
+      const t = d.tokens.find((x) => x.id === selTok.current)
+      if (t) return t
+    }
+    const el = edRef.current
+    const s = el && document.activeElement === el ? getSelection(el) : null
+    if (!s || s.start !== s.end) return null
+    return tokenAt(d, s.start - 1) ?? tokenAt(d, s.start)
+  }, [])
+  const syncNear = () => setNearTok(!!props.current.preview && claudeRef.current && !props.current.disabled && nearToken() !== null)
   /** Выделение модели: из DOM, если фокус в поле, иначе — сохранённый курсор (или конец). */
   const selection = useCallback(() => {
     const el = edRef.current
@@ -206,13 +256,15 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     const el = edRef.current
     if (!el) return
     const keep = pendingCursor.current === null && document.activeElement === el ? getSelection(el) : null
-    renderDoc(el, docRef.current, selTok.current)
+    renderDoc(el, docRef.current, selTok.current, !props.current.preview)
     const cursor = pendingCursor.current
     pendingCursor.current = null
     if (cursor !== null) {
       if (document.activeElement === el) setSelection(el, cursor)
       else savedCursor.current = cursor
     } else if (keep) setSelection(el, keep.start, keep.end)
+    syncNear()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderSeq])
 
   useEffect(() => {
@@ -333,9 +385,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       if (run) return submit(v, false)
       setLine(v, cursor)
       // Подставили каталог — сразу показать его содержимое.
+      updateAt(v, cursor)
       completionRef.current.update(v, cursor)
     },
     insert: (path, isDir, from, to) => {
+      setAt(null)
       // `@путь` выбран: значок вместо набранного `@…` (сразу; размер уточняет Rust).
       const name = path.split('/').pop() || path
       const quick = pathAttachment({ path, name, exists: true, isDir, size: 0 })
@@ -385,9 +439,13 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     if (!pathsOn || p.disabled) completionRef.current.close()
   }, [pathsOn, p.disabled])
 
-  // Выключенная строка (идёт команда) не держит фокус — как выключенная textarea.
+  // Выключенная строка (идёт команда) не держит фокус — как выключенная textarea; её просмотр закрыт.
   useEffect(() => {
     if (p.disabled && edRef.current && document.activeElement === edRef.current) edRef.current.blur()
+    if (p.disabled) {
+      props.current.preview?.closeFrom('input')
+      setNearTok(false)
+    }
   }, [p.disabled])
 
   useImperativeHandle(ref, () => ({
@@ -412,7 +470,82 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       return true
     },
     insertPaths,
+    removeToken: (id) => {
+      const d = docRef.current
+      const pos = tokenPos(d, id)
+      if (pos < 0) return false
+      apply({ ...splice(d, pos, pos + 1, ''), selected: null })
+      nav.current = NAV_START
+      report()
+      return true
+    },
+    note: showNote,
   }))
+
+  /** `@…` у курсора (режим Claude): выбор с группами; esc закрывает его до правки строки. */
+  function updateAt(v: string | null, cursor: number) {
+    if (v === null || !claudeRef.current) return setAt(null)
+    const key = `${cursor};${v}`
+    if (atDismissed.current !== null) {
+      if (atDismissed.current === key) return setAt(null)
+      atDismissed.current = null
+    }
+    const lineStart = v.lastIndexOf('\n', cursor - 1) + 1
+    const nl = v.indexOf('\n', cursor)
+    const text = v.slice(lineStart, nl < 0 ? v.length : nl)
+    const ctx = atContext(text, [...v.slice(lineStart, cursor)].length)
+    setAt(ctx ? { ctx, lineStart } : null)
+  }
+
+  /** Строка выбора `@` → значок вместо набранного `@…`. tab — ⇥: папка открывается, а не вставляется. */
+  function pickAt(i: number, tab: boolean) {
+    const r = atRowsRef.current[i]
+    if (!r) return
+    if (r.group === 'files') {
+      if (r.entry.isDir && !tab) completionRef.current.insertAt(r.index)
+      else completionRef.current.pick(r.index)
+      return
+    }
+    const a = atRef.current
+    if (!a) return
+    const tok = r.group === 'blocks' ? blockAttachment(r.block) : messageAttachment(r.text, r.agent, r.id)
+    const from = a.lineStart + a.ctx.tokenStart
+    completionRef.current.close()
+    setAt(null)
+    apply(insertTokens(splice(docRef.current, from, from + a.ctx.token.length, '').doc, { start: from, end: from }, [tok]))
+  }
+
+  function atKey(e: KeyboardEvent): boolean {
+    const rows = atRowsRef.current
+    if (rows.length === 0 || e.isComposing || e.keyCode === 229) return false
+    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return false
+    const n = rows.length
+    const i = Math.min(atSelRef.current, n - 1)
+    switch (e.key) {
+      case 'ArrowDown':
+        setAtSel((i + 1) % n)
+        return true
+      case 'ArrowUp':
+        setAtSel((i - 1 + n) % n)
+        return true
+      case 'Enter':
+        pickAt(i, false)
+        return true
+      case 'Tab':
+        pickAt(i, true)
+        return true
+      case 'Escape': {
+        const el = edRef.current
+        const s = el ? getSelection(el) : null
+        atDismissed.current = `${s?.end ?? docRef.current.text.length};${docRef.current.text}`
+        completionRef.current.close()
+        setAt(null)
+        return true
+      }
+      default:
+        return false
+    }
+  }
 
   function report() {
     const el = edRef.current
@@ -420,9 +553,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     const v = docRef.current.text
     const cursor = (document.activeElement === el ? getSelection(el)?.end : null) ?? v.length
     const q = props.current
-    if (q.answer) return
+    if (q.answer) return setAt(null)
     if (q.hints && !q.disabled && !q.continuation) hintsRef.current.update(v, cursor)
-    if (!(claudeRef.current ? (q.atFiles ?? q.completions) : q.completions)) return
+    const allowed = claudeRef.current ? (q.atFiles ?? q.completions) : q.completions
+    updateAt(allowed && !q.disabled ? v : null, cursor)
+    if (!allowed) return
     completionRef.current.update(v, cursor)
   }
 
@@ -430,7 +565,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   useEffect(() => {
     const onSel = () => {
       const el = edRef.current
-      if (el && document.activeElement === el) report()
+      if (el && document.activeElement === el) {
+        report()
+        syncNear()
+      }
     }
     document.addEventListener('selectionchange', onSel)
     return () => document.removeEventListener('selectionchange', onSel)
@@ -452,6 +590,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     // Правка строки — выход из истории: ↑ снова начнёт с последней команды.
     nav.current = NAV_START
     report()
+    syncNear()
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -481,7 +620,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       setPickerState(null)
       return
     }
-    if (completionRef.current.onKey(ne) || hintsRef.current.onKey(ne)) {
+    // Режим Claude: `@` — выбор с группами (файлы, блоки, сообщения), иначе — подсказки путей.
+    if ((claudeRef.current ? atKey(ne) : completionRef.current.onKey(ne)) || hintsRef.current.onKey(ne)) {
       e.preventDefault()
       return
     }
@@ -491,6 +631,22 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       return
     }
     if (ne.isComposing || ne.keyCode === 229) return
+    const pv = props.current.preview
+    // ␣ у значка — мини-просмотр (повторный ␣ закрывает); не у значка — обычный пробел.
+    if (e.key === ' ' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && pv && claudeRef.current) {
+      const t = nearToken()
+      const tel = t ? el.querySelector<HTMLElement>(`[data-tk="${t.id}"]`) : null
+      if (t && tel) {
+        e.preventDefault()
+        pv.toggle(t, tel, 'input')
+        return
+      }
+    }
+    // Открытый просмотр: ↵ / ⌘↵ / ⌫ / esc / ←→ (страницы PDF) — его.
+    if (pv?.key(ne)) {
+      e.preventDefault()
+      return
+    }
     const d = docRef.current
     const v = d.text
     const sel = getSelection(el) ?? { start: v.length, end: v.length }
@@ -521,6 +677,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         selTok.current = null
       }
       setSelection(el, to)
+      syncNear()
       return
     }
     if (selTok.current && !['Shift', 'Meta', 'Control', 'Alt'].includes(e.key)) {
@@ -649,6 +806,31 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     if (cut) apply(insertText(docRef.current, sel, ''))
   }
 
+  // Выбор `@` (режим Claude): файлы из подсказок путей + блоки и сообщения ленты.
+  const cs = completion.state
+  const atFilesList = at && cs.open && cs.ctx?.command === AT_COMMAND ? cs.items : null
+  const atOn = claudeMode && !!at && pathsOn && !p.disabled && !p.answer
+  const rows = useMemo<AtRow[]>(
+    () => (atOn && at ? atRows(at.ctx.namePart, at.ctx.dirPart, atFilesList ?? [], props.current.atFeed?.() ?? null) : []),
+    [atOn, at, atFilesList],
+  )
+  const atRowsRef = useRef<AtRow[]>([])
+  useEffect(() => {
+    atRowsRef.current = rows
+  })
+  const rowsKey = rows.map((r) => r.key).join('\n')
+  useEffect(() => {
+    setAtSel(0)
+  }, [rowsKey, setAtSel])
+  const [atWide, setAtWide] = useState(true)
+  const atShown = rows.length > 0
+  useLayoutEffect(() => {
+    if (!atShown) return
+    const w = wrapRef.current?.clientWidth ?? 0
+    // В jsdom размеров нет — просмотр не прячем.
+    setAtWide(w === 0 || w >= AT_SIDE_MIN)
+  }, [atShown])
+
   // Попап — над полем, у начала подставляемого токена.
   const { open, ctx, items, buffer, lineStart } = completion.state
   const [popupX, setPopupX] = useState(0)
@@ -683,7 +865,21 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const placeholder = p.answer ? ANSWER_PLACEHOLDER : claudeMode ? CLAUDE_PLACEHOLDER : PLACEHOLDER
   return (
     <div className="input-wrap" ref={wrapRef}>
-      {open && ctx && pathsOn && !p.disabled && (
+      {atShown && (
+        <AtPicker
+          rows={rows}
+          selected={Math.min(atSel, rows.length - 1)}
+          query={at?.ctx.namePart ?? ''}
+          dirPart={at?.ctx.dirPart ?? ''}
+          dir={cs.dir}
+          side={atWide}
+          cwd={p.cwd()}
+          home={p.home ?? undefined}
+          onSelect={setAtSel}
+          onPick={(i) => pickAt(i, false)}
+        />
+      )}
+      {!claudeMode && open && ctx && pathsOn && !p.disabled && (
         <CompletionPopup
           state={completion.state}
           x={popupX}
@@ -750,6 +946,16 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             onCopy={(e) => onCopy(e, false)}
             onCut={(e) => onCopy(e, true)}
             onDrop={(e) => e.preventDefault()}
+            onMouseOver={(e) => {
+              // Наведение на значок — мини-просмотр (с задержкой, см. usePreview).
+              const tk = (e.target as HTMLElement).closest?.('[data-tk]') as HTMLElement | null
+              const t = tk ? docRef.current.tokens.find((x) => x.id === tk.dataset.tk) : undefined
+              if (tk && t && !props.current.disabled) props.current.preview?.hover(t, tk, 'input')
+            }}
+            onMouseOut={(e) => {
+              const tk = (e.target as HTMLElement).closest?.('[data-tk]') as HTMLElement | null
+              if (tk && !tk.contains(e.relatedTarget as Node | null)) props.current.preview?.leave()
+            }}
             onMouseDown={(e) => {
               // Клик по значку — выделить его (⌫ удалит), курсор — после значка.
               const tk = (e.target as HTMLElement).closest?.('[data-tk]') as HTMLElement | null
@@ -779,6 +985,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               const s = el ? getSelection(el) : null
               savedCursor.current = s ? s.end : null
               setFocused(false)
+              setNearTok(false)
+              setAt(null)
               completionRef.current.close()
               hintsRef.current.close()
               setPickerState(null)
@@ -792,7 +1000,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           )}
           <span className="in-measure" ref={measureRef} aria-hidden="true" />
         </div>
-        <span className="in-hint">{p.answer ? ANSWER_HINT : claudeMode ? CLAUDE_HINT : ASK_HINT}</span>
+        <span className="in-hint">{p.answer ? ANSWER_HINT : claudeMode ? (nearTok ? PREVIEW_HINT : CLAUDE_HINT) : ASK_HINT}</span>
       </div>
     </div>
   )

@@ -71,6 +71,8 @@ export interface CompletionApi {
   onKey(e: KeyLike): boolean
   /** Подставить элемент i (как Tab). */
   pick(i: number): void
+  /** `@путь`: вставить значок элемента i (и папки — как ↵, а не заход в неё). */
+  insertAt(i: number): void
   close(): void
 }
 
@@ -119,7 +121,7 @@ export function useCompletion(o: CompletionOptions): CompletionApi {
     api.setOptions(o)
   })
   useEffect(() => api.dispose, [api])
-  return { state, update: api.update, reset: api.reset, onKey: api.onKey, pick: api.pick, close: api.close }
+  return { state, update: api.update, reset: api.reset, onKey: api.onKey, pick: api.pick, insertAt: api.insertAt, close: api.close }
 }
 
 function createController(initial: CompletionOptions, publish: (s: CompletionState) => void) {
@@ -295,6 +297,7 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
     onKey,
     close,
     pick: (i: number) => apply(i, false),
+    insertAt: (i: number) => apply(i, false, true),
     dispose: stopPending,
     setOptions: (o: CompletionOptions) => void (options = o),
   }

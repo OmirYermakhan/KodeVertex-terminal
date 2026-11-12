@@ -5,6 +5,7 @@ mod fonts;
 mod fs_complete;
 mod git;
 mod history;
+mod preview;
 mod pty;
 mod settings;
 mod shell;
@@ -78,6 +79,11 @@ pub fn run() {
       claude_settings::claude_save_defaults,
       attach::attach_inspect,
       attach::attach_clipboard_image,
+      preview::preview_text,
+      preview::preview_dir,
+      preview::preview_image,
+      preview::preview_pdf,
+      preview::preview_open,
       slash_commands::claude_slash_commands
     ])
     .manage(pty::PtyManager::default())

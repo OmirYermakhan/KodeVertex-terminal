@@ -380,6 +380,61 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .you.tks { line-height: 1.75; }
 .tk-ghost { position: absolute; z-index: 30; pointer-events: none; opacity: 0.92; }
 
+/* Мини-просмотр значка (макет 06-attachments .pv, сцены Б, В, Д, Е): ~300px над значком. */
+.pv-float { position: absolute; z-index: 25; }
+.pv { box-sizing: border-box; background: var(--pv); border: 1px solid var(--rule); border-radius: 10px; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55); font-family: var(--font-code); font-size: 12px; font-weight: 400; color: var(--text); overflow: hidden; line-height: normal; text-align: left; white-space: normal; letter-spacing: 0; text-transform: none; cursor: default; }
+.pv .ph { display: flex; align-items: center; gap: 7px; padding: 8px 11px; border-bottom: 1px solid var(--rule); color: var(--strong); min-width: 0; }
+.pv .ph .ico { width: 14px; height: 14px; }
+.pv .ph .pn { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv .ph .tk { margin: 0; flex: none; }
+.pv .ph .m { margin-left: auto; flex: none; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.pv .ph .m.bad { color: var(--del); }
+.pv .body { padding: 9px 11px; line-height: 1.6; max-height: 220px; overflow: auto; }
+.pv .body.tight { padding: 6px; }
+.pv .body.msg { padding-bottom: 0; border-bottom: 9px solid transparent; font-family: var(--font-text); font-size: 13px; line-height: 1.55; color: var(--text); white-space: pre-line; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4; max-height: calc(13px * 1.55 * 4); overflow-wrap: anywhere; }
+.pv .body.msg.side { -webkit-line-clamp: 3; line-clamp: 3; max-height: calc(13px * 1.55 * 3); }
+.pv .body.msg code { font-family: var(--font-code); font-size: 11.5px; color: var(--accText); }
+.pv .ft { display: flex; gap: 12px; padding: 7px 11px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 11px; white-space: nowrap; min-width: 0; }
+.pv .ft > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pv .ft b { color: var(--text); font-weight: 400; }
+.pv .ft .fh { margin-left: auto; flex: none; }
+.pv pre { margin: 0; font-family: var(--font-code); font-size: 11.5px; line-height: 1.6; white-space: pre; overflow: hidden; font-variant-ligatures: var(--liga); }
+.pv .ln { color: var(--pvLn); display: inline-block; width: 22px; }
+.pv .hljs-name, .pv .hljs-tag .hljs-name { color: var(--hlTag); }
+.pv .dim, .pv-note { color: var(--muted); }
+.pv-err { color: var(--del); white-space: normal; overflow-wrap: anywhere; }
+.pv .ico { width: 15px; height: 15px; flex: none; color: var(--muted); }
+.pv .ico.sm { width: 12px; height: 12px; vertical-align: -2px; }
+.pv .ico.code, .pop .ico.code { color: var(--info); }
+.pv .ico.dir, .pop .ico.dir { color: var(--warn); }
+.pv .ico.pdf, .pop .ico.pdf { color: var(--del); }
+.pv .ico.ok, .pop .ico.ok { color: var(--add); }
+.pv .ico.bad, .pop .ico.bad { color: var(--del); }
+.pv .ico.ai, .pop .ico.ai { color: var(--tkMsgIco); }
+.pv .shot { box-sizing: border-box; height: 150px; border-radius: 6px; border: 1px solid var(--rule); background: var(--bg); overflow: hidden; position: relative; }
+.pv-bubble .shot { height: 64px; }
+.pv-side .shot, .pv-side .pdfp { height: 100px; }
+.pv .shot img, .pv .pdfp img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
+.pv .pdfp { box-sizing: border-box; height: 150px; border-radius: 4px; background: #e9e7e1; overflow: hidden; position: relative; }
+/* ↵ целиком: картинка поверх панели. */
+.pv-full { position: absolute; inset: 0; z-index: 40; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; box-sizing: border-box; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); cursor: zoom-out; }
+.pv-full img { max-width: 100%; max-height: calc(100% - 30px); object-fit: contain; border-radius: 6px; border: 1px solid var(--rule); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55); }
+.pv-full-cap { font-family: var(--font-code); font-size: 11px; color: var(--muted); }
+
+/* Выбор через @ (макет 06, сцена Е .pop): группы «Файлы», «Блоки», «Сообщения» и просмотр справа. */
+.pop { position: absolute; left: 12px; bottom: calc(100% - 16px); z-index: 20; width: 56%; min-width: min(340px, calc(100% - 24px)); background: var(--panel); border: 1px solid var(--rule); border-radius: 9px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45); font-family: var(--font-code); font-size: 12.5px; color: var(--text); overflow: hidden; line-height: normal; }
+.pop-list { max-height: calc(8 * 25px + 3 * 23px); overflow-y: auto; }
+.pop .gh { padding: 6px 12px 4px; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.pop .it { display: flex; align-items: center; gap: 9px; padding: 5px 12px; color: var(--text); cursor: pointer; white-space: nowrap; }
+.pop .it .tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pop .it .dim { color: var(--muted); }
+.pop .it .d { margin-left: auto; flex: none; color: var(--muted); font-size: 11px; }
+.pop .it.on { background: color-mix(in srgb, var(--acc) 12%, var(--bg)); color: var(--strong); box-shadow: inset 2px 0 0 var(--acc); }
+.pop .it mark { background: none; color: var(--accText); }
+.pop .ico { width: 15px; height: 15px; flex: none; color: var(--muted); }
+.pop .ft { padding: 6px 12px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pop-side { position: absolute; right: 12px; bottom: calc(100% + 38px); z-index: 21; }
+
 /* Файлы над окном (макет 06, сцена Ж): лента затемняется, рамка «Отпустите, чтобы вставить…». */
 .drop { position: absolute; inset: 0; z-index: 20; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 78%, transparent); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); pointer-events: none; }
 .drop .zone { box-sizing: border-box; width: 78%; height: 70%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 2px dashed var(--acc); border-radius: 14px; background: color-mix(in srgb, var(--acc) 8%, transparent); color: var(--strong); font-family: var(--font-text); font-size: 16px; line-height: normal; }

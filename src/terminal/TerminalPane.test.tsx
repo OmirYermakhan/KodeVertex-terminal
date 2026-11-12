@@ -1022,6 +1022,46 @@ describe('TerminalPane', () => {
       expect(document.querySelector('.you .tk')!.textContent).toBe('npm test · 1')
     })
 
+    it('мини-просмотр: ␣ у значка блока — карточка, ⌫ убирает значок; наведение на значок в пузыре «Вы» — карточка, ↵ выбирает блок', async () => {
+      invoke.mockImplementation((cmd: string) => Promise.resolve(cmd === 'claude_start' ? 'c1' : undefined))
+      const { term } = await mounted()
+      osc133(term, 'C;' + b64('npm test'))
+      term.lines = ['out1', 'out2']
+      osc133(term, 'D;1')
+      type('почини ')
+      act(() => runPaneCommand('p', 'blockPrev'))
+      act(() => runPaneCommand('p', 'blockAttach'))
+      act(() => runPaneCommand('p', 'blockNext'))
+      expect(document.querySelector('.input .in-hint')!.textContent).toBe('␣ просмотр')
+      keyIn(' ')
+      const card = document.querySelector('.pv-float .pv')!
+      expect(card.querySelector('.ph .pn')!.textContent).toBe('npm test')
+      expect(card.querySelector('.ph .m.bad')!.textContent).toMatch(/^код 1/)
+      expect(card.querySelector('pre')!.textContent).toBe('out1\nout2')
+      expect(card.querySelector('.ft')!.textContent).toContain('↵ к блоку')
+      keyIn('Backspace')
+      expect(textarea().querySelector('.tk')).toBeNull()
+      expect(document.querySelector('.pv-float')).toBeNull()
+      act(() => runPaneCommand('p', 'blockPrev'))
+      act(() => runPaneCommand('p', 'blockAttach'))
+      act(() => runPaneCommand('p', 'blockNext'))
+      keyIn('Enter')
+      await act(async () => {
+        await flush()
+        await flush()
+      })
+      expect(document.querySelector('.blk.sel')).toBeNull()
+      const tk = document.querySelector<HTMLElement>('.you .tk')!
+      fireEvent.mouseEnter(tk)
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 300))
+      })
+      expect(document.querySelector('.pv-float .pv .ph .pn')!.textContent).toBe('npm test')
+      keyIn('Enter')
+      expect(document.querySelector('.pv-float')).toBeNull()
+      expect(document.querySelector('.blk.sel .cmd')!.textContent).toBe('npm test')
+    })
+
     it('перетаскивание: «⌘L в сообщение» в строку ввода — значок; заголовок с выделенным текстом не тащится', async () => {
       const { term } = await mounted()
       osc133(term, 'C;' + b64('npm test'))

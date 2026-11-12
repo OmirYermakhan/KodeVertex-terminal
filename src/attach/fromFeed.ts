@@ -18,6 +18,7 @@ export function blockAttachment(b: ShellBlock): Attachment {
   return {
     id: attachmentId(),
     kind: 'block',
+    source: b.id,
     label: clip(b.command.replace(/\s+/g, ' ').trim() || 'блок', LABEL_MAX),
     block: {
       command: b.command,
@@ -39,11 +40,12 @@ function plain(md: string): string {
     .trim()
 }
 
-export function messageAttachment(text: string, agent: Agent | undefined): Attachment {
+export function messageAttachment(text: string, agent: Agent | undefined, source?: string): Attachment {
   const author = agent?.name ?? 'Claude'
   return {
     id: attachmentId(),
     kind: 'message',
+    ...(source ? { source } : {}),
     label: `${author}: «${clip(plain(text), SNIPPET_MAX)}»`,
     message: { author, model: agent?.model ?? null, text },
   }
@@ -55,5 +57,5 @@ export function feedAttachment(it: FeedItem | undefined, agents: readonly Agent[
   if (it.kind === 'shell') return it.running ? null : blockAttachment(it)
   const x = it.item
   if (x.type !== 'assistant' || x.streaming || !x.text.trim()) return null
-  return messageAttachment(x.text, agents.find((a) => a.id === x.agentId))
+  return messageAttachment(x.text, agents.find((a) => a.id === x.agentId), it.id)
 }

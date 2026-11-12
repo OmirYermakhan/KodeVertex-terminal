@@ -42,6 +42,8 @@ export interface Attachment {
   reason?: string
   block?: BlockSnapshot
   message?: MessageSnapshot
+  /** Элемент ленты, из которого взят блок или сообщение (↵ в просмотре — к нему). */
+  source?: string
 }
 
 /** Текст строки ввода со значками: tokens[i] — i-й TOKEN_CHAR в text. */

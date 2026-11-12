@@ -7,7 +7,8 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...
 const dialogOpen = vi.fn(() => Promise.resolve(null))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: () => dialogOpen() }))
 
-const { InputBar, ASK_HINT, CLAUDE_HINT, CLAUDE_PLACEHOLDER, CONTINUATION_NOTE, PLACEHOLDER, UNSUPPORTED_NOTE } = await import('./InputBar')
+const { InputBar, ASK_HINT, CLAUDE_HINT, CLAUDE_PLACEHOLDER, CONTINUATION_NOTE, PLACEHOLDER, PREVIEW_HINT, UNSUPPORTED_NOTE } = await import('./InputBar')
+const { createPreview } = await import('../attach/preview/usePreview')
 const { AT_HINT } = await import('../completion/CompletionPopup')
 const { TOKEN_CHAR: T } = await import('../attach/types')
 const { resetHistory, pushHistory } = await import('./history')
@@ -686,7 +687,7 @@ describe('InputBar: значки вложений', () => {
       await new Promise((r) => setTimeout(r, 50))
     })
     expect(invoke).toHaveBeenCalledWith('fs_list', expect.objectContaining({ dir: '/w' }))
-    expect(s.container.querySelector('.cp-hint')!.textContent).toBe(AT_HINT)
+    expect(s.container.querySelector('.pop .ft')!.textContent).toBe(AT_HINT)
     s.key('Enter')
     expect(s.p.onAsk).not.toHaveBeenCalled()
     expect(s.ta.value).toBe(`глянь ${T}`)
@@ -737,6 +738,140 @@ describe('InputBar: правки после ревью', () => {
       await new Promise((r) => setTimeout(r, 50))
     })
     expect(invoke).toHaveBeenCalledWith('fs_list', expect.objectContaining({ dir: '/w' }))
-    expect(s.container.querySelector('.cp')).not.toBeNull()
+    expect(s.container.querySelector('.pop')).not.toBeNull()
+  })
+})
+
+describe('InputBar: мини-просмотр значков и `@` с группами', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    invoke.mockResolvedValue([])
+    resetHistory()
+  })
+  type State = import('../attach/preview/usePreview').PreviewState
+  const tok = (id: string, over: Record<string, unknown> = {}) => ({ id, kind: 'file' as const, label: `${id}.tsx`, path: `/w/${id}.tsx`, ...over })
+  const withPreview = (over: Partial<Parameters<typeof InputBar>[0]> = {}) => {
+    const box: { state: State | null; s?: ReturnType<typeof setup> } = { state: null }
+    const onAction = vi.fn((a: { type: string; id?: string }) => {
+      if (a.type === 'remove') box.s!.ref.current!.removeToken(a.id!)
+    })
+    const api = createPreview((st) => (box.state = st), () => ({ onAction }))
+    const s = setup({ preview: api, ...over })
+    box.s = s
+    s.set('claude')
+    s.key('Enter')
+    return { ...s, api, onAction, box }
+  }
+
+  it('␣ у значка открывает просмотр (повторный ␣ закрывает), не у значка — обычный пробел; подсказка «␣ просмотр»', () => {
+    const s = withPreview()
+    s.set('см ')
+    act(() => void s.ref.current!.insertTokens([tok('x')]))
+    expect(s.container.querySelector('.in-hint')!.textContent).toBe(PREVIEW_HINT)
+    expect(s.key(' ')).toBe(false)
+    expect(s.box.state?.target).toMatchObject({ token: { id: 'x' }, from: 'input', via: 'key' })
+    expect(s.ta.value).toBe(`см ${T}`)
+    s.key(' ')
+    expect(s.box.state?.target).toBeNull()
+    // Курсор в начале строки — не у значка: пробел не перехватывается.
+    act(() => setSelection(s.ed, 1))
+    fireEvent(document, new Event('selectionchange'))
+    expect(s.container.querySelector('.in-hint')!.textContent).toBe(CLAUDE_HINT)
+    expect(s.key(' ')).toBe(true)
+    expect(s.box.state?.target ?? null).toBeNull()
+  })
+
+  it('⌫ в открытом просмотре убирает значок; ↵ — действие, а не отправка; esc закрывает, режим Claude остаётся', () => {
+    const s = withPreview()
+    s.set('a ')
+    act(() => void s.ref.current!.insertTokens([tok('x'), tok('y')]))
+    s.key(' ')
+    expect(s.box.state?.target?.token.id).toBe('y')
+    act(() => void s.key('Backspace'))
+    expect(s.ta.value).toBe(`a ${T} `)
+    expect(s.ed.querySelectorAll('.tk')).toHaveLength(1)
+    expect(s.box.state?.target).toBeNull()
+    act(() => setSelection(s.ed, 3))
+    s.key(' ')
+    s.key('Enter')
+    expect(s.onAction).toHaveBeenLastCalledWith({ type: 'open', how: 'default', path: '/w/x.tsx' }, expect.anything())
+    expect(s.p.onAsk).not.toHaveBeenCalled()
+    s.key(' ')
+    s.key('Escape')
+    expect(s.box.state?.target).toBeNull()
+    expect(s.container.querySelector('.in-mode')).not.toBeNull()
+  })
+
+  it('выключенная строка: ␣ просмотр не открывает, открытый из строки — закрывается', () => {
+    const s = withPreview()
+    act(() => void s.ref.current!.insertTokens([tok('x')]))
+    s.key(' ')
+    expect(s.box.state?.target).not.toBeNull()
+    s.rerender(<InputBar ref={s.ref} {...s.p} preview={s.api} disabled />)
+    expect(s.box.state?.target).toBeNull()
+    s.key(' ')
+    expect(s.box.state?.target ?? null).toBeNull()
+  })
+
+  it('наведение на значок в строке — просмотр с задержкой', () => {
+    const s = withPreview()
+    act(() => void s.ref.current!.insertTokens([tok('x')]))
+    const hover = vi.spyOn(s.api, 'hover')
+    const leave = vi.spyOn(s.api, 'leave')
+    const tk = s.ed.querySelector<HTMLElement>('.tk')!
+    expect(tk.title).toBe('')
+    fireEvent.mouseOver(tk.querySelector('svg')!)
+    expect(hover).toHaveBeenCalledWith(expect.objectContaining({ id: 'x' }), tk, 'input')
+    fireEvent.mouseOut(tk, { relatedTarget: s.ed })
+    expect(leave).toHaveBeenCalled()
+  })
+
+  it('`@`: группы файлов, блоков и сообщений; ↓↵ вставляет блок значком вместо `@…`; ⇥ заходит в папку', async () => {
+    invoke.mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === 'fs_list' ? [{ name: 'form.css', isDir: false, isSymlink: false }, { name: 'forms', isDir: true, isSymlink: false }] : null),
+    )
+    const block = { kind: 'shell' as const, id: 'b1', command: 'npm test', cwd: '/w', startedAt: 0, durationMs: 4200, exitCode: 1, html: '<pre><div><span>FAIL form.test.tsx</span></div></pre>', lines: 1, running: false }
+    const atFeed = () => ({ blocks: [block], messages: [{ id: 'm1', text: 'Form готова', agent: undefined }] })
+    const s = withPreview({ completions: true, atFeed })
+    s.set('глянь @fo')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50))
+    })
+    const pop = s.container.querySelector('.pop')!
+    expect([...pop.querySelectorAll('.gh')].map((e) => e.textContent)).toEqual(['Файлы', 'Блоки', 'Сообщения'])
+    expect([...pop.querySelectorAll('.it')].map((e) => e.textContent)).toEqual(['forms/', 'form.css', 'npm test · form.test.tsxкод 1', 'Claude: «Form готова»'])
+    expect(pop.querySelector('.it .ico.bad')).not.toBeNull()
+    expect([...pop.querySelectorAll('.it mark')].map((e) => e.textContent)).toEqual(['fo', 'fo', 'fo', 'Fo'])
+    expect(s.container.querySelector('.pop-side .pv')).not.toBeNull()
+    s.key('ArrowDown')
+    s.key('ArrowDown')
+    expect(pop.querySelectorAll('.it')[2].classList.contains('on')).toBe(true)
+    s.key('Enter')
+    expect(s.p.onAsk).not.toHaveBeenCalled()
+    expect(s.ta.value).toBe(`глянь ${T}`)
+    expect(s.ed.querySelector('.tk')!.className).toBe('tk blkt fail')
+    expect(s.container.querySelector('.pop')).toBeNull()
+    // ⇥ на папке — в неё (а ↵ вставил бы папку значком).
+    s.set('@fo')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50))
+    })
+    s.key('Tab')
+    expect(s.ta.value).toBe('@forms/')
+  })
+
+  it('`@`: esc закрывает выбор до следующей правки строки', async () => {
+    invoke.mockImplementation((cmd: string) => Promise.resolve(cmd === 'fs_list' ? [{ name: 'a.ts', isDir: false, isSymlink: false }] : null))
+    const s = withPreview({ completions: true })
+    s.set('@a')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50))
+    })
+    expect(s.container.querySelector('.pop')).not.toBeNull()
+    s.key('Escape')
+    expect(s.container.querySelector('.pop')).toBeNull()
+    fireEvent(document, new Event('selectionchange'))
+    expect(s.container.querySelector('.pop')).toBeNull()
+    expect(s.container.querySelector('.in-mode')).not.toBeNull()
   })
 })

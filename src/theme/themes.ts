@@ -49,6 +49,10 @@ export interface ThemeTokens {
   tkYou: string
   tkYouRule: string
   tkYouText: string
+  /** Мини-просмотр (макет 06 .pv): фон карточки, номера строк, теги в коде. */
+  pv: string
+  pvLn: string
+  hlTag: string
 }
 
 export interface Theme {
@@ -109,6 +113,9 @@ export const THEMES: Record<ThemeId, Theme> = {
       tkYou: '#1b1e23',
       tkYouRule: '#45484c',
       tkYouText: '#fefdf7',
+      pv: '#101215',
+      pvLn: '#5a5f65',
+      hlTag: '#c9a0ff',
     },
   },
   warm: {
@@ -161,6 +168,9 @@ export const THEMES: Record<ThemeId, Theme> = {
       tkYou: '#282522',
       tkYouRule: '#4e4b46',
       tkYouText: '#fbf6ec',
+      pv: '#1f1e1c',
+      pvLn: '#66625a',
+      hlTag: '#c9a0c9',
     },
   },
   cold: {
@@ -213,6 +223,9 @@ export const THEMES: Record<ThemeId, Theme> = {
       tkYou: '#202730',
       tkYouRule: '#464d57',
       tkYouText: '#fbffff',
+      pv: '#191e26',
+      pvLn: '#5b6572',
+      hlTag: '#b9a2f0',
     },
   },
   light: {
@@ -265,6 +278,9 @@ export const THEMES: Record<ThemeId, Theme> = {
       tkYou: '#eae9e2',
       tkYouRule: '#c0bfb9',
       tkYouText: '#000003',
+      pv: '#f2f1ec',
+      pvLn: '#a1a4a7',
+      hlTag: '#8a3ffc',
     },
   },
   as: {
@@ -317,6 +333,9 @@ export const THEMES: Record<ThemeId, Theme> = {
       tkYou: '#243456',
       tkYouRule: '#4b5d82',
       tkYouText: '#e3eaf9',
+      pv: '#232427',
+      pvLn: '#4f535a',
+      hlTag: '#c77dbb',
     },
   },
 }

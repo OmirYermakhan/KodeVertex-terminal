@@ -11,8 +11,8 @@ const isTk = (n: Node): n is HTMLElement => n.nodeType === 1 && !!(n as HTMLElem
 const isEndBr = (n: Node) => n.nodeName === 'BR' && !n.nextSibling && !!n.parentNode && n.parentNode.lastChild === n
 const visible = (s: string) => s.replaceAll(ZWSP, '')
 
-/** Перерисовать поле по модели. selected — id выделенного значка. */
-export function renderDoc(root: HTMLElement, doc: Doc, selected: string | null): void {
+/** Перерисовать поле по модели. selected — id выделенного значка; titles — подсказка title у значков. */
+export function renderDoc(root: HTMLElement, doc: Doc, selected: string | null, titles = true): void {
   const frag = document.createDocumentFragment()
   const segs = segments(doc)
   const text = (s: string) => frag.appendChild(document.createTextNode(s))
@@ -24,7 +24,7 @@ export function renderDoc(root: HTMLElement, doc: Doc, selected: string | null):
       continue
     }
     if (!prevText) text(ZWSP)
-    frag.appendChild(tokenElement(s.token, s.token.id === selected))
+    frag.appendChild(tokenElement(s.token, s.token.id === selected, titles))
     prevText = false
   }
   // После значка в конце — место для курсора; после \n в конце — пустая последняя строка.
