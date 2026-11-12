@@ -178,9 +178,17 @@ export const AgentsPanel = forwardRef<AgentsPanelHandle, AgentsPanelProps>(funct
   const [sel, setSel] = useState<string | null>(null)
   const [open, setOpen] = useState<string | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
-  const live = p.state.agents.some((a) => a.status === 'running' || a.status === 'waiting')
+  // Начальный «waiting» главного агента (startedAt 0) — не повод тикать.
+  const live = p.state.agents.some((a) => (a.status === 'running' || a.status === 'waiting') && a.startedAt > 0)
   const now = useTicker(p.now, live)
   const selected = rows.some((r) => r.agent.id === sel) ? sel : null
+
+  // Выбранная строка (и её подробности) — в видимой области прокручиваемой панели.
+  useEffect(() => {
+    if (!selected) return
+    const row = boxRef.current?.querySelector<HTMLElement>(`[data-agent-id="${CSS.escape(selected)}"]`)
+    row?.scrollIntoView?.({ block: 'nearest' })
+  }, [selected, open])
 
   const pick = (id: string | null) => {
     setSel(id)

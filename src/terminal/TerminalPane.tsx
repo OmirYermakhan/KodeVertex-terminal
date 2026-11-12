@@ -385,12 +385,13 @@ export function TerminalPane(p: TerminalPaneProps) {
     if (nothingFocused || paneRef.current?.contains(active)) focusActive()
   }, [running, alt, focusActive])
 
-  // ⌘J скрыл панель агентов, пока фокус был в ней (элемент уже удалён) — вернуть ввод.
+  // Панель агентов исчезла (⌘J или сессии больше нет), пока фокус был в ней (элемент уже удалён) — вернуть ввод.
+  const agentsShown = !!claude && !agentsHidden
   useEffect(() => {
-    if (!agentsHidden || !p.focused) return
+    if (agentsShown || !p.focused) return
     const active = document.activeElement
     if (!active || active === document.body) focusActive()
-  }, [agentsHidden, p.focused, focusActive])
+  }, [agentsShown, p.focused, focusActive])
 
   // host перенесён в слот (блок/оверлей): размер, перерисовка, фокус.
   const onAttach = useCallback(() => {

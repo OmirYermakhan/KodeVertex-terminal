@@ -805,6 +805,16 @@ describe('TerminalPane', () => {
       expect(panel()).not.toBeNull()
     })
 
+    it('сессия исчезла, пока фокус был в панели, — фокус в строку ввода', async () => {
+      await mounted()
+      withSession()
+      act(() => runPaneCommand('p', 'blockNext'))
+      expect(document.activeElement).toBe(panel())
+      act(() => useClaudeSessions.setState({ sessions: {} }))
+      expect(panel()).toBeNull()
+      expect(document.activeElement).toBe(textarea())
+    })
+
     it('клик по строке агента не уводит фокус в строку ввода', async () => {
       await mounted()
       withSession()

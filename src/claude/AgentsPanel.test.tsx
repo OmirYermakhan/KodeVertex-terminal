@@ -113,4 +113,41 @@ describe('AgentsPanel', () => {
       vi.useRealTimers()
     }
   })
+
+  it('много агентов: панель прокручивается (max-height), заголовок липкий, выбранная строка — в видимой области', async () => {
+    // CSS в vitest не обрабатывается — правила читаем из файла (типов node в tsconfig приложения нет).
+    const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as { readFileSync(p: string, e: string): string }
+    const css = fs.readFileSync('src/global.css', 'utf8')
+    expect(css).toMatch(/\.agents \{[^}]*max-height: min\(40vh, 280px\);[^}]*overflow-y: auto;/)
+    expect(css).toMatch(/\.agents \.dh \{[^}]*position: sticky; top: 0;[^}]*background: var\(--panel2\);/)
+    const spy = vi.fn()
+    const orig = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = spy
+    try {
+      const base = mockupScene()
+      const many = Array.from({ length: 12 }, (_, i) => agent({ id: `a${i}`, parentId: 'main', name: `Агент ${i}` }))
+      const ref = createRef<AgentsPanelHandle>()
+      render(<AgentsPanel ref={ref} state={{ ...base, agents: [...base.agents, ...many] }} onExit={() => {}} now={T0} />)
+      act(() => ref.current!.focus())
+      const box = screen.getByRole('listbox')
+      for (let i = 0; i < 6; i++) fireEvent.keyDown(box, { key: 'ArrowDown' })
+      const sel = document.querySelector('.row.focus')!
+      expect(sel.getAttribute('data-agent-id')).toBe('a2')
+      expect(spy.mock.contexts.at(-1)).toBe(sel)
+      expect(spy).toHaveBeenLastCalledWith({ block: 'nearest' })
+    } finally {
+      Element.prototype.scrollIntoView = orig
+    }
+  })
+
+  it('начальный главный агент (startedAt 0) часы не запускает', () => {
+    const spy = vi.spyOn(globalThis, 'setInterval')
+    try {
+      render(<AgentsPanel state={initialClaude()} onExit={() => {}} />)
+      expect(spy).not.toHaveBeenCalled()
+      expect(rowsText()[0][4]).toBe('—')
+    } finally {
+      spy.mockRestore()
+    }
+  })
 })
