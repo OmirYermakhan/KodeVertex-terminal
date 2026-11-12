@@ -1,5 +1,4 @@
 import { act, fireEvent, render } from '@testing-library/react'
-import { Profiler } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PtyHandle, SpawnOptions } from './ptyClient'
 
@@ -90,7 +89,13 @@ vi.mock('@xterm/addon-serialize', () => ({
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn() }))
 vi.mock('@tauri-apps/api/path', () => ({ homeDir: () => Promise.resolve('/h') }))
 const invoke = vi.fn()
-vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
+class FakeChannel<T> {
+  onmessage: (m: T) => void
+  constructor(onmessage: (m: T) => void) {
+    this.onmessage = onmessage
+  }
+}
+vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a), Channel: FakeChannel }))
 
 interface PendingSpawn {
   opts: SpawnOptions
@@ -119,6 +124,8 @@ const { useSettings } = await import('../settings/store')
 const { DEFAULTS, terminalLineHeight } = await import('../settings/settings')
 const { codeFontStack } = await import('../theme/fontFamily')
 const { runPaneCommand } = await import('../feed/paneCommands')
+const { getHistory, resetHistory } = await import('../input/history')
+const { useClaudeSessions } = await import('../claude/sessionStore')
 
 const flush = (ms = 0) => new Promise((r) => setTimeout(r, ms))
 
@@ -127,6 +134,10 @@ type KeyHandler = (e: KeyboardEvent) => boolean
 const oscHandler = (t: FakeTerminal, id: number) =>
   t.parser.registerOscHandler.mock.calls.find((c) => c[0] === id)![1] as OscHandler
 const keyHandler = (t: FakeTerminal) => t.attachCustomKeyEventHandler.mock.calls[0][0] as KeyHandler
+const textarea = () => document.querySelector<HTMLTextAreaElement>('.in-ta')!
+/** Набор в строке ввода: значение и курсор в конце. */
+const type = (v: string) => fireEvent.change(textarea(), { target: { value: v, selectionStart: v.length, selectionEnd: v.length } })
+const keyIn = (key: string, o: KeyboardEventInit = {}) => fireEvent.keyDown(textarea(), { key, ...o })
 
 function props() {
   return { paneId: 'p', focused: false, onCwd: vi.fn(), onExit: vi.fn(), onFocus: vi.fn() }
@@ -140,6 +151,247 @@ describe('TerminalPane', () => {
     useUi.setState({ settingsOpen: false })
     useSettings.setState({ settings: { ...DEFAULTS } })
     invoke.mockReset()
+    resetHistory()
+    useClaudeSessions.setState({ sessions: {} })
+  })
+
+  it('фокус в строку ввода при закрытии настроек', () => {
+    useUi.setState({ settingsOpen: true })
+    render(<TerminalPane {...props()} focused />)
+    expect(document.activeElement).not.toBe(textarea())
+    act(() => useUi.setState({ settingsOpen: false }))
+    expect(document.activeElement).toBe(textarea())
+    expect(terms[0].focus).not.toHaveBeenCalled()
+  })
+
+  describe('строка ввода', () => {
+    async function mounted(focused = true) {
+      const r = render(<TerminalPane {...props()} focused={focused} initialCwd="/w" />)
+      spawns[0].resolve()
+      await flush()
+      return { ...r, term: terms[0], write: spawns[0].handle.write }
+    }
+
+    it('↵ пишет команду в PTY и добавляет её в историю; ↑ её возвращает', async () => {
+      const { write } = await mounted()
+      type('ls -la')
+      keyIn('Enter')
+      expect(write).toHaveBeenCalledWith('ls -la\r')
+      expect(textarea().value).toBe('')
+      expect(getHistory()).toEqual(['ls -la'])
+      keyIn('ArrowUp')
+      expect(textarea().value).toBe('ls -la')
+    })
+
+    it('многострочная команда уходит одной строкой ZLE (bracketed paste)', async () => {
+      const { write } = await mounted()
+      type('for i in 1 2\ndo echo $i; done')
+      keyIn('Enter')
+      expect(write).toHaveBeenCalledWith('\x1b[200~for i in 1 2\ndo echo $i; done\x1b[201~\r')
+    })
+
+    it('пустая строка не отправляется', async () => {
+      const { write } = await mounted()
+      type('   ')
+      keyIn('Enter')
+      expect(write).not.toHaveBeenCalled()
+    })
+
+    it('подсказки путей: `cd Док` → Tab → значение поля `cd Документы/`, в PTY ничего', async () => {
+      invoke.mockImplementation(async (cmd: string) =>
+        cmd === 'fs_list' ? [{ name: 'Документы', isDir: true, isSymlink: false }] : { kind: 'dir', entries: [], total: 0 },
+      )
+      const { write } = await mounted()
+      await act(async () => {
+        type('cd Док')
+        await flush(40)
+      })
+      expect(invoke).toHaveBeenCalledWith('fs_list', { dir: '/w', dirsOnly: true, includeHidden: false })
+      expect(document.querySelector('.input-wrap .cp')).not.toBeNull()
+      keyIn('Tab')
+      expect(textarea().value).toBe('cd Документы/')
+      expect(write).not.toHaveBeenCalled()
+      // esc при открытом попапе закрывает его.
+      await act(async () => await flush(40))
+      expect(document.querySelector('.cp')).not.toBeNull()
+      keyIn('Escape')
+      expect(document.querySelector('.cp')).toBeNull()
+    })
+
+    it('↵ на cd в попапе подставляет и выполняет', async () => {
+      invoke.mockImplementation(async (cmd: string) =>
+        cmd === 'fs_list' ? [{ name: 'src', isDir: true, isSymlink: false }] : { kind: 'dir', entries: [], total: 0 },
+      )
+      const { write } = await mounted()
+      await act(async () => {
+        type('cd sr')
+        await flush(40)
+      })
+      keyIn('Enter')
+      expect(write).toHaveBeenCalledWith('cd src\r')
+    })
+
+    it('cwd подсказок — из OSC 7', async () => {
+      invoke.mockResolvedValue([{ name: 'src', isDir: true, isSymlink: false }])
+      const { term } = await mounted()
+      await act(async () => {
+        oscHandler(term, 7)('file://host/q')
+        type('cd sr')
+        await flush(40)
+      })
+      expect(invoke).toHaveBeenCalledWith('fs_list', { dir: '/q', dirsOnly: true, includeHidden: false })
+    })
+
+    it('фоновая панель и выключенные подсказки — без попапа', async () => {
+      invoke.mockResolvedValue([{ name: 'src', isDir: true, isSymlink: false }])
+      useSettings.setState({ settings: { ...DEFAULTS, pathCompletions: false } })
+      await mounted()
+      await act(async () => {
+        type('cd sr')
+        await flush(40)
+      })
+      expect(invoke).not.toHaveBeenCalledWith('fs_list', expect.anything())
+      expect(document.querySelector('.cp')).toBeNull()
+    })
+
+    it('⇧↵ не отправляет (перенос строки — поведение поля)', async () => {
+      const { write } = await mounted()
+      type('echo a')
+      const ev = new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true, cancelable: true })
+      textarea().dispatchEvent(ev)
+      expect(ev.defaultPrevented).toBe(false)
+      expect(write).not.toHaveBeenCalled()
+    })
+
+    it('⌃C очищает строку; ⌃L очищает ленту, id новых блоков не повторяются', async () => {
+      const { term } = await mounted()
+      type('abc')
+      keyIn('c', { ctrlKey: true })
+      expect(textarea().value).toBe('')
+      for (const c of ['a', 'b']) {
+        act(() => void oscHandler(term, 133)('C;' + btoa(c)))
+        act(() => void oscHandler(term, 133)('D;0'))
+      }
+      const ids = () => Array.from(document.querySelectorAll('.feed [data-block-id]')).map((e) => e.getAttribute('data-block-id'))
+      const before = ids()
+      expect(before).toHaveLength(2)
+      keyIn('l', { ctrlKey: true })
+      expect(ids()).toEqual([])
+      act(() => void oscHandler(term, 133)('C;' + btoa('c')))
+      act(() => void oscHandler(term, 133)('D;0'))
+      expect(ids()).toHaveLength(1)
+      expect(before).not.toContain(ids()[0])
+    })
+
+    describe('Claude', () => {
+      type Call = [string, Record<string, unknown>]
+      const calls = () => invoke.mock.calls as Call[]
+      const startArgs = () => calls().find((c) => c[0] === 'claude_start')![1] as {
+        onLine: { onmessage: (l: string) => void }
+        onExit: { onmessage: (e: { code: number | null; stderr: string }) => void }
+      }
+      function claudeOk() {
+        invoke.mockImplementation(async (cmd: string) => (cmd === 'claude_start' ? 'c1' : undefined))
+      }
+
+      it('⌘↵: карточка «Вы» сразу, claude_start в cwd панели, затем claude_send; второй — только send', async () => {
+        claudeOk()
+        await mounted()
+        type('что тут?')
+        keyIn('Enter', { metaKey: true })
+        expect(textarea().value).toBe('')
+        expect(document.querySelector('.you')?.textContent).toContain('что тут?')
+        await act(async () => await flush())
+        const names = calls().map((c) => c[0]).filter((n) => n.startsWith('claude'))
+        expect(names).toEqual(['claude_start', 'claude_send'])
+        expect(calls().find((c) => c[0] === 'claude_start')![1]).toMatchObject({ cwd: '/w', resume: null })
+        expect(calls().find((c) => c[0] === 'claude_send')![1]).toEqual({ id: 'c1', text: 'что тут?' })
+        // Вопрос Claude не попадает в историю команд.
+        expect(getHistory()).toEqual([])
+
+        type('ещё')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        expect(calls().map((c) => c[0]).filter((n) => n.startsWith('claude'))).toEqual(['claude_start', 'claude_send', 'claude_send'])
+      })
+
+      it('ответы Claude — в той же ленте, по времени: блок, вопрос, ответ, следующий блок', async () => {
+        claudeOk()
+        const { term } = await mounted()
+        act(() => void oscHandler(term, 133)('C;' + btoa('ls')))
+        act(() => void oscHandler(term, 133)('D;0'))
+        type('вопрос')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        act(() =>
+          startArgs().onLine.onmessage(
+            JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-4', content: [{ type: 'text', text: 'ответ' }] } }),
+          ),
+        )
+        act(() => void oscHandler(term, 133)('C;' + btoa('pwd')))
+        act(() => void oscHandler(term, 133)('D;0'))
+        const order = Array.from(document.querySelectorAll('.feed > .blk, .feed > .you, .feed > .card')).map((e) =>
+          e.classList.contains('blk') ? 'blk:' + e.querySelector('.cmd')!.textContent : e.classList.contains('you') ? 'you' : 'card',
+        )
+        expect(order).toEqual(['blk:ls', 'you', 'card', 'blk:pwd'])
+        expect(useClaudeSessions.getState().sessions.p.state.agents.length).toBeGreaterThan(0)
+      })
+
+      it('выход claude с ошибкой — карточка ошибки с хвостом stderr; следующий ⌘↵ перезапускает с --resume', async () => {
+        claudeOk()
+        await mounted()
+        type('a')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        act(() => startArgs().onLine.onmessage(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'S1' })))
+        act(() => startArgs().onExit.onmessage({ code: 1, stderr: 'boom\n' }))
+        expect(document.querySelector('.cerr')?.textContent).toContain('boom')
+        expect(useClaudeSessions.getState().sessions.p.state.busy).toBe(false)
+        invoke.mockClear()
+        type('b')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        expect(calls().find((c) => c[0] === 'claude_start')![1]).toMatchObject({ resume: 'S1' })
+      })
+
+      it('claude не найден — карточка ошибки с текстом', async () => {
+        invoke.mockImplementation(async (cmd: string) => {
+          if (cmd === 'claude_start') throw 'Claude Code не найден. Установите: npm i -g @anthropic-ai/claude-code'
+        })
+        await mounted()
+        type('a')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        expect(document.querySelector('.cerr')?.textContent).toContain('Claude Code не найден')
+        expect(calls().some((c) => c[0] === 'claude_send')).toBe(false)
+      })
+
+      it('⌃C при занятом Claude — claude_interrupt, строка не очищается; выход после него — не ошибка', async () => {
+        claudeOk()
+        await mounted()
+        type('a')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        type('draft')
+        keyIn('c', { ctrlKey: true })
+        expect(invoke).toHaveBeenCalledWith('claude_interrupt', { id: 'c1' })
+        expect(textarea().value).toBe('draft')
+        act(() => startArgs().onExit.onmessage({ code: 130, stderr: '' }))
+        expect(document.querySelector('.cerr')).toBeNull()
+        expect(useClaudeSessions.getState().sessions.p.state.busy).toBe(false)
+      })
+
+      it('закрытие панели останавливает процесс claude', async () => {
+        claudeOk()
+        const { unmount } = await mounted()
+        type('a')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        unmount()
+        expect(invoke).toHaveBeenCalledWith('claude_stop', { id: 'c1' })
+        expect(useClaudeSessions.getState().sessions.p).toBeUndefined()
+      })
+    })
   })
 
   it('kills a session that resolves after unmount and ignores its output/exit', async () => {
@@ -222,143 +474,6 @@ describe('TerminalPane', () => {
     } finally {
       delete (document as { fonts?: unknown }).fonts
     }
-  })
-
-  it('returns focus to the focused terminal when settings close', () => {
-    useUi.setState({ settingsOpen: true })
-    render(<TerminalPane {...props()} focused />)
-    const term = terms[0]
-    expect(term.focus).not.toHaveBeenCalled()
-    act(() => useUi.setState({ settingsOpen: false }))
-    expect(term.focus).toHaveBeenCalledTimes(1)
-  })
-
-  it('routes OSC 6973 to the completion popup and eats its keys before xterm', async () => {
-    invoke.mockImplementation(async (cmd: string) =>
-      cmd === 'fs_list'
-        ? [{ name: 'src', isDir: true, isSymlink: false }]
-        : { kind: 'dir', entries: [], total: 0 },
-    )
-    render(<TerminalPane {...props()} focused initialCwd="/p" />)
-    spawns[0].resolve()
-    await flush()
-    const term = terms[0]
-    const onKey = keyHandler(term)
-    const enter = () => new KeyboardEvent('keydown', { key: 'Enter', cancelable: true })
-    // Попап закрыт — ↵ уходит в xterm.
-    expect(onKey(enter())).toBe(true)
-    await act(async () => {
-      oscHandler(term, 6973)('5;cd sr')
-      await flush(40)
-    })
-    expect(invoke).toHaveBeenCalledWith('fs_list', { dir: '/p', dirsOnly: true, includeHidden: false })
-    expect(document.querySelector('.cp')).not.toBeNull()
-    const ev = enter()
-    let passed = true
-    act(() => void (passed = onKey(ev)))
-    expect(passed).toBe(false)
-    expect(ev.defaultPrevented).toBe(true)
-    expect(spawns[0].handle.write).toHaveBeenCalledWith('\x7f\x7fsrc\r')
-    expect(document.querySelector('.cp')).toBeNull()
-  })
-
-  it('uses the cwd from OSC 7 for completions', async () => {
-    invoke.mockResolvedValue([{ name: 'src', isDir: true, isSymlink: false }])
-    render(<TerminalPane {...props()} focused initialCwd="/p" />)
-    const term = terms[0]
-    await act(async () => {
-      oscHandler(term, 7)('file://host/q')
-      oscHandler(term, 6973)('5;cd sr')
-      await flush(40)
-    })
-    expect(invoke).toHaveBeenCalledWith('fs_list', { dir: '/q', dirsOnly: true, includeHidden: false })
-  })
-
-  async function openPopup(term: FakeTerminal) {
-    await act(async () => {
-      oscHandler(term, 6973)('5;cd sr')
-      await flush(40)
-    })
-  }
-  const listing = async (cmd: string) =>
-    cmd === 'fs_list' ? [{ name: 'src', isDir: true, isSymlink: false }] : { kind: 'dir', entries: [], total: 0 }
-
-  it('ignores completion reports in an unfocused pane', async () => {
-    invoke.mockImplementation(listing)
-    render(<TerminalPane {...props()} initialCwd="/p" />)
-    await openPopup(terms[0])
-    expect(invoke).not.toHaveBeenCalled()
-    expect(document.querySelector('.cp')).toBeNull()
-  })
-
-  it('closes the popup when the pane loses focus or settings open', async () => {
-    invoke.mockImplementation(listing)
-    const p = props()
-    const { rerender } = render(<TerminalPane {...p} focused initialCwd="/p" />)
-    const term = terms[0]
-    await openPopup(term)
-    expect(document.querySelector('.cp')).not.toBeNull()
-    rerender(<TerminalPane {...p} focused={false} initialCwd="/p" />)
-    expect(document.querySelector('.cp')).toBeNull()
-    rerender(<TerminalPane {...p} focused initialCwd="/p" />)
-    await openPopup(term)
-    expect(document.querySelector('.cp')).not.toBeNull()
-    act(() => useUi.setState({ settingsOpen: true }))
-    expect(document.querySelector('.cp')).toBeNull()
-  })
-
-  it('ignores reports when path completions are off and closes an open popup on toggle', async () => {
-    invoke.mockImplementation(listing)
-    useSettings.setState({ settings: { ...DEFAULTS, pathCompletions: false } })
-    render(<TerminalPane {...props()} focused initialCwd="/p" />)
-    const term = terms[0]
-    await openPopup(term)
-    expect(invoke).not.toHaveBeenCalled()
-    expect(document.querySelector('.cp')).toBeNull()
-    act(() => useSettings.setState({ settings: { ...DEFAULTS, pathCompletions: true } }))
-    await openPopup(term)
-    expect(document.querySelector('.cp')).not.toBeNull()
-    act(() => useSettings.setState({ settings: { ...DEFAULTS, pathCompletions: false } }))
-    expect(document.querySelector('.cp')).toBeNull()
-    expect(keyHandler(term)(new KeyboardEvent('keydown', { key: 'Enter' }))).toBe(true)
-  })
-
-  it('scroll and resize do not re-render the pane while the popup is closed', async () => {
-    invoke.mockImplementation(listing)
-    const onRender = vi.fn()
-    render(
-      <Profiler id="pane" onRender={onRender}>
-        <TerminalPane {...props()} focused initialCwd="/p" />
-      </Profiler>,
-    )
-    const term = terms[0]
-    const onScroll = term.onScroll.mock.calls[0][0] as () => void
-    const onResize = term.onResize.mock.calls[1][0] as () => void
-    await act(async () => await flush())
-    onRender.mockClear()
-    act(() => {
-      for (let i = 0; i < 5; i++) onScroll()
-      onResize()
-    })
-    expect(onRender).not.toHaveBeenCalled()
-    await openPopup(term)
-    onRender.mockClear()
-    act(() => onScroll())
-    expect(onRender).toHaveBeenCalled()
-  })
-
-  it('hides and closes the popup when the cursor row scrolls out of view', async () => {
-    invoke.mockImplementation(listing)
-    render(<TerminalPane {...props()} focused initialCwd="/p" />)
-    const term = terms[0]
-    await openPopup(term)
-    expect(document.querySelector('.cp')).not.toBeNull()
-    term.buffer.active.baseY = 100
-    term.buffer.active.viewportY = 50 // курсор на 53 строки ниже видимой области
-    const onScroll = term.onScroll.mock.calls[0][0] as () => void
-    act(() => onScroll())
-    expect(document.querySelector('.cp')).toBeNull()
-    expect(keyHandler(term)(new KeyboardEvent('keydown', { key: 'Enter' }))).toBe(true)
   })
 
   describe('лента', () => {
@@ -452,13 +567,15 @@ describe('TerminalPane', () => {
       expect(k({ code: 'KeyC', key: 'C', metaKey: true, shiftKey: true })).toBe(false)
     })
 
-    it('после конца команды фокус возвращается в xterm', async () => {
+    it('пока идёт команда, строка ввода неактивна; после конца фокус возвращается в неё', async () => {
       const { term } = await mounted()
+      expect(document.activeElement).toBe(textarea())
       osc133(term, 'C;' + b64('ls'))
-      term.focus.mockClear()
+      expect(textarea()).toBeDisabled()
       osc133(term, 'D;0')
       expect(host().closest('.feed-park')).not.toBeNull()
-      expect(term.focus).toHaveBeenCalled()
+      expect(textarea()).not.toBeDisabled()
+      expect(document.activeElement).toBe(textarea())
     })
 
     it('фоновая панель фокус не забирает', async () => {
@@ -494,14 +611,18 @@ describe('TerminalPane', () => {
       expect(document.querySelector('.blk .out')).toBeNull()
     })
 
-    it('клик по кнопке ленты не уводит фокус в xterm', async () => {
+    it('клик по кнопке ленты фокус не трогает; клик по ленте — в строку ввода, во время команды — в xterm', async () => {
       const { term } = await mounted()
-      term.focus.mockClear()
       const feed = document.querySelector('.feed')!
       const btn = document.createElement('button')
       feed.appendChild(btn)
+      btn.focus()
       fireEvent.mouseUp(btn)
-      expect(term.focus).not.toHaveBeenCalled()
+      expect(document.activeElement).toBe(btn)
+      fireEvent.mouseUp(feed)
+      expect(document.activeElement).toBe(textarea())
+      osc133(term, 'C;' + b64('sleep 9'))
+      term.focus.mockClear()
       fireEvent.mouseUp(feed)
       expect(term.focus).toHaveBeenCalled()
       btn.remove()

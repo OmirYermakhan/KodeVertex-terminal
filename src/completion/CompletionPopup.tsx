@@ -1,7 +1,7 @@
 // Вид попапа подсказок путей: список слева, превью подсвеченного элемента справа.
 import { useEffect, useRef, type ReactNode } from 'react'
 import { foldForMatch, matchIndices } from './completion'
-import type { CompletionState, FsPreviewTS } from './useCompletion'
+import { enterAction, type CompletionState, type FsPreviewTS } from './useCompletion'
 
 export const LIST_WIDTH = 280
 export const PREVIEW_WIDTH = 300
@@ -9,7 +9,7 @@ const ROW_HEIGHT = 22
 const MAX_ROWS = 10
 const HINT_HEIGHT = 24
 
-/** Полная высота попапа (с рамкой) — для выбора: над строкой курсора или под ней. */
+/** Полная высота попапа (с рамкой). */
 export function popupHeight(count: number): number {
   return Math.min(count, MAX_ROWS) * ROW_HEIGHT + HINT_HEIGHT + 2
 }
@@ -98,7 +98,9 @@ export function CompletionPopup({ state, x, y, onPick, previewFits = true }: Com
 
   if (!state.open || !state.ctx) return null
   const query = state.ctx.namePart
-  const enter = state.ctx.command === 'cd' ? '↵ перейти' : '↵ подставить'
+  // Подсказка ↵ — ровно то, что сделает ↵ (см. enterAction); иначе ↵ выполняет строку и не упоминается.
+  const action = enterAction(state)
+  const enter = action === 'go' ? ' · ↵ перейти' : action === 'substitute' ? ' · ↵ подставить' : ''
   const bodyHeight = Math.min(state.items.length, MAX_ROWS) * ROW_HEIGHT
 
   return (
@@ -112,7 +114,7 @@ export function CompletionPopup({ state, x, y, onPick, previewFits = true }: Com
               aria-selected={i === state.selected}
               className={'cp-item' + (it.isDir ? ' dir' : '') + (i === state.selected ? ' sel' : '')}
               style={{ height: ROW_HEIGHT, lineHeight: `${ROW_HEIGHT}px` }}
-              // mousedown, а не click: фокус остаётся в терминале.
+              // mousedown, а не click: фокус остаётся в строке ввода.
               onMouseDown={(e) => {
                 e.preventDefault()
                 onPick(i)
@@ -130,7 +132,7 @@ export function CompletionPopup({ state, x, y, onPick, previewFits = true }: Com
         )}
       </div>
       <div className="cp-hint" style={{ height: HINT_HEIGHT, lineHeight: `${HINT_HEIGHT}px` }}>
-        ↑↓ выбрать · Tab подставить · {enter} · esc
+        ↑↓ выбрать · Tab подставить{enter} · esc
       </div>
     </div>
   )

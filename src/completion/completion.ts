@@ -1,6 +1,4 @@
-// Чистая логика дополнения путей: разбор отчётов zsh, контекст, ранжирование.
-
-export type ZleReport = { cursor: number; buffer: string } | 'end'
+// Чистая логика дополнения путей: контекст по строке ввода, ранжирование, подстановка.
 
 export const PATH_COMMANDS: readonly string[] = [
   'cd', 'ls', 'cat', 'less', 'vim', 'nvim', 'nano', 'code', 'open',
@@ -17,16 +15,6 @@ export interface CompletionContext {
   namePart: string
   dirsOnly: boolean
   includeHidden: boolean
-}
-
-/** Данные OSC 6973: `<cursor>;<buffer>` или `-`. Делится по первой `;`. */
-export function parseOsc6973(data: string): ZleReport | null {
-  if (data === '-') return 'end'
-  const i = data.indexOf(';')
-  if (i < 0) return null
-  const head = data.slice(0, i)
-  if (!/^\d+$/.test(head)) return null
-  return { cursor: Number(head), buffer: data.slice(i + 1) }
 }
 
 /** Разбор до курсора: границы слов и значение последнего токена без кавычек/экранирования. */
@@ -65,7 +53,7 @@ function scan(text: string): { starts: number[]; value: string; inToken: boolean
   return { starts, value, inToken, multi }
 }
 
-/** cursor — индекс в code points (как в zsh). */
+/** cursor — индекс в code points. */
 export function completionContext(buffer: string, cursor: number): CompletionContext | null {
   const chars = [...buffer]
   if (cursor < 0 || cursor > chars.length) return null
@@ -187,7 +175,7 @@ export function rankEntries<T extends { name: string; isDir: boolean }>(
 ): T[] {
   const scored: { item: T; score: number }[] = []
   for (const item of items) {
-    // Управляющие символы в имени попали бы в ZLE как нажатия клавиш.
+    // Управляющие символы в имени попали бы в оболочку как нажатия клавиш.
     if (CONTROL_CHARS.test(item.name)) continue
     const score = fuzzyScore(q, item.name)
     if (score !== null) scored.push({ item, score })
@@ -216,10 +204,7 @@ export function shellEscape(name: string): string {
   return out
 }
 
-/**
- * Байты для PTY: стереть набранный токен и вписать выбранную запись.
- * Число DEL считается по code points (zsh без COMBINING_CHARS, по умолчанию).
- */
+/** Текст, которым заменяется набранный токен: экранированное имя (каталог — со слэшем). */
 export function applyCompletion(
   ctx: CompletionContext,
   entry: { name: string; isDir: boolean },
@@ -230,5 +215,16 @@ export function applyCompletion(
   // '~' остаётся неэкранированной только как домашний каталог в самом токене.
   const keepTilde = ctx.dirPart === '~' || ctx.dirPart.startsWith('~/')
   const escaped = keepTilde ? '~' + shellEscape(full.slice(1)) : shellEscape(full)
-  return '\x7f'.repeat([...ctx.token].length) + escaped + (entry.isDir ? '/' : '')
+  return escaped + (entry.isDir ? '/' : '')
+}
+
+/** Строка ввода после подстановки: токен (до курсора) заменён; cursor — индекс UTF-16 после него. */
+export function completeLine(
+  buffer: string,
+  ctx: CompletionContext,
+  entry: { name: string; isDir: boolean },
+): { value: string; cursor: number } {
+  const repl = applyCompletion(ctx, entry)
+  const end = ctx.tokenStart + ctx.token.length
+  return { value: buffer.slice(0, ctx.tokenStart) + repl + buffer.slice(end), cursor: ctx.tokenStart + repl.length }
 }

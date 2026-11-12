@@ -1,7 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
-import { applyCompletion, completionContext } from './completion'
 import { useCompletion, type FsEntryTS } from './useCompletion'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
@@ -14,24 +13,24 @@ const ENTRIES = [dir('docs'), dir('src'), dir('scripts')]
 
 function deferred<T>() {
   let resolve!: (v: T) => void
-  let reject!: (e: unknown) => void
-  const promise = new Promise<T>((res, rej) => {
+  const promise = new Promise<T>((res) => {
     resolve = res
-    reject = rej
   })
-  return { promise, resolve, reject }
+  return { promise, resolve }
 }
 
-const key = (k: string, type = 'keydown') => new KeyboardEvent(type, { key: k })
-const report = (buffer: string) => ({ cursor: [...buffer].length, buffer })
+const key = (k: string, o: KeyboardEventInit = {}, type = 'keydown') => new KeyboardEvent(type, { key: k, ...o })
 
 function setup(cwd = '/p') {
-  const write = vi.fn()
-  const hook = renderHook(() => useCompletion({ cwd: () => cwd, home: '/h', write }))
-  return { write, hook, api: () => hook.result.current }
+  const replace = vi.fn()
+  const hook = renderHook(() => useCompletion({ cwd: () => cwd, home: '/h', replace }))
+  const api = () => hook.result.current
+  /** Строка с курсором в конце. */
+  const line = (buffer: string, typed = true) => act(() => api().update(buffer, buffer.length, typed))
+  return { replace, hook, api, line }
 }
 
-/** fs_list отвечает ENTRIES, fs_preview — пустым каталогом. */
+/** fs_list отвечает entries, fs_preview — пустым каталогом. */
 function listAlways(entries: FsEntryTS[] = ENTRIES) {
   mocked.mockImplementation(async (cmd) => {
     if (cmd === 'fs_list') return entries
@@ -45,6 +44,12 @@ async function tick(ms: number) {
   })
 }
 
+const press = (api: () => { onKey(e: KeyboardEvent): boolean }, k: string, o: KeyboardEventInit = {}) => {
+  let eaten = false
+  act(() => void (eaten = api().onKey(key(k, o))))
+  return eaten
+}
+
 describe('useCompletion', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -56,8 +61,8 @@ describe('useCompletion', () => {
 
   it('lists the cwd for `cd sr` and puts src first', async () => {
     listAlways()
-    const { api } = setup()
-    act(() => api().onReport(report('cd sr')))
+    const { api, line } = setup()
+    line('cd sr')
     expect(mocked).not.toHaveBeenCalled() // дебаунс
     await tick(30)
     expect(mocked).toHaveBeenCalledWith('fs_list', { dir: '/p', dirsOnly: true, includeHidden: false })
@@ -74,10 +79,10 @@ describe('useCompletion', () => {
       if (cmd === 'fs_preview') return { kind: 'dir', entries: [], total: 0 }
       return mocked.mock.calls.filter((c) => c[0] === 'fs_list').length === 1 ? first.promise : second.promise
     })
-    const { api } = setup()
-    act(() => api().onReport(report('cd s')))
+    const { api, line } = setup()
+    line('cd s')
     await tick(30)
-    act(() => api().onReport(report('cd sr')))
+    line('cd sr')
     await tick(30)
     await act(async () => second.resolve([dir('src'), dir('sr2')]))
     expect(api().state.items.map((i) => i.name)).toEqual(['sr2', 'src'])
@@ -85,279 +90,230 @@ describe('useCompletion', () => {
     expect(api().state.items.map((i) => i.name)).toEqual(['sr2', 'src'])
   })
 
-  it('reuses the cached listing while the directory stays the same', async () => {
+  it('reuses the cached listing while the directory stays the same; reset drops the cache', async () => {
     listAlways()
-    const { api } = setup()
-    act(() => api().onReport(report('cd s')))
+    const { api, line } = setup()
+    line('cd s')
     await tick(30)
-    act(() => api().onReport(report('cd sc')))
-    await tick(30)
-    expect(mocked.mock.calls.filter((c) => c[0] === 'fs_list')).toHaveLength(1)
+    line('cd sc')
     expect(api().state.items[0].name).toBe('scripts')
+    expect(mocked.mock.calls.filter((c) => c[0] === 'fs_list')).toHaveLength(1)
+    act(() => api().reset())
+    expect(api().state.open).toBe(false)
+    line('cd s')
+    await tick(30)
+    expect(mocked.mock.calls.filter((c) => c[0] === 'fs_list')).toHaveLength(2)
   })
 
   it('cycles the selection with ↓ / ↑ and loads the preview of the highlighted entry', async () => {
     listAlways()
-    const { api } = setup()
-    act(() => api().onReport(report('cd ')))
+    const { api, line } = setup()
+    line('cd ')
     await tick(30)
-    const names = api().state.items.map((i) => i.name)
-    expect(names).toEqual(['docs', 'scripts', 'src'])
-    let eaten = false
-    act(() => void (eaten = api().onKey(key('ArrowDown'))))
-    expect(eaten).toBe(true)
+    expect(api().state.items.map((i) => i.name)).toEqual(['docs', 'scripts', 'src'])
+    expect(press(api, 'ArrowDown')).toBe(true)
     expect(api().state.selected).toBe(1)
-    act(() => void api().onKey(key('ArrowUp')))
-    act(() => void api().onKey(key('ArrowUp')))
+    expect(api().state.navigated).toBe(true)
+    press(api, 'ArrowUp')
+    press(api, 'ArrowUp')
     expect(api().state.selected).toBe(2)
     await tick(80)
     expect(mocked).toHaveBeenLastCalledWith('fs_preview', { path: '/p/src' })
     expect(api().state.preview).toEqual({ kind: 'dir', entries: [], total: 0 })
   })
 
-  it('Tab writes applyCompletion for the selected entry', async () => {
-    listAlways()
-    const { api, write } = setup()
-    act(() => api().onReport(report('cd sr')))
+  it('Tab: `cd Док` → value `cd Документы/`, cursor at the end', async () => {
+    listAlways([dir('Документы'), dir('Загрузки')])
+    const { api, line, replace } = setup()
+    line('cd Док')
     await tick(30)
-    let eaten = false
-    act(() => void (eaten = api().onKey(key('Tab'))))
-    expect(eaten).toBe(true)
-    const ctx = completionContext('cd sr', 5)!
-    expect(write).toHaveBeenCalledWith(applyCompletion(ctx, dir('src')))
-    expect(write).toHaveBeenCalledWith('\x7f\x7fsrc/')
-  })
-
-  it('↵ on cd writes the completion without the trailing slash and then \\r', async () => {
-    listAlways()
-    const { api, write } = setup()
-    act(() => api().onReport(report('cd sr')))
-    await tick(30)
-    act(() => void api().onKey(key('Enter')))
-    expect(write).toHaveBeenCalledTimes(1)
-    expect(write).toHaveBeenCalledWith('\x7f\x7fsrc\r')
+    expect(press(api, 'Tab')).toBe(true)
+    expect(replace).toHaveBeenCalledWith('cd Документы/', 13, false)
     expect(api().state.open).toBe(false)
   })
 
-  it('↵ on other commands goes to the shell without arrow navigation', async () => {
+  it('Tab with an empty name substitutes the first entry (no shell Tab to fall back to)', async () => {
+    listAlways()
+    const { api, line, replace } = setup()
+    line('cd ')
+    await tick(30)
+    expect(press(api, 'Tab')).toBe(true)
+    expect(replace).toHaveBeenCalledWith('cd docs/', 8, false)
+  })
+
+  it('→ substitutes like Tab', async () => {
+    listAlways()
+    const { api, line, replace } = setup()
+    line('cd sr')
+    await tick(30)
+    expect(press(api, 'ArrowRight')).toBe(true)
+    expect(replace).toHaveBeenCalledWith('cd src/', 7, false)
+  })
+
+  it('↵ on cd substitutes without the trailing slash and runs', async () => {
+    listAlways()
+    const { api, line, replace } = setup()
+    line('cd sr')
+    await tick(30)
+    expect(press(api, 'Enter')).toBe(true)
+    expect(replace).toHaveBeenCalledTimes(1)
+    expect(replace).toHaveBeenCalledWith('cd src', 6, true)
+    expect(api().state.open).toBe(false)
+  })
+
+  it('↵ on other commands without ↑/↓ is not eaten (the line runs as typed)', async () => {
     listAlways([file('README.md')])
-    const { api, write } = setup()
-    act(() => api().onReport(report('cat READ')))
+    const { api, line, replace } = setup()
+    line('cat READ')
     await tick(30)
     expect(mocked).toHaveBeenCalledWith('fs_list', { dir: '/p', dirsOnly: false, includeHidden: false })
-    let eaten = true
-    act(() => void (eaten = api().onKey(key('Enter'))))
-    expect(eaten).toBe(false)
+    expect(press(api, 'Enter')).toBe(false)
     expect(api().state.open).toBe(false)
-    expect(write).not.toHaveBeenCalled()
+    expect(replace).not.toHaveBeenCalled()
   })
 
   it('↵ on other commands after ↑/↓ only substitutes', async () => {
     listAlways([file('README.md'), file('READ.txt')])
-    const { api, write } = setup()
-    act(() => api().onReport(report('cat READ')))
+    const { api, line, replace } = setup()
+    line('cat READ')
     await tick(30)
     expect(api().state.items.map((i) => i.name)).toEqual(['READ.txt', 'README.md'])
-    act(() => void api().onKey(key('ArrowDown')))
-    let eaten = false
-    act(() => void (eaten = api().onKey(key('Enter'))))
-    expect(eaten).toBe(true)
-    expect(write).toHaveBeenCalledWith('\x7f\x7f\x7f\x7fREADME.md')
+    press(api, 'ArrowDown')
+    expect(press(api, 'Enter')).toBe(true)
+    expect(replace).toHaveBeenCalledWith('cat README.md', 13, false)
   })
 
-  it('Tab with an empty name and no arrow navigation goes to zsh', async () => {
+  it('↵ with an empty cd name: without ↑/↓ runs as typed, after ↓ goes to the entry', async () => {
     listAlways()
-    const { api, write } = setup()
-    act(() => api().onReport(report('cd ')))
+    const { api, line, replace } = setup()
+    line('cd ')
+    await tick(30)
+    expect(press(api, 'Enter')).toBe(false)
+    expect(replace).not.toHaveBeenCalled()
+    line('cd  ')
+    line('cd ')
+    press(api, 'ArrowDown')
+    expect(press(api, 'Enter')).toBe(true)
+    expect(replace).toHaveBeenCalledWith('cd scripts', 10, true)
+  })
+
+  it.each([
+    ['cd src', [dir('src'), dir('src2')]],
+    ['cat README.md', [file('README.md'), file('README.md.bak')]],
+  ] as const)('↵ is not consumed when the token already equals the entry (%s)', async (text, entries) => {
+    listAlways([...entries])
+    const { api, line, replace } = setup()
+    line(text)
     await tick(30)
     expect(api().state.open).toBe(true)
-    let eaten = true
-    act(() => void (eaten = api().onKey(key('Tab'))))
-    expect(eaten).toBe(false)
+    expect(press(api, 'Enter')).toBe(false)
     expect(api().state.open).toBe(false)
-    expect(write).not.toHaveBeenCalled()
+    expect(replace).not.toHaveBeenCalled()
   })
 
-  it('Tab with an empty name after ↓ substitutes the chosen entry', async () => {
+  it('a recalled (not typed) line does not open the popup', async () => {
     listAlways()
-    const { api, write } = setup()
-    act(() => api().onReport(report('cd ')))
+    const { api, line } = setup()
+    line('cd sr', false)
     await tick(30)
-    act(() => void api().onKey(key('ArrowDown')))
-    let eaten = false
-    act(() => void (eaten = api().onKey(key('Tab'))))
-    expect(eaten).toBe(true)
-    expect(write).toHaveBeenCalledWith('scripts/')
+    expect(api().state.open).toBe(false)
+    expect(mocked).not.toHaveBeenCalled()
+    // Повтор той же строки (onSelect) тоже не открывает; набор — открывает.
+    act(() => api().update('cd sr', 5))
+    await tick(30)
+    expect(api().state.open).toBe(false)
+    line('cd s')
+    await tick(30)
+    expect(api().state.open).toBe(true)
   })
 
-  describe('history recall does not open the popup', () => {
-    it('↑ passes to zsh, the recalled `cd src` stays closed, the next ↑ passes too', async () => {
-      listAlways()
-      const { api } = setup()
-      let eaten = true
-      act(() => void (eaten = api().onKey(key('ArrowUp'))))
-      expect(eaten).toBe(false)
-      act(() => api().onReport(report('cd src')))
-      await tick(30)
-      expect(mocked).not.toHaveBeenCalled()
-      expect(api().state.open).toBe(false)
-      act(() => void (eaten = api().onKey(key('ArrowUp'))))
-      expect(eaten).toBe(false)
-      act(() => api().onReport(report('vim x')))
-      await tick(30)
-      expect(api().state.open).toBe(false)
-    })
-
-    it.each([
-      ['ArrowDown', {}],
-      ['PageUp', {}],
-      ['PageDown', {}],
-      ['p', { ctrlKey: true }],
-      ['n', { ctrlKey: true }],
-      ['r', { ctrlKey: true }],
-    ] as const)('%s %o marks the line as not typed', async (k, mods) => {
-      listAlways()
-      const { api } = setup()
-      act(() => void api().onKey(new KeyboardEvent('keydown', { key: k, ...mods })))
-      act(() => api().onReport(report('cd s')))
-      await tick(30)
-      expect(api().state.open).toBe(false)
-    })
-
-    it.each([
-      ['a', {}],
-      ['A', { shiftKey: true }],
-      ['Backspace', {}],
-      ['Delete', {}],
-      ['Backspace', { metaKey: true }],
-    ] as const)('typing %s %o after recall opens again', async (k, mods) => {
-      listAlways()
-      const { api } = setup()
-      act(() => void api().onKey(key('ArrowUp')))
-      act(() => void api().onKey(new KeyboardEvent('keydown', { key: k, ...mods })))
-      act(() => api().onReport(report('cd s')))
-      await tick(30)
-      expect(api().state.open).toBe(true)
-    })
-
-    it('paste after recall marks the line as typed and closes', async () => {
-      listAlways()
-      const { api } = setup()
-      act(() => api().onReport(report('cd s')))
-      await tick(30)
-      expect(api().state.open).toBe(true)
-      act(() => void api().onKey(new KeyboardEvent('keydown', { key: 'p', ctrlKey: true })))
-      expect(api().state.open).toBe(false)
-      act(() => api().onReport(report('cd s')))
-      expect(api().state.open).toBe(false)
-      act(() => api().onPaste())
-      act(() => api().onReport(report('cd sr')))
-      expect(api().state.open).toBe(true) // из кэша
-    })
-
-    it('cursor keys keep the flag; a new line resets it', async () => {
-      listAlways()
-      const { api } = setup()
-      act(() => void api().onKey(key('ArrowUp')))
-      act(() => void api().onKey(key('ArrowLeft')))
-      act(() => api().onReport(report('cd s')))
-      await tick(30)
-      expect(api().state.open).toBe(false)
-      act(() => api().onReport('end'))
-      act(() => api().onReport(report('cd s')))
-      await tick(30)
-      expect(api().state.open).toBe(true)
-    })
-  })
-
-  it.each(['Backspace', 'ArrowLeft', 'ArrowRight'])('⌘%s closes the popup without eating', async (k) => {
+  it('multi-line input: context and substitution use the cursor line', async () => {
     listAlways()
-    const { api } = setup()
-    act(() => api().onReport(report('cd s')))
+    const { api, replace } = setup()
+    act(() => api().update('echo a\ncd sr\nls', 12))
     await tick(30)
-    let eaten = true
-    act(() => void (eaten = api().onKey(new KeyboardEvent('keydown', { key: k, metaKey: true }))))
-    expect(eaten).toBe(false)
+    expect(api().state.open).toBe(true)
+    expect(api().state.ctx?.token).toBe('sr')
+    press(api, 'Tab')
+    expect(replace).toHaveBeenCalledWith('echo a\ncd src/\nls', 14, false)
+  })
+
+  it('cursor inside the token closes', async () => {
+    listAlways()
+    const { api, line } = setup()
+    line('cd sr')
+    await tick(30)
+    expect(api().state.open).toBe(true)
+    act(() => api().update('cd sr', 4))
     expect(api().state.open).toBe(false)
   })
 
   it('a buffer over 4096 chars closes and is not processed', async () => {
     listAlways()
-    const { api } = setup()
-    act(() => api().onReport(report('cd s')))
+    const { api, line } = setup()
+    line('cd s')
     await tick(30)
     expect(api().state.open).toBe(true)
-    // Последний токен `s` подошёл бы (из кэша), но строка слишком длинная.
-    act(() => api().onReport(report('cd ' + 'a '.repeat(2500) + 's')))
+    line('cd ' + 'a '.repeat(2500) + 's')
     await tick(30)
     expect(api().state.open).toBe(false)
     expect(mocked.mock.calls.filter((c) => c[0] === 'fs_list')).toHaveLength(1)
   })
 
-  it('esc closes; onKey stays false until the next report', async () => {
+  it('esc closes and eats; the same line stays closed until it changes', async () => {
     listAlways()
-    const { api, write } = setup()
-    act(() => api().onReport(report('cd sr')))
+    const { api, line, replace } = setup()
+    line('cd sr')
     await tick(30)
-    let eaten = false
-    act(() => void (eaten = api().onKey(key('Escape'))))
-    expect(eaten).toBe(true)
+    expect(press(api, 'Escape')).toBe(true)
     expect(api().state.open).toBe(false)
-    expect(api().onKey(key('Enter'))).toBe(false)
-    expect(api().onKey(key('Tab'))).toBe(false)
-    // Тот же отчёт (перерисовка без изменений) попап не возвращает.
-    act(() => api().onReport(report('cd sr')))
+    expect(press(api, 'Enter')).toBe(false)
+    expect(press(api, 'Tab')).toBe(false)
+    act(() => api().update('cd sr', 5))
     await tick(30)
     expect(api().state.open).toBe(false)
-    act(() => api().onReport(report('cd s')))
+    line('cd s')
     await tick(30)
     expect(api().state.open).toBe(true)
-    expect(write).not.toHaveBeenCalled()
+    expect(replace).not.toHaveBeenCalled()
   })
 
-  it("'end' closes the popup", async () => {
-    listAlways()
-    const { api } = setup()
-    act(() => api().onReport(report('cd sr')))
-    await tick(30)
-    act(() => api().onReport('end'))
-    expect(api().state.open).toBe(false)
-    expect(api().onKey(key('ArrowDown'))).toBe(false)
-  })
-
-  it('ignores keys while closed and does not write', () => {
-    const { api, write } = setup()
-    expect(api().onKey(key('Enter'))).toBe(false)
-    expect(api().onKey(key('Tab'))).toBe(false)
-    expect(write).not.toHaveBeenCalled()
+  it('ignores keys while closed', () => {
+    const { api, replace } = setup()
+    expect(press(api, 'Enter')).toBe(false)
+    expect(press(api, 'Tab')).toBe(false)
+    expect(replace).not.toHaveBeenCalled()
   })
 
   it('does not eat other keys, keyup or modified keys while open', async () => {
     listAlways()
-    const { api, write } = setup()
-    act(() => api().onReport(report('cd sr')))
+    const { api, line, replace } = setup()
+    line('cd sr')
     await tick(30)
-    expect(api().onKey(key('a'))).toBe(false)
-    expect(api().onKey(key('Enter', 'keyup'))).toBe(false)
-    expect(api().onKey(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true }))).toBe(false)
-    expect(write).not.toHaveBeenCalled()
+    expect(press(api, 'a')).toBe(false)
+    let eaten = true
+    act(() => void (eaten = api().onKey(key('Enter', {}, 'keyup'))))
+    expect(eaten).toBe(false)
+    expect(press(api, 'Tab', { shiftKey: true })).toBe(false)
+    expect(press(api, 'Enter', { metaKey: true })).toBe(false)
+    expect(replace).not.toHaveBeenCalled()
   })
 
   it('stays closed when fs_list fails or the line is not a path argument', async () => {
     mocked.mockRejectedValue('Нет доступа')
-    const { api } = setup()
-    act(() => api().onReport(report('cd sr')))
+    const { api, line } = setup()
+    line('cd sr')
     await tick(30)
     expect(api().state.open).toBe(false)
-    act(() => api().onReport(report('echo sr')))
+    line('echo sr')
     await tick(30)
     expect(api().state.open).toBe(false)
   })
 
   it('stays closed when nothing matches', async () => {
     listAlways()
-    const { api } = setup()
-    act(() => api().onReport(report('cd zzz')))
+    const { api, line } = setup()
+    line('cd zzz')
     await tick(30)
     expect(api().state.open).toBe(false)
   })
@@ -367,108 +323,21 @@ describe('useCompletion', () => {
       if (cmd === 'fs_list') return ENTRIES
       throw 'boom'
     })
-    const { api } = setup()
-    act(() => api().onReport(report('cd sr')))
+    const { api, line } = setup()
+    line('cd sr')
     await tick(30)
     await tick(80)
     expect(api().state.preview).toEqual({ kind: 'error', message: 'boom' })
   })
 
-  it('a line-editing key typed past the popup invalidates ctx until the next report', async () => {
-    listAlways()
-    const { api, write } = setup()
-    act(() => api().onReport(report('cd s')))
-    await tick(30)
-    expect(api().state.open).toBe(true)
-    let eaten = true
-    act(() => void (eaten = api().onKey(key('r'))))
-    expect(eaten).toBe(false)
-    expect(api().state.open).toBe(false)
-    // Отчёт о `cd sr` ещё не пришёл — Tab уходит в zsh, ничего не пишем.
-    expect(api().onKey(key('Tab'))).toBe(false)
-    expect(write).not.toHaveBeenCalled()
-    // Следующий отчёт открывает из кэша (без esc-блокировки, без нового fs_list).
-    act(() => api().onReport(report('cd sr')))
-    expect(api().state.open).toBe(true)
-    expect(api().state.ctx?.token).toBe('sr')
-    expect(mocked.mock.calls.filter((c) => c[0] === 'fs_list')).toHaveLength(1)
-  })
-
-  it.each(['Backspace', 'Delete', 'ArrowLeft', 'Home', 'End'])('%s closes the popup without eating', async (k) => {
-    listAlways()
-    const { api } = setup()
-    act(() => api().onReport(report('cd s')))
-    await tick(30)
-    let eaten = true
-    act(() => void (eaten = api().onKey(key(k))))
-    expect(eaten).toBe(false)
-    expect(api().state.open).toBe(false)
-  })
-
-  it('Shift+letter and Ctrl-combos also invalidate; bare modifiers do not', async () => {
-    listAlways()
-    const { api } = setup()
-    act(() => api().onReport(report('cd s')))
-    await tick(30)
-    act(() => void api().onKey(new KeyboardEvent('keydown', { key: 'Shift', shiftKey: true })))
-    expect(api().state.open).toBe(true)
-    act(() => void api().onKey(new KeyboardEvent('keydown', { key: 'R', shiftKey: true })))
-    expect(api().state.open).toBe(false)
-    act(() => api().onReport(report('cd sR')))
-    act(() => api().onReport(report('cd s')))
-    expect(api().state.open).toBe(true)
-    act(() => void api().onKey(new KeyboardEvent('keydown', { key: 'w', ctrlKey: true })))
-    expect(api().state.open).toBe(false)
-  })
-
   it('ignores keys during IME composition', async () => {
     listAlways()
-    const { api, write } = setup()
-    act(() => api().onReport(report('cd s')))
+    const { api, line, replace } = setup()
+    line('cd s')
     await tick(30)
-    expect(api().onKey(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true }))).toBe(false)
-    expect(api().onKey(new KeyboardEvent('keydown', { key: 'Tab', keyCode: 229 }))).toBe(false)
+    expect(press(api, 'Enter', { isComposing: true })).toBe(false)
+    expect(press(api, 'Tab', { keyCode: 229 })).toBe(false)
     expect(api().state.open).toBe(true)
-    expect(write).not.toHaveBeenCalled()
-  })
-
-  it('↵ with an empty name and no arrow navigation goes to the shell', async () => {
-    listAlways()
-    const { api, write } = setup()
-    act(() => api().onReport(report('cd ')))
-    await tick(30)
-    let eaten = true
-    act(() => void (eaten = api().onKey(key('Enter'))))
-    expect(eaten).toBe(false)
-    expect(api().state.open).toBe(false)
-    expect(write).not.toHaveBeenCalled()
-  })
-
-  it('↵ with an empty name after ↓ substitutes the chosen entry', async () => {
-    listAlways()
-    const { api, write } = setup()
-    act(() => api().onReport(report('cd ')))
-    await tick(30)
-    act(() => void api().onKey(key('ArrowDown')))
-    let eaten = false
-    act(() => void (eaten = api().onKey(key('Enter'))))
-    expect(eaten).toBe(true)
-    expect(write).toHaveBeenCalledWith('scripts\r')
-  })
-
-  it.each([
-    ['cd src', [dir('src'), dir('src2')]],
-    ['cat README.md', [file('README.md'), file('README.md.bak')]],
-  ] as const)('↵ is not consumed when the token already equals the entry (%s)', async (line, entries) => {
-    listAlways([...entries])
-    const { api, write } = setup()
-    act(() => api().onReport(report(line)))
-    await tick(30)
-    expect(api().state.open).toBe(true)
-    let eaten = true
-    act(() => void (eaten = api().onKey(key('Enter'))))
-    expect(eaten).toBe(false)
-    expect(api().state.open).toBe(false)
-    expect(write).not.toHaveBeenCalled()
+    expect(replace).not.toHaveBeenCalled()
   })
 })

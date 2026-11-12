@@ -252,3 +252,18 @@ body {
 /* Мигающий курсор стриминга (макет 04, .input .caret). */
 @keyframes kv-pulse { 50% { opacity: 0.35; } }
 .md .caret { display: inline-block; width: 8px; height: 1em; margin-left: 2px; background: var(--accText); vertical-align: -0.15em; animation: kv-pulse 1s steps(1) infinite; }
+
+/* Строка ввода (макет 04-main-window, .dock/.input): без плашек папки/ветки (спек §4.3). */
+.dock { flex: none; border-top: 1px solid var(--rule); background: var(--panel2); }
+.input-wrap { position: relative; }
+.input { display: flex; align-items: center; gap: 10px; margin: 8px 12px 10px; padding: 10px 14px; background: var(--bg); border: 1px solid var(--rule); border-radius: 9px; font-family: var(--font-code); font-size: calc(var(--size-code) + 0.5px); color: var(--muted); cursor: text; box-sizing: border-box; }
+.input.off { cursor: default; }
+.input.off .ph, .input.off .in-ta { opacity: 0.5; }
+.in-field { position: relative; flex: 1; min-width: 0; display: flex; }
+.in-ta { flex: 1; min-width: 0; display: block; box-sizing: border-box; margin: 0; padding: 0; border: 0; outline: none; resize: none; background: transparent; color: var(--strong); font: inherit; line-height: var(--input-lh, 18px); caret-color: var(--accText); white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; font-variant-ligatures: var(--liga); }
+.in-ta.empty { caret-color: transparent; }
+.in-ta:disabled { background: transparent; color: var(--muted); }
+.input .ph { position: absolute; left: 0; top: 0; line-height: var(--input-lh, 18px); white-space: nowrap; overflow: hidden; max-width: 100%; pointer-events: none; }
+.input .caret { display: inline-block; width: 8px; height: 16px; background: var(--accText); vertical-align: -3px; animation: kv-pulse 1s steps(1) infinite; }
+.in-hint { flex: none; white-space: nowrap; line-height: var(--input-lh, 18px); }
+.in-measure { position: absolute; left: 0; top: 0; visibility: hidden; white-space: pre; pointer-events: none; }

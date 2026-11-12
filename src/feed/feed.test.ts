@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { applyShell, COLLAPSE_LINES, formatDuration, moveSelection, parseOsc133, type FeedItem, type ShellBlock } from './feed'
+import { applyShell, COLLAPSE_LINES, formatDuration, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from './feed'
+import type { FeedClaudeItem } from '../claude/reducer'
 
 const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
 
@@ -84,4 +85,30 @@ describe('moveSelection', () => {
     expect(moveSelection(items, null, 'down')).toEqual({ id: null, leave: true })
   })
   it('пустая лента', () => expect(moveSelection([], null, 'up')).toEqual({ id: null, leave: false }))
+})
+
+describe('id блоков', () => {
+  it('уникальны и после очистки ленты', () => {
+    const a = applyShell([], { t: 'start', command: 'a', cwd: '/', at: 5 })
+    const b = applyShell([], { t: 'start', command: 'b', cwd: '/', at: 5 })
+    expect(a[0].id).not.toBe(b[0].id)
+  })
+})
+
+describe('syncClaude', () => {
+  const u = (text: string): FeedClaudeItem => ({ type: 'user', text })
+  it('новые — в конец, изменённые — на месте, до from — не показываются', () => {
+    const shell = applyShell([], { t: 'start', command: 'ls', cwd: '/', at: 1 })
+    const c1 = [u('q')]
+    let feed = syncClaude(shell, [], c1)
+    expect(feed.map((f) => f.id)).toEqual([shell[0].id, 'cl-0'])
+    feed = applyShell(feed, { t: 'end', exitCode: 0, at: 2, html: '', lines: 0 })
+    feed = applyShell(feed, { t: 'start', command: 'pwd', cwd: '/', at: 3 })
+    const c2 = [u('q2'), u('r')]
+    feed = syncClaude(feed, c1, c2)
+    expect(feed.map((f) => (f.kind === 'claude' ? (f.item as { text: string }).text : f.command))).toEqual(['ls', 'q2', 'pwd', 'r'])
+    expect(syncClaude(feed, c2, c2)).toBe(feed)
+    expect(syncClaude([], c2, [...c2, u('x')], 3)).toEqual([])
+    expect(syncClaude([], c2, [...c2, u('x')], 2).map((f) => f.id)).toEqual(['cl-2'])
+  })
 })

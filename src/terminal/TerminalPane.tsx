@@ -14,12 +14,12 @@ import { codeFontStack } from '../theme/fontFamily'
 import { ansiFromTokens, THEMES } from '../theme/themes'
 import { matchKey } from '../keys/keymap'
 import { parseOsc7 } from './osc'
-import { parseOsc6973 } from '../completion/completion'
-import { useCompletion } from '../completion/useCompletion'
-import { CompletionPopup, LIST_WIDTH, PREVIEW_WIDTH, popupHeight } from '../completion/CompletionPopup'
 import { useHome } from '../status/useGitInfo'
 import { spawnPty, type PtyHandle } from './ptyClient'
-import { applyShell, moveSelection, parseOsc133, type FeedItem, type ShellBlock } from '../feed/feed'
+import { applyShell, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
+import type { FeedClaudeItem } from '../claude/reducer'
+import { askClaude, interruptClaude, stopClaude, useClaudeSessions } from '../claude/sessionStore'
+import { InputBar, type InputBarHandle } from '../input/InputBar'
 import { blockText, cleanSerializedHtml } from '../feed/blockHtml'
 import { Feed } from '../feed/FeedView'
 import { LiveTerminal } from '../feed/LiveTerminal'
@@ -62,27 +62,12 @@ function remeasureFont(term: Terminal): void {
   term.clearTextureAtlas()
 }
 
-/** Над строкой курсора, а если сверху не помещается — под ней; превью — если хватает ширины. */
-function popupPlacement(term: Terminal | null, host: HTMLElement | null, count: number) {
-  if (!term || !host) return null
-  const screen = term.element?.querySelector<HTMLElement>('.xterm-screen')
-  const width = screen?.clientWidth || host.clientWidth
-  const height = screen?.clientHeight || host.clientHeight
-  const cellW = term.cols > 0 ? width / term.cols : 0
-  const cellH = term.rows > 0 ? height / term.rows : 0
-  const { cursorX = 0, cursorY = 0, baseY = 0, viewportY = 0 } = term.buffer?.active ?? {}
-  // Строка курсора относительно видимой области; прокрутили вверх — попап не показываем.
-  const row = baseY + cursorY - viewportY
-  if (row < 0 || row >= term.rows) return null
-  const rowTop = row * cellH
-  const h = popupHeight(count)
-  const y = rowTop - h >= 0 ? rowTop - h : rowTop + cellH
-  const avail = host.clientWidth || width
-  const x = Math.max(0, Math.min(cursorX * cellW, avail - LIST_WIDTH))
-  // В jsdom размеров нет — превью не прячем.
-  const previewFits = avail === 0 || x + LIST_WIDTH + PREVIEW_WIDTH <= avail
-  return { x, y, previewFits }
+/** Команда для ZLE: многострочная — через bracketed paste (одна строка буфера), затем ↵. */
+export function commandBytes(cmd: string): string {
+  return cmd.includes('\n') ? `\x1b[200~${cmd}\x1b[201~\r` : cmd + '\r'
 }
+
+const NO_CLAUDE_ITEMS: readonly FeedClaudeItem[] = []
 
 /** Число строк вывода: индекс последней непустой строки активного буфера + 1. */
 function contentLines(term: Terminal): number {
@@ -130,7 +115,6 @@ export function TerminalPane(p: TerminalPaneProps) {
     el.className = 'live-host'
     return el
   })
-  const hostRef = useRef<HTMLElement>(host)
   const parkRef = useRef<HTMLDivElement>(null)
   const feedRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -140,20 +124,11 @@ export function TerminalPane(p: TerminalPaneProps) {
     callbacks.current = p
   })
 
-  const [layoutTick, setLayoutTick] = useState(0)
   const handleRef = useRef<PtyHandle | null>(null)
-  // cwd панели для подсказок путей: initialCwd, затем OSC 7.
+  const inputRef = useRef<InputBarHandle>(null)
+  // cwd панели (подсказки путей, Claude-сессия): initialCwd, затем OSC 7.
   const cwdRef = useRef(p.initialCwd)
   const home = useHome()
-  const completion = useCompletion({
-    cwd: () => cwdRef.current,
-    home: home || null,
-    write: (s) => handleRef.current?.write(s),
-  })
-  const completionRef = useRef(completion)
-  useEffect(() => {
-    completionRef.current = completion
-  })
 
   const settings = useSettings((st) => st.settings)
   const settingsOpen = useUi((st) => st.settingsOpen)
@@ -179,6 +154,25 @@ export function TerminalPane(p: TerminalPaneProps) {
   const hostHeight = Math.max(LIVE_MIN_HEIGHT, Math.floor(feedHeight * LIVE_MAX_SHARE))
   // Идёт команда (между OSC 133 C и D). Ставится синхронно в обработчике OSC, не из состояния.
   const runningRef = useRef(false)
+  // То же для рендера: строка ввода неактивна, пока идёт команда.
+  const [running, setRunning] = useState(false)
+
+  // Claude-сессия панели (стор по paneId): её элементы — в той же ленте, по времени появления.
+  const claude = useClaudeSessions((st) => st.sessions[p.paneId])
+  const claudeItems = claude?.state.items ?? NO_CLAUDE_ITEMS
+  const claudePrev = useRef<readonly FeedClaudeItem[]>(NO_CLAUDE_ITEMS)
+  // ⌃L: элементы Claude с индексом меньше этого в ленте больше не показываются.
+  const claudeFrom = useRef(0)
+  useEffect(() => {
+    const prev = claudePrev.current
+    const from = claudeFrom.current
+    claudePrev.current = claudeItems
+    if (prev !== claudeItems) setItems((it) => syncClaude(it, prev, claudeItems, from))
+  }, [claudeItems])
+  useEffect(() => {
+    const paneId = p.paneId
+    return () => stopClaude(paneId)
+  }, [p.paneId])
 
   // Create xterm + PTY once per pane.
   useEffect(() => {
@@ -240,10 +234,12 @@ export function TerminalPane(p: TerminalPaneProps) {
         term.reset()
         // Синхронно: вывод из того же куска данных (onWriteParsed) уже должен считаться живым.
         runningRef.current = true
+        setRunning(true)
         setLivePx(liveContentHeight(term))
         setItems((it) => applyShell(it, { t: 'start', command: ev.command, cwd: cwdRef.current ?? '', at }))
       } else {
         runningRef.current = false
+        setRunning(false)
         // Конец пришёл при активном alt screen (программа не вышла из него) — его содержимое не замораживаем.
         const { html, lines } = term.buffer.active.type === 'alternate' ? { html: '', lines: 0 } : freeze(term, serializer)
         setItems((it) => applyShell(it, { t: 'end', exitCode: ev.exitCode, at, html, lines }))
@@ -257,21 +253,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       if (runningRef.current) setLivePx(liveContentHeight(term))
     })
 
-    term.parser.registerOscHandler(6973, (data) => {
-      const report = parseOsc6973(data)
-      // Фоновая панель, открытые настройки или подсказки выключены — не показываем.
-      const active =
-        callbacks.current.focused && !useUi.getState().settingsOpen && useSettings.getState().settings.pathCompletions
-      if (report && (report === 'end' || active)) completionRef.current.onReport(report)
-      return true
-    })
-
     term.attachCustomKeyEventHandler((e) => {
-      // Открытый попап забирает свои клавиши до xterm; preventDefault гасит keypress и уход фокуса по Tab.
-      if (completionRef.current.onKey(e)) {
-        e.preventDefault()
-        return false
-      }
       // App hotkeys are handled globally; keep xterm from consuming them.
       if (matchKey(e) !== null) return false
       if (e.type !== 'keydown' || !e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return true
@@ -290,8 +272,6 @@ export function TerminalPane(p: TerminalPaneProps) {
     const onPaste = (e: ClipboardEvent) => {
       e.preventDefault()
       e.stopPropagation()
-      // Вставка меняет строку мимо попапа — его ctx устарел.
-      completionRef.current.onPaste()
       const text = e.clipboardData?.getData('text/plain')
       if (text) term.paste(text)
     }
@@ -299,13 +279,6 @@ export function TerminalPane(p: TerminalPaneProps) {
 
     term.onData((d) => handle?.write(d))
     term.onResize(({ cols, rows }) => handle?.resize(cols, rows))
-    // Пересчитать позицию попапа при прокрутке и изменении размера — только пока он открыт,
-    // иначе каждая пачка вывода с прокруткой перерисовывала бы панель.
-    const relayout = () => {
-      if (completionRef.current.state.open) setLayoutTick((n) => n + 1)
-    }
-    term.onScroll(relayout)
-    term.onResize(relayout)
     term.onResize(() => {
       if (runningRef.current) setLivePx(liveContentHeight(term))
     })
@@ -381,26 +354,26 @@ export function TerminalPane(p: TerminalPaneProps) {
       })
   }, [settings])
 
-  // Подсказки выключили — открытый попап закрыть.
-  useEffect(() => {
-    if (!settings.pathCompletions) completionRef.current.close()
-  }, [settings.pathCompletions])
+  /** Куда идёт ввод: пока команда идёт или открыт alt screen — в xterm, иначе в строку ввода. */
+  const focusActive = useCallback(() => {
+    if (!callbacks.current.focused || useUi.getState().settingsOpen) return
+    if (runningRef.current || altRef.current) termRef.current?.focus()
+    else inputRef.current?.focus()
+  }, [])
 
-  // Фокус в терминал — при смене фокусной панели и после закрытия настроек.
+  // Фокус — при смене фокусной панели и после закрытия настроек.
   useEffect(() => {
-    if (p.focused && !settingsOpen) termRef.current?.focus()
-    else completionRef.current.close()
-  }, [p.focused, settingsOpen])
+    if (p.focused && !settingsOpen) focusActive()
+  }, [p.focused, settingsOpen, focusActive])
 
-  // Позиция попапа считается по курсору xterm после того, как пришёл новый список.
-  const [popup, setPopup] = useState<ReturnType<typeof popupPlacement>>(null)
-  const { open, items: compItems } = completion.state
-  useLayoutEffect(() => {
-    const placement = open ? popupPlacement(termRef.current, hostRef.current, compItems.length) : null
-    setPopup(placement)
-    // Курсор вне видимой области: невидимый попап не должен съедать клавиши.
-    if (open && !placement) completionRef.current.close()
-  }, [open, compItems, layoutTick])
+  // Команда закончилась (строка ввода снова активна) — фокус в неё, если он был в панели или нигде.
+  const paneRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (running || alt) return
+    const active = document.activeElement
+    const nothingFocused = !active || active === document.body
+    if (nothingFocused || paneRef.current?.contains(active)) focusActive()
+  }, [running, alt, focusActive])
 
   // host перенесён в слот (блок/оверлей): размер, перерисовка, фокус.
   const onAttach = useCallback(() => {
@@ -411,13 +384,24 @@ export function TerminalPane(p: TerminalPaneProps) {
     if (callbacks.current.focused && !useUi.getState().settingsOpen) term.focus()
   }, [])
 
-  // host вернулся в парковку: перенос в DOM сбросил фокус — вернуть его в xterm (до Task 7 ввод идёт туда).
-  const onDetach = useCallback((hadFocus: boolean) => {
-    const active = document.activeElement
-    const nothingFocused = !active || active === document.body
-    if ((hadFocus || nothingFocused) && callbacks.current.focused && !useUi.getState().settingsOpen) {
-      termRef.current?.focus()
-    }
+  // host вернулся в парковку: перенос в DOM сбросил фокус — вернуть его туда, где идёт ввод.
+  const onDetach = useCallback(
+    (hadFocus: boolean) => {
+      const active = document.activeElement
+      const nothingFocused = !active || active === document.body
+      if (hadFocus || nothingFocused) focusActive()
+    },
+    [focusActive],
+  )
+
+  const onRun = useCallback((cmd: string) => handleRef.current?.write(commandBytes(cmd)), [])
+  const onAsk = useCallback((text: string) => void askClaude(p.paneId, cwdRef.current, text), [p.paneId])
+  const onInterrupt = useCallback(() => interruptClaude(p.paneId), [p.paneId])
+  const onClearFeed = useCallback(() => {
+    // Идущий блок не трогаем (строка ввода в это время и так неактивна).
+    setItems((it) => it.filter((x) => x.kind === 'shell' && x.running))
+    claudeFrom.current = claudePrev.current.length
+    setSelected(null)
   }, [])
 
   // Автопрокрутка: лента следует за выводом, пока пользователь у низа.
@@ -464,19 +448,23 @@ export function TerminalPane(p: TerminalPaneProps) {
   return (
     <div
       className="pane"
+      ref={paneRef}
       data-pane-id={p.paneId}
       onFocus={() => callbacks.current.onFocus()}
-      // Клик по ленте возвращает ввод в xterm (если не выделяли текст). До строки ввода (Task 7)
-      // это единственный способ печатать команды: в простое xterm невидим, но в фокусе.
+      // Клик по ленте возвращает ввод туда, где он идёт: в строку ввода, а пока идёт команда — в xterm.
       onMouseUp={(e) => {
-        // Кнопки ленты («Показать всё» и т. п.) и выделение текста не трогаем.
-        if ((e.target as Element).closest?.('button, a, input, textarea, select')) return
-        if (window.getSelection()?.isCollapsed ?? true) termRef.current?.focus()
+        // Кнопки ленты («Показать всё» и т. п.), само поле и выделение текста не трогаем.
+        if ((e.target as Element).closest?.('button, a, input, textarea, select, .input')) return
+        if (window.getSelection()?.isCollapsed ?? true) {
+          if (runningRef.current || altRef.current) termRef.current?.focus()
+          else inputRef.current?.focus()
+        }
       }}
     >
       <Feed
         ref={feedRef}
         items={items}
+        agents={claude?.state.agents}
         selectedId={selected}
         renderLive={renderLive}
         onScroll={onFeedScroll}
@@ -487,18 +475,21 @@ export function TerminalPane(p: TerminalPaneProps) {
           </div>
         }
       />
-      {/* Task 7: строка ввода под лентой. */}
+      <div className="dock">
+        <InputBar
+          ref={inputRef}
+          disabled={running || alt}
+          completions={p.focused && !settingsOpen && settings.pathCompletions}
+          cwd={() => cwdRef.current}
+          home={home || null}
+          onRun={onRun}
+          onAsk={onAsk}
+          onInterrupt={onInterrupt}
+          onClearFeed={onClearFeed}
+        />
+      </div>
       {alt && (
         <LiveTerminal host={host} parkRef={parkRef} mode="overlay" hostHeight={hostHeight} height={0} onAttach={onAttach} onDetach={onDetach} />
-      )}
-      {popup && open && (
-        <CompletionPopup
-          state={completion.state}
-          x={popup.x}
-          y={popup.y}
-          previewFits={popup.previewFits}
-          onPick={completion.pick}
-        />
       )}
     </div>
   )

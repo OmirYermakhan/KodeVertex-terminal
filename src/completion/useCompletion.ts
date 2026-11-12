@@ -1,13 +1,13 @@
-// Состояние попапа подсказок путей: отчёты строки zsh → список из Rust → выбор и подстановка.
+// Состояние попапа подсказок путей: строка ввода → список из Rust → выбор и подстановка в поле.
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import {
   applyCompletion,
+  completeLine,
   completionContext,
   rankEntries,
   resolveDir,
   type CompletionContext,
-  type ZleReport,
 } from './completion'
 
 export interface FsEntryTS {
@@ -30,21 +30,39 @@ export interface CompletionState {
   preview: FsPreviewTS | null
   /** Абсолютный каталог, из которого взяты items. */
   dir: string
+  /** Выбор менялся ↑/↓ с момента показа списка. */
+  navigated: boolean
+  /** Строка ввода целиком и границы строки курсора в ней (ctx — по этой строке). */
+  buffer: string
+  lineStart: number
+  lineEnd: number
 }
 
 export interface CompletionOptions {
   cwd: () => string | undefined
   home: string | null
-  write: (s: string) => void
+  /** Подстановка: новое значение поля и курсор (UTF-16); run — сразу выполнить строку. */
+  replace: (value: string, cursor: number, run: boolean) => void
+}
+
+/** Достаточно для KeyboardEvent и React-события клавиатуры. */
+export type KeyLike = Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'> & {
+  isComposing?: boolean
+  keyCode?: number
+  type?: string
 }
 
 export interface CompletionApi {
   state: CompletionState
-  onReport(r: ZleReport): void
-  /** true — клавиша съедена попапом и не должна уйти в терминал. */
-  onKey(e: KeyboardEvent): boolean
-  /** Вставка в терминал: строка изменена набором, текущий ctx устарел. */
-  onPaste(): void
+  /**
+   * Строка ввода изменилась (или курсор). typed=false — значение подставлено не набором
+   * (история): попап не открывается.
+   */
+  update(buffer: string, cursor: number, typed?: boolean): void
+  /** Строку отправили — каталог мог измениться, кэш и esc сбрасываются. */
+  reset(): void
+  /** true — клавиша съедена попапом и не должна дойти до поля. */
+  onKey(e: KeyLike): boolean
   /** Подставить элемент i (как Tab). */
   pick(i: number): void
   close(): void
@@ -52,46 +70,39 @@ export interface CompletionApi {
 
 const LIST_DEBOUNCE_MS = 30
 const PREVIEW_DEBOUNCE_MS = 80
-/** Длиннее — не разбираем каждый отчёт (вставка больших текстов, here-doc в строке). */
+/** Длиннее — не разбираем (вставка больших текстов). */
 const MAX_BUFFER = 4096
 
-// Клавиши, которые меняют строку или курсор в ней: после них ctx устаревает.
-const EDIT_KEYS = new Set(['Backspace', 'Delete', 'ArrowLeft', 'Home', 'End'])
-const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Fn'])
-
-// ⌘⌫ стирает строку, ⌘←/→ — в начало/конец строки.
-const META_EDIT_KEYS = new Set(['Backspace', 'ArrowLeft', 'ArrowRight'])
-// Без модификаторов при закрытом попапе: история zsh / прокрутка.
-const HISTORY_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'])
-// ⌃P/⌃N — история, ⌃R — поиск по истории.
-const CTRL_HISTORY_KEYS = new Set(['p', 'n', 'r'])
-
-const plain = (e: KeyboardEvent) => !e.metaKey && !e.ctrlKey && !e.altKey
-
-/**
- * Чем клавиша меняет строку: 'history' — подставит строку из истории (не набор),
- * 'typed' — набор/стирание, null — строку не меняет или неизвестно.
- */
-function lineChange(e: KeyboardEvent, open: boolean): 'history' | 'typed' | null {
-  if (plain(e) && !e.shiftKey && HISTORY_KEYS.has(e.key)) return open && (e.key === 'ArrowUp' || e.key === 'ArrowDown') ? null : 'history'
-  if (e.ctrlKey && !e.metaKey && !e.altKey && CTRL_HISTORY_KEYS.has(e.key.toLowerCase())) return 'history'
-  if (e.metaKey && !e.ctrlKey && !e.altKey && e.key === 'Backspace') return 'typed'
-  if (plain(e) && ([...e.key].length === 1 || e.key === 'Backspace' || e.key === 'Delete')) return 'typed'
-  return null
+const CLOSED: CompletionState = {
+  open: false,
+  items: [],
+  selected: 0,
+  ctx: null,
+  preview: null,
+  dir: '',
+  navigated: false,
+  buffer: '',
+  lineStart: 0,
+  lineEnd: 0,
 }
-
-/** Клавиша не съедена попапом, но может изменить строку zsh. */
-function editsLine(e: KeyboardEvent): boolean {
-  if (MODIFIER_KEYS.has(e.key)) return false
-  if (e.metaKey) return !e.ctrlKey && !e.altKey && META_EDIT_KEYS.has(e.key)
-  // Ctrl/Alt-сочетания в zsh — это правка строки (^W, ^U, ⌥⌫, ⌥b…).
-  if (e.ctrlKey || e.altKey) return true
-  return [...e.key].length === 1 || EDIT_KEYS.has(e.key)
-}
-
-const CLOSED: CompletionState = { open: false, items: [], selected: 0, ctx: null, preview: null, dir: '' }
 
 export const joinPath = (dir: string, name: string) => (dir.endsWith('/') ? dir : dir + '/') + name
+
+/**
+ * Что сделает ↵ при открытом попапе: 'go' — подставить и выполнить (cd), 'substitute' — только
+ * подставить, null — попап закроется, а строка выполнится как набрана. По этому же значению
+ * строится подсказка попапа, так что она всегда совпадает с поведением.
+ */
+export function enterAction(s: CompletionState): 'go' | 'substitute' | null {
+  const ctx = s.ctx
+  const item = s.items[s.selected]
+  if (!s.open || !ctx || !item) return null
+  const repl = applyCompletion(ctx, item)
+  // Токен уже равен элементу — подставлять нечего.
+  if (ctx.token === repl || ctx.token + '/' === repl || ctx.token === repl + '/') return null
+  if (ctx.command === 'cd') return s.navigated || ctx.namePart !== '' ? 'go' : null
+  return s.navigated ? 'substitute' : null
+}
 
 export function useCompletion(o: CompletionOptions): CompletionApi {
   const [state, setState] = useState<CompletionState>(CLOSED)
@@ -100,12 +111,11 @@ export function useCompletion(o: CompletionOptions): CompletionApi {
     api.setOptions(o)
   })
   useEffect(() => api.dispose, [api])
-  return { state, onReport: api.onReport, onKey: api.onKey, onPaste: api.onPaste, pick: api.pick, close: api.close }
+  return { state, update: api.update, reset: api.reset, onKey: api.onKey, pick: api.pick, close: api.close }
 }
 
 function createController(initial: CompletionOptions, publish: (s: CompletionState) => void) {
   let options = initial
-  const opts = () => options
   let cur = CLOSED
   let listTimer: ReturnType<typeof setTimeout> | undefined
   let previewTimer: ReturnType<typeof setTimeout> | undefined
@@ -113,16 +123,10 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
   let listSeq = 0
   let previewSeq = 0
   let cache: { key: string; entries: FsEntryTS[] } | null = null
-  let lastLine = ''
+  /** Последняя обработанная строка (`курсор;буфер`): повтор (onSelect после onChange) не пересчитываем. */
+  let lastLine: string | null = null
   /** Строка, на которой попап закрыли по esc: до её изменения не открываем. */
   let dismissedLine: string | null = null
-  /** Выбор менялся ↑/↓ с момента показа списка. */
-  let navigated = false
-  /**
-   * Строку последним изменил набор (а не история ↑/↓, ⌃P/⌃N/⌃R). Иначе отчёт попап не открывает:
-   * следующая ↑ должна уйти в историю zsh, а не в список.
-   */
-  let typed = true
 
   const set = (s: CompletionState) => {
     cur = s
@@ -156,47 +160,48 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
     }, PREVIEW_DEBOUNCE_MS)
   }
 
-  const show = (ctx: CompletionContext, dir: string, entries: FsEntryTS[]) => {
+  type Line = Pick<CompletionState, 'buffer' | 'lineStart' | 'lineEnd'>
+
+  const show = (ctx: CompletionContext, dir: string, entries: FsEntryTS[], line: Line) => {
     const items = rankEntries(ctx.namePart, entries)
     if (items.length === 0) return close()
-    navigated = false
-    set({ open: true, items, selected: 0, ctx, preview: null, dir })
+    set({ open: true, items, selected: 0, ctx, preview: null, dir, navigated: false, ...line })
     schedulePreview()
   }
 
-  const onReport = (r: ZleReport) => {
-    if (r === 'end') {
-      // Новая строка — каталог мог измениться, кэш больше не нужен.
-      cache = null
-      lastLine = ''
-      dismissedLine = null
-      typed = true
-      return close()
-    }
-    if (!typed || r.buffer.length > MAX_BUFFER) return close()
-    lastLine = `${r.cursor};${r.buffer}`
+  const update = (buffer: string, cursor: number, typed = true) => {
+    const key = `${cursor};${buffer}`
+    if (key === lastLine) return
+    lastLine = key
+    if (!typed || buffer.length > MAX_BUFFER) return close()
     if (dismissedLine !== null) {
-      if (lastLine === dismissedLine) return
+      if (key === dismissedLine) return
       dismissedLine = null
     }
-    const ctx = completionContext(r.buffer, r.cursor)
-    const { cwd: getCwd, home } = opts()
+    // Многострочная строка ввода: контекст — по строке, где курсор.
+    const lineStart = buffer.lastIndexOf('\n', cursor - 1) + 1
+    const nl = buffer.indexOf('\n', cursor)
+    const lineEnd = nl < 0 ? buffer.length : nl
+    const text = buffer.slice(lineStart, lineEnd)
+    const ctx = completionContext(text, [...buffer.slice(lineStart, cursor)].length)
+    const { cwd: getCwd, home } = options
     const cwd = getCwd()
     if (!ctx || !cwd || (ctx.dirPart.startsWith('~') && !home)) return close()
     const dir = resolveDir(ctx.dirPart, cwd, home ?? '')
-    const key = `${dir}\0${ctx.dirsOnly}\0${ctx.includeHidden}`
+    const cacheKey = `${dir}\0${ctx.dirsOnly}\0${ctx.includeHidden}`
+    const line = { buffer, lineStart, lineEnd }
 
     stopPending()
-    if (cache?.key === key) return show(ctx, dir, cache.entries)
-    // Пока список не пришёл, старый ctx неверен — попап закрыт, клавиши идут в zsh.
+    if (cache?.key === cacheKey) return show(ctx, dir, cache.entries, line)
+    // Пока список не пришёл, старый ctx неверен — попап закрыт.
     if (cur !== CLOSED) set(CLOSED)
     const seq = listSeq
     listTimer = setTimeout(() => {
       invoke<FsEntryTS[]>('fs_list', { dir, dirsOnly: ctx.dirsOnly, includeHidden: ctx.includeHidden })
         .then((entries) => {
           if (seq !== listSeq) return
-          cache = { key, entries }
-          show(ctx, dir, entries)
+          cache = { key: cacheKey, entries }
+          show(ctx, dir, entries, line)
         })
         .catch(() => {
           if (seq === listSeq) close()
@@ -204,51 +209,39 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
     }, LIST_DEBOUNCE_MS)
   }
 
-  const apply = (i: number, enter: boolean) => {
-    const item = cur.items[i]
-    const ctx = cur.ctx
-    if (!cur.open || !item || !ctx) return
-    let out = applyCompletion(ctx, item)
-    if (enter && ctx.command === 'cd') out = (out.endsWith('/') ? out.slice(0, -1) : out) + '\r'
-    // Закрываем до следующего отчёта: ctx уже не соответствует строке.
+  const reset = () => {
+    cache = null
+    lastLine = null
+    dismissedLine = null
     close()
-    opts().write(out)
   }
 
-  /**
-   * ↵ уходит в оболочку как есть: без выбора стрелками — пустое имя или не `cd`;
-   * либо токен уже равен элементу.
-   */
-  const enterPassesThrough = (): boolean => {
-    const ctx = cur.ctx
-    const item = cur.items[cur.selected]
-    if (!ctx || !item) return true
-    if (!navigated && (ctx.namePart === '' || ctx.command !== 'cd')) return true
-    const out = applyCompletion(ctx, item)
-    const replacement = out.slice([...ctx.token].length)
-    return ctx.token === replacement || ctx.token + '/' === replacement || ctx.token === replacement + '/'
+  const apply = (i: number, run: boolean) => {
+    const item = cur.items[i]
+    const { ctx, buffer, lineStart, lineEnd } = cur
+    if (!cur.open || !item || !ctx) return
+    let { value, cursor } = completeLine(buffer.slice(lineStart, lineEnd), ctx, item)
+    // ↵ на cd: каталог без завершающего слэша, строка сразу выполняется.
+    if (run && value.slice(0, cursor).endsWith('/')) {
+      value = value.slice(0, cursor - 1) + value.slice(cursor)
+      cursor--
+    }
+    const full = buffer.slice(0, lineStart) + value + buffer.slice(lineEnd)
+    close()
+    options.replace(full, lineStart + cursor, run)
   }
 
   const select = (i: number) => {
-    navigated = true
-    set({ ...cur, selected: i })
+    set({ ...cur, selected: i, navigated: true })
     schedulePreview()
   }
 
-  const onKey = (e: KeyboardEvent): boolean => {
+  const onKey = (e: KeyLike): boolean => {
     // IME-набор: клавиши принадлежат композиции, а не попапу.
-    if (e.isComposing || e.keyCode === 229) {
-      if (e.type === 'keydown') typed = true
-      return false
-    }
-    if (e.type !== 'keydown') return false
-    const change = lineChange(e, cur.open)
-    if (change !== null) typed = change === 'typed'
+    if (e.isComposing || e.keyCode === 229) return false
+    if (e.type !== undefined && e.type !== 'keydown') return false
     if (!cur.open) return false
-    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) {
-      if (editsLine(e)) close()
-      return false
-    }
+    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return false
     const n = cur.items.length
     switch (e.key) {
       case 'ArrowDown':
@@ -258,38 +251,34 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
         select((cur.selected - 1 + n) % n)
         return true
       case 'Tab':
-        // Пустое имя без выбора стрелками — обычный Tab zsh.
-        if (cur.ctx?.namePart === '' && !navigated) {
-          close()
-          return false
-        }
-        apply(cur.selected, false)
-        return true
       case 'ArrowRight':
         apply(cur.selected, false)
         return true
-      case 'Enter':
-        if (enterPassesThrough()) {
+      case 'Enter': {
+        const action = enterAction(cur)
+        if (action === null) {
           close()
           return false
         }
-        apply(cur.selected, true)
+        apply(cur.selected, action === 'go')
         return true
+      }
       case 'Escape':
         dismissedLine = lastLine
         close()
         return true
       default:
-        // Строку правят мимо попапа — ctx устарел; следующий отчёт откроет заново (из кэша).
-        if (editsLine(e)) close()
         return false
     }
   }
 
-  const onPaste = () => {
-    typed = true
-    close()
+  return {
+    update,
+    reset,
+    onKey,
+    close,
+    pick: (i: number) => apply(i, false),
+    dispose: stopPending,
+    setOptions: (o: CompletionOptions) => void (options = o),
   }
-
-  return { onReport, onKey, onPaste, close, pick: (i: number) => apply(i, false), dispose: stopPending, setOptions: (o: CompletionOptions) => void (options = o) }
 }

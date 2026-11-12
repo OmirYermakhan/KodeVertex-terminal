@@ -17,6 +17,10 @@ function state(over: Partial<CompletionState> = {}): CompletionState {
     ctx: completionContext('ls r', 4),
     preview: null,
     dir: '/p',
+    navigated: false,
+    buffer: 'ls r',
+    lineStart: 0,
+    lineEnd: 4,
     ...over,
   }
 }
@@ -35,7 +39,18 @@ describe('CompletionPopup', () => {
     expect(rows[1]).toHaveAttribute('aria-selected', 'true')
     expect(rows[0]).toHaveAttribute('aria-selected', 'false')
     expect(rows[1].querySelector('b')?.textContent).toBe('R')
-    expect(screen.getByText(/↑↓ выбрать · Tab подставить · ↵ подставить · esc/)).toBeInTheDocument()
+    // ↵ без выбора стрелками выполняет строку как есть — подсказка его не обещает.
+    expect(screen.getByText('↑↓ выбрать · Tab подставить · esc')).toBeInTheDocument()
+  })
+
+  it('says ↵ подставить for other commands only after ↑/↓', () => {
+    render(<CompletionPopup state={state({ navigated: true })} x={0} y={0} onPick={vi.fn()} />)
+    expect(screen.getByText('↑↓ выбрать · Tab подставить · ↵ подставить · esc')).toBeInTheDocument()
+  })
+
+  it('no ↵ hint for cd with an empty name before ↑/↓', () => {
+    render(<CompletionPopup state={state({ ctx: completionContext('cd ', 3) })} x={0} y={0} onPick={vi.fn()} />)
+    expect(screen.getByText('↑↓ выбрать · Tab подставить · esc')).toBeInTheDocument()
   })
 
   it('says ↵ перейти for cd', () => {

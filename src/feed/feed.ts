@@ -49,6 +49,9 @@ export function parseOsc133(data: string): ParsedOsc133 | null {
   return null
 }
 
+/** Монотонный счётчик id блоков: после очистки ленты (⌃L) id не повторяются. */
+let blockSeq = 0
+
 function runningIndex(items: FeedItem[]): number {
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i]
@@ -81,7 +84,7 @@ export function applyShell(items: FeedItem[], ev: ShellEvent): FeedItem[] {
   }
   next.push({
     kind: 'shell',
-    id: `sh-${items.length}-${ev.at}`,
+    id: `sh-${++blockSeq}`,
     command: ev.command,
     cwd: ev.cwd,
     startedAt: ev.at,
@@ -92,6 +95,42 @@ export function applyShell(items: FeedItem[], ev: ShellEvent): FeedItem[] {
     running: true,
   })
   return next
+}
+
+/** id Claude-элемента ленты по его индексу в ClaudeState.items панели (индексы только растут). */
+export const claudeItemId = (i: number) => `cl-${i}`
+
+/**
+ * Перенос изменений ClaudeState.items в ленту: изменённые элементы заменяются на месте,
+ * новые добавляются в конец (после уже идущих shell-блоков — хронологически).
+ * Элементы с индексом < from (лента очищена ⌃L) не показываются.
+ */
+export function syncClaude(
+  items: FeedItem[],
+  prev: readonly FeedClaudeItem[],
+  next: readonly FeedClaudeItem[],
+  from = 0,
+): FeedItem[] {
+  if (prev === next) return items
+  let out: FeedItem[] | null = null
+  for (let i = from; i < next.length; i++) {
+    if (i < prev.length && prev[i] === next[i]) continue
+    out ??= items.slice()
+    const id = claudeItemId(i)
+    const entry: ClaudeItem = { kind: 'claude', id, item: next[i] }
+    let at = -1
+    if (i < prev.length) {
+      for (let j = out.length - 1; j >= 0; j--) {
+        if (out[j].id === id) {
+          at = j
+          break
+        }
+      }
+    }
+    if (at >= 0) out[at] = entry
+    else out.push(entry)
+  }
+  return out ?? items
 }
 
 export function formatDuration(ms: number): string {

@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   PATH_COMMANDS,
   applyCompletion,
+  completeLine,
   completionContext,
   fuzzyScore,
-  parseOsc6973,
   rankEntries,
   resolveDir,
   shellEscape,
@@ -15,26 +15,6 @@ const ctxOf = (buffer: string) => {
   if (!c) throw new Error('нет контекста для ' + buffer)
   return c
 }
-
-describe('parseOsc6973', () => {
-  it('разбирает курсор и буфер', () => {
-    expect(parseOsc6973('5;cd sr')).toEqual({ cursor: 5, buffer: 'cd sr' })
-  })
-  it('конец строки', () => {
-    expect(parseOsc6973('-')).toBe('end')
-  })
-  it('мусор -> null', () => {
-    expect(parseOsc6973('x;y')).toBeNull()
-    expect(parseOsc6973('')).toBeNull()
-    expect(parseOsc6973('5')).toBeNull()
-  })
-  it('делит только по первой ;', () => {
-    expect(parseOsc6973('3;a;b')).toEqual({ cursor: 3, buffer: 'a;b' })
-  })
-  it('пустой буфер', () => {
-    expect(parseOsc6973('0;')).toEqual({ cursor: 0, buffer: '' })
-  })
-})
 
 describe('PATH_COMMANDS', () => {
   it('содержит ожидаемые команды', () => {
@@ -158,41 +138,51 @@ describe('shellEscape', () => {
 describe('applyCompletion', () => {
   it('кириллица и каталог', () => {
     expect(applyCompletion(ctxOf('cd Док'), { name: 'Документы', isDir: true }))
-      .toBe('\x7f'.repeat(3) + 'Документы/')
+      .toBe('Документы/')
   })
   it('тильда сохраняется', () => {
     expect(applyCompletion(ctxOf('cd ~/pro'), { name: 'projects', isDir: true }))
-      .toBe('\x7f'.repeat(5) + '~/projects/')
+      .toBe('~/projects/')
   })
   it('файл без слэша, пробел экранируется', () => {
     expect(applyCompletion(ctxOf('cat my'), { name: 'my file.txt', isDir: false }))
-      .toBe('\x7f'.repeat(2) + 'my\\ file.txt')
+      .toBe('my\\ file.txt')
   })
   it('dirPart сохраняется', () => {
     expect(applyCompletion(ctxOf('cd src/co'), { name: 'components', isDir: true }))
-      .toBe('\x7f'.repeat(6) + 'src/components/')
+      .toBe('src/components/')
   })
-  it('стирает сырой токен с эмодзи по code points', () => {
+  it('токен с эмодзи заменяется целиком', () => {
     expect(applyCompletion(ctxOf('cd 😀'), { name: 'ab', isDir: false }))
-      .toBe('\x7f' + 'ab')
+      .toBe('ab')
   })
   it('ведущие - + = получают ./', () => {
-    expect(applyCompletion(ctxOf('rm fo'), { name: '-foo', isDir: false })).toBe('\x7f\x7f./-foo')
-    expect(applyCompletion(ctxOf('cd 1'), { name: '+1', isDir: true })).toBe('\x7f./+1/')
-    expect(applyCompletion(ctxOf('ls fo'), { name: '=foo', isDir: false })).toBe('\x7f\x7f./=foo')
-    expect(applyCompletion(ctxOf('rm src/f'), { name: '-f', isDir: false })).toBe('\x7f'.repeat(5) + 'src/-f')
+    expect(applyCompletion(ctxOf('rm fo'), { name: '-foo', isDir: false })).toBe('./-foo')
+    expect(applyCompletion(ctxOf('cd 1'), { name: '+1', isDir: true })).toBe('./+1/')
+    expect(applyCompletion(ctxOf('ls fo'), { name: '=foo', isDir: false })).toBe('./=foo')
+    expect(applyCompletion(ctxOf('rm src/f'), { name: '-f', isDir: false })).toBe('src/-f')
   })
   it('~ в имени без dirPart экранируется', () => {
-    expect(applyCompletion(ctxOf('ls ~'), { name: '~x', isDir: false })).toBe('\x7f' + '\\~x')
+    expect(applyCompletion(ctxOf('ls ~'), { name: '~x', isDir: false })).toBe('\\~x')
   })
   it('~ как домашний каталог не экранируется', () => {
-    expect(applyCompletion(ctxOf('ls ~/a'), { name: 'a b', isDir: false })).toBe('\x7f'.repeat(3) + '~/a\\ b')
+    expect(applyCompletion(ctxOf('ls ~/a'), { name: 'a b', isDir: false })).toBe('~/a\\ b')
   })
   it('квотированные токены', () => {
     expect(applyCompletion(ctxOf("cd 'my fo"), { name: 'my folder', isDir: true }))
-      .toBe('\x7f'.repeat(6) + 'my\\ folder/')
+      .toBe('my\\ folder/')
     expect(applyCompletion(ctxOf('cd "my fo'), { name: "it's", isDir: false }))
-      .toBe('\x7f'.repeat(6) + "it\\'s")
+      .toBe("it\\'s")
+  })
+})
+
+describe('completeLine', () => {
+  it('заменяет токен в строке, курсор — после подстановки', () => {
+    expect(completeLine('cd Док', ctxOf('cd Док'), { name: 'Документы', isDir: true })).toEqual({ value: 'cd Документы/', cursor: 13 })
+  })
+  it('хвост из пробелов после курсора сохраняется', () => {
+    const ctx = completionContext('ls sr  ', 5)!
+    expect(completeLine('ls sr  ', ctx, { name: 'src', isDir: true })).toEqual({ value: 'ls src/  ', cursor: 7 })
   })
 })
 
