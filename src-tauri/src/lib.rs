@@ -8,6 +8,7 @@ mod pty;
 mod settings;
 mod shell;
 mod slash_commands;
+mod traffic_lights;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, Wry};
@@ -91,7 +92,29 @@ pub fn run() {
             .build(),
         )?;
       }
+      #[cfg(target_os = "macos")]
+      if let Some(w) = app.get_webview_window("main") {
+        traffic_lights::apply(w.ns_window());
+      }
       Ok(())
+    })
+    .on_window_event(|window, event| {
+      // AppKit возвращает кнопки окна на штатное место при этих событиях.
+      #[cfg(target_os = "macos")]
+      if matches!(
+        event,
+        tauri::WindowEvent::Resized(_)
+          | tauri::WindowEvent::Focused(_)
+          | tauri::WindowEvent::ThemeChanged(_)
+          | tauri::WindowEvent::ScaleFactorChanged { .. }
+      ) {
+        traffic_lights::apply(window.ns_window());
+        // Ещё раз после того, как AppKit доделает раскладку заголовка.
+        let w = window.clone();
+        let _ = window.run_on_main_thread(move || traffic_lights::apply(w.ns_window()));
+      }
+      #[cfg(not(target_os = "macos"))]
+      let _ = (window, event);
     })
     .build(tauri::generate_context!())
     .expect("error while building tauri application")

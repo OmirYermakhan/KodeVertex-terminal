@@ -124,8 +124,10 @@ body {
   background: var(--warn);
 }
 
-/* Полоса вкладок (макет 04-main-window, .bar/.tabs/.tab) */
-.bar { display: flex; align-items: center; gap: 4px; height: 38px; flex: none; box-sizing: border-box; padding: 0 14px 0 87px; background: var(--panel); border-bottom: 1px solid var(--rule); line-height: normal; }
+/* Полоса вкладок (макет 04-main-window, .bar/.tabs/.tab).
+   padding-left 90px: кнопки окна ставит src-tauri/src/traffic_lights.rs
+   (14 + 23·2 + 14 = 74 — правый край «развернуть») + 16px, как в макете. */
+.bar { display: flex; align-items: center; gap: 4px; height: 38px; flex: none; box-sizing: border-box; padding: 0 14px 0 90px; background: var(--panel); border-bottom: 1px solid var(--rule); line-height: normal; }
 .tab { position: relative; display: flex; align-items: center; gap: 7px; padding: 5px 11px; border-radius: 6px; font-family: var(--font-code); font-size: 12px; color: var(--muted); white-space: nowrap; user-select: none; cursor: default; }
 .tab.on { color: var(--strong); background: var(--bg); }
 .tdot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--acc); }
