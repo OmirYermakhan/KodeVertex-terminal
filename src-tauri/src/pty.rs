@@ -526,6 +526,99 @@ pub(crate) mod tests {
     m.kill(&id).unwrap();
   }
 
+  /// Команда так, как её отправляет строка ввода (`commandBytes`): bracketed paste и ↵.
+  fn paste_cmd(cmd: &str) -> String {
+    format!("\x1b[200~{cmd}\x1b[201~\r")
+  }
+
+  /// Полезная нагрузка 133;C (base64) для команды.
+  fn b64(cmd: &str) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for ch in cmd.as_bytes().chunks(3) {
+      let n = ch.iter().enumerate().fold(0u32, |a, (i, &b)| a | (b as u32) << (16 - 8 * i));
+      for i in 0..4 {
+        out.push(if i <= ch.len() { T[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+      }
+    }
+    out
+  }
+
+  /// Пользовательский rc включает опции, при которых ZLE оставила бы ввод в невидимом буфере.
+  #[test]
+  fn hist_verify_does_not_glue_commands() {
+    let home = temp_home();
+    std::fs::write(home.path().join(".zshrc"), "setopt hist_verify\n").unwrap();
+    let m = PtyManager::default();
+    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(b"\x1b]133;A\x07", 0));
+    let from = out.len();
+    m.write(&id, paste_cmd("echo one").as_bytes()).unwrap();
+    assert!(out.wait_for(b"\x1b]133;D;0\x07\x1b]133;A\x07", from), "вывод: {:?}", out.text());
+    // `!!` сразу выполняется (без hist_verify раскрытие вернулось бы в буфер ZLE).
+    let from = out.len();
+    m.write(&id, paste_cmd("!!").as_bytes()).unwrap();
+    let want = format!("\x1b]133;C;{}\x07", b64("echo one"));
+    assert!(out.wait_for(want.as_bytes(), from), "вывод: {:?}", out.text());
+    assert!(out.wait_for(b"\x1b]133;A\x07", from), "вывод: {:?}", out.text());
+    // Следующая команда не склеивается с остатком.
+    let from = out.len();
+    m.write(&id, paste_cmd("echo two").as_bytes()).unwrap();
+    let want = format!("\x1b]133;C;{}\x07", b64("echo two"));
+    assert!(out.wait_for(want.as_bytes(), from), "вывод: {:?}", out.text());
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
+  fn correct_option_does_not_ask_invisible_question() {
+    let home = temp_home();
+    std::fs::write(home.path().join(".zshrc"), "setopt correct correct_all\n").unwrap();
+    let m = PtyManager::default();
+    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(b"\x1b]133;A\x07", 0));
+    let from = out.len();
+    m.write(&id, paste_cmd("ecoh hi").as_bytes()).unwrap();
+    let want = format!("\x1b]133;C;{}\x07", b64("ecoh hi"));
+    assert!(out.wait_for(want.as_bytes(), from), "вывод: {:?}", out.text());
+    assert!(!out.text()[from..].contains("[nyae]"), "вывод: {:?}", out.text());
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
+  fn unset_bracketed_paste_is_restored() {
+    let home = temp_home();
+    std::fs::write(home.path().join(".zshrc"), "unset zle_bracketed_paste\nbindkey -r '^[[200~'\n").unwrap();
+    let m = PtyManager::default();
+    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(b"\x1b]133;A\x07", 0));
+    run(&m, &id, &out, &paste_cmd("echo a\tb"), "\x1b]133;C;ZWNobyBhCWI=\x07");
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
+  fn line_finish_marker_precedes_command_and_parse_errors() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(b"\x1b]133;A\x07", 0));
+    let from = out.len();
+    m.write(&id, paste_cmd("echo hi").as_bytes()).unwrap();
+    assert!(out.wait_for(b"\x1b]133;D;0\x07", from), "вывод: {:?}", out.text());
+    let i = find_from(&out, "\x1b]133;I\x07", from).expect("нет 133;I");
+    let c = find_from(&out, "\x1b]133;C;", from).expect("нет 133;C");
+    assert!(i < c);
+    // Ошибка разбора: команда не запускается (нет C), но вывод идёт после I и до A.
+    let from = out.len();
+    m.write(&id, paste_cmd("ls )").as_bytes()).unwrap();
+    assert!(out.wait_for(b"\x1b]133;A\x07", from), "вывод: {:?}", out.text());
+    let i = find_from(&out, "\x1b]133;I\x07", from).expect("нет 133;I");
+    let err = find_from(&out, "parse error", i).expect("нет ошибки разбора после I");
+    let a = find_from(&out, "\x1b]133;A\x07", err).expect("нет 133;A после ошибки");
+    assert!(i < err && err < a);
+    assert!(find_from(&out, "\x1b]133;C;", from).is_none());
+    m.kill(&id).unwrap();
+  }
+
   #[test]
   fn continuation_prompt_emits_marker_and_ctrl_c_resets() {
     let home = temp_home();

@@ -14,7 +14,8 @@ autoload -Uz add-zsh-hook
 
 # Режим блоков (KV_BLOCKS=1): границы команд по OSC 133 и скрытое приглашение.
 # 133;A — начало приглашения, 133;C;<base64 команды> — старт, 133;D;<код> — конец,
-# 133;A;k=s — вторичное приглашение (PS2): команда не закончена, ZLE ждёт продолжения.
+# 133;A;k=s — вторичное приглашение (PS2): команда не закончена, ZLE ждёт продолжения,
+# 133;I — ZLE приняла строку.
 if [[ -n "$KV_BLOCKS" ]]; then
   typeset -g _kv_cmd_ran=
   _kv_blocks_precmd() {
@@ -41,9 +42,31 @@ if [[ -n "$KV_BLOCKS" ]]; then
     RPROMPT=''
     PROMPT_EOL_MARK=''
   }
+  # Строка ввода отправляет команду целиком (bracketed paste + ↵) в невидимый ZLE. Опции, при которых
+  # ZLE оставляет ввод в буфере или задаёт вопрос, ломают это: hist_verify вернул бы раскрытый `!!`
+  # в буфер (и он склеился бы со следующей командой), correct спросил бы невидимое [nyae]?.
+  # Восстанавливаем и bracketed paste. Повторяем перед каждым приглашением — rc/плагины могли поменять.
+  _kv_blocks_zle_opts() {
+    unsetopt hist_verify correct correct_all
+    typeset -g zle_bracketed_paste
+    zle_bracketed_paste=($'\e[?2004h' $'\e[?2004l')
+    local km
+    for km in emacs viins vicmd main; do
+      bindkey -M $km '^[[200~' bracketed-paste 2>/dev/null
+    done
+  }
+  _kv_blocks_zle_opts
+  # 133;I — ZLE приняла строку (после её эха): терминал стирает эхо; вывод до 133;C или 133;A
+  # (ошибка разбора и т. п.) становится отдельным блоком, а не теряется.
+  _kv_blocks_line_finish() {
+    print -rn -- $'\e]133;I\a'
+  }
+  autoload -Uz add-zle-hook-widget
+  add-zle-hook-widget line-finish _kv_blocks_line_finish
   # Наш precmd идёт первым, чтобы $? не затёрли пользовательские хуки.
   precmd_functions=(_kv_blocks_precmd ${precmd_functions:#_kv_blocks_precmd})
   add-zsh-hook preexec _kv_blocks_preexec
+  add-zsh-hook precmd _kv_blocks_zle_opts
   # Скрывающий хук — последним: тема могла вернуть приглашение.
   add-zsh-hook precmd _kv_blocks_hide_prompt
   _kv_blocks_hide_prompt
