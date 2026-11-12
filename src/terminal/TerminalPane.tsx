@@ -19,12 +19,13 @@ import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
 import { applyShell, claudeIndex, commandBytes, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
-import { answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, enterClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
+import { dismissQueueHint, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, enterClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
 import { aliasOf } from '../claude/models'
 import { pendingPrompt, type PermissionDecision } from '../claude/reducer'
 import { PermissionPrompt } from '../claude/PermissionPrompt'
 import { QuestionPrompt } from '../claude/QuestionPrompt'
 import { InputBar, type InputBarHandle } from '../input/InputBar'
+import { QueuePanel, type QueuePanelHandle } from '../claude/QueuePanel'
 import { AgentsPanel, type AgentsPanelHandle } from '../claude/AgentsPanel'
 import { blockText, cleanSerializedHtml } from '../feed/blockHtml'
 import { Feed } from '../feed/FeedView'
@@ -71,6 +72,7 @@ function remeasureFont(term: Terminal): void {
 }
 
 const NO_CLAUDE_ITEMS: readonly FeedClaudeItem[] = []
+const NO_QUEUE: readonly QueuedMessage[] = []
 
 /** Число строк вывода: индекс последней непустой строки активного буфера + 1. */
 function contentLines(term: Terminal): number {
@@ -131,6 +133,7 @@ export function TerminalPane(p: TerminalPaneProps) {
 
   const inputRef = useRef<InputBarHandle>(null)
   const agentsRef = useRef<AgentsPanelHandle>(null)
+  const queueRef = useRef<QueuePanelHandle>(null)
   // cwd панели (подсказки путей, Claude-сессия): initialCwd, затем OSC 7.
   const cwdRef = useRef(p.initialCwd)
   const home = useHome()
@@ -469,6 +472,29 @@ export function TerminalPane(p: TerminalPaneProps) {
     if (!active || active === document.body) focusActive()
   }, [agentsShown, p.focused, focusActive])
 
+  // Очередь сообщений Claude (набраны, пока ход шёл) — над строкой ввода, под запросами агента.
+  const queue = claude?.queue ?? NO_QUEUE
+  const queueShown = queue.length > 0 && !alt
+  const queueShownRef = useRef(queueShown)
+  useLayoutEffect(() => {
+    queueShownRef.current = queueShown
+  })
+  // Очередь опустела (ушло последнее), пока фокус был в ней — вернуть ввод.
+  useEffect(() => {
+    if (queueShown || !p.focused) return
+    const active = document.activeElement
+    if (!active || active === document.body) focusActive()
+  }, [queueShown, p.focused, focusActive])
+  const queueInput = useMemo(
+    () => ({
+      recall: () => recallQueued(p.paneId),
+      sendNext: () => sendQueued(p.paneId, cwdRef.current),
+      dismissHint: () => dismissQueueHint(p.paneId),
+    }),
+    [p.paneId],
+  )
+  const onRemoveQueued = useCallback((id: number) => removeQueued(p.paneId, id), [p.paneId])
+
   // Вопрос агента ждёт ответа — блок над строкой ввода (как «needs your input» в Warp).
   // Ждущий запрос агента (вопрос или разрешение) — блок над строкой ввода.
   const prompt = claude ? pendingPrompt(claude.state) : null
@@ -490,7 +516,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       setCustom(null)
       const active = document.activeElement
       if (!active || active === document.body || (paneRef.current?.contains(active) && !inputRef.current?.hasFocus())) {
-        if (!active?.closest?.('.agents')) focusActive()
+        if (!active?.closest?.('.agents, .queue')) focusActive()
       }
       return
     }
@@ -669,6 +695,17 @@ export function TerminalPane(p: TerminalPaneProps) {
           focusPrompt()
           return
         }
+        // ⌘↓: строка ввода (или вопрос) → очередь сообщений (если не пуста) → панель агентов.
+        if (a === 'blockNext' && queueRef.current?.hasFocus()) {
+          agentsRef.current?.focus()
+          return
+        }
+        const inPrompt = !!promptRef.current?.contains(document.activeElement)
+        if (a === 'blockNext' && queueShownRef.current && (inputRef.current?.hasFocus() || inPrompt)) {
+          setSelected(null)
+          queueRef.current?.focus()
+          return
+        }
         const m = moveSelection(itemsRef.current, selectedRef.current, a === 'blockPrev' ? 'up' : 'down')
         setSelected(m.id)
         // ⌘↓ с последнего блока или из строки ввода — фокус в панель агентов (если она показана).
@@ -692,7 +729,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       // Клик по ленте возвращает ввод туда, где он идёт: в строку ввода, а пока идёт команда — в xterm.
       onMouseUp={(e) => {
         // Кнопки ленты («Показать всё» и т. п.), само поле и выделение текста не трогаем.
-        if ((e.target as Element).closest?.('button, a, input, textarea, select, .input, .agents, .aprompt')) return
+        if ((e.target as Element).closest?.('button, a, input, textarea, select, .input, .agents, .aprompt, .queue')) return
         if (window.getSelection()?.isCollapsed ?? true) {
           if (runningRef.current || altRef.current) termRef.current?.focus()
           else inputRef.current?.focus()
@@ -716,7 +753,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       />
       <div className="dock">
         {claude && !agentsHidden && (
-          <AgentsPanel ref={agentsRef} state={claude.state} onExit={() => inputRef.current?.focus()} />
+          <AgentsPanel ref={agentsRef} state={claude.state} queued={queue.length} onExit={() => inputRef.current?.focus()} />
         )}
         {question && !alt && (
           <QuestionPrompt
@@ -740,8 +777,18 @@ export function TerminalPane(p: TerminalPaneProps) {
             onLeave={onLeaveQ}
           />
         )}
+        {queueShown && (
+          <QueuePanel
+            ref={queueRef}
+            queue={queue}
+            paused={!!claude?.pauseHint}
+            onRemove={onRemoveQueued}
+            onExit={() => inputRef.current?.focus()}
+          />
+        )}
         <InputBar
           ref={inputRef}
+          queue={queueInput}
           answer={answerMode}
           disabled={running || alt || awaiting}
           continuation={cont}

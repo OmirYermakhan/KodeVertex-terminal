@@ -452,3 +452,41 @@ describe('InputBar: свой ответ на вопрос агента', () => {
     expect(answer.onCancel).toHaveBeenCalled()
   })
 })
+
+describe('InputBar: очередь сообщений Claude', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    invoke.mockResolvedValue([])
+    resetHistory()
+  })
+
+  it('↑ в пустой строке забирает последнее из очереди (раньше истории); не пусто — история', () => {
+    pushHistory('ls')
+    const recall = vi.fn<() => string | null>().mockReturnValueOnce('второе').mockReturnValue(null)
+    const { ta, key } = setup({ queue: { recall, sendNext: vi.fn(() => false), dismissHint: vi.fn(() => false) } })
+    key('ArrowUp')
+    expect(ta.value).toBe('второе')
+    expect(recall).toHaveBeenCalledTimes(1)
+    // Строка не пуста — ↑ листает историю, очередь не трогается.
+    key('ArrowUp')
+    expect(ta.value).toBe('ls')
+    expect(recall).toHaveBeenCalledTimes(1)
+  })
+
+  it('↵ на пустой строке — следующее из очереди; esc — сначала убирает подсказку паузы', () => {
+    const sendNext = vi.fn(() => true)
+    const dismissHint = vi.fn().mockReturnValueOnce(true).mockReturnValue(false)
+    const { p, key, set, container } = setup({ queue: { recall: vi.fn(() => null), sendNext, dismissHint } })
+    key('Enter')
+    expect(sendNext).toHaveBeenCalledTimes(1)
+    expect(p.onRun).not.toHaveBeenCalled()
+    set('claude')
+    key('Enter')
+    expect(container.querySelector('.in-mode')).not.toBeNull()
+    key('Escape')
+    // Первый esc — подсказка паузы, режим Claude остаётся.
+    expect(container.querySelector('.in-mode')).not.toBeNull()
+    key('Escape')
+    expect(container.querySelector('.in-mode')).toBeNull()
+  })
+})

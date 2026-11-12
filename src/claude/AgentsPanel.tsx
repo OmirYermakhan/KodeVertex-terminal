@@ -153,6 +153,8 @@ export interface AgentsPanelProps {
   state: ClaudeState
   /** esc: фокус обратно в строку ввода. */
   onExit(): void
+  /** Сообщений в очереди (заголовок: «· N в очереди»). */
+  queued?: number
   /** Текущее время для тестов; иначе — часы, тикающие раз в секунду, пока кто-то работает. */
   now?: number
 }
@@ -234,6 +236,7 @@ export const AgentsPanel = forwardRef<AgentsPanelHandle, AgentsPanelProps>(funct
         <span>
           Агенты · <b>{h.running}</b>
           {h.rest.map((s) => ` · ${s}`).join('')}
+          {p.queued ? ` · ${p.queued} в очереди` : ''}
         </span>
         <span className="keys">{AGENTS_KEYS}</span>
       </div>

@@ -61,6 +61,11 @@ export interface InputBarProps {
   modelInfo?(): { current: string | null; effort: string | null }
   /** «Свой ответ…» на вопрос агента: ↵ отдаёт текст сюда, esc — назад к вопросу. */
   answer?: { onSubmit(text: string): void; onCancel(): void } | null
+  /**
+   * Очередь сообщений Claude: ↑ в пустой строке — последнее обратно (null — очередь пуста);
+   * ↵ в пустой строке — следующее (после паузы); esc — убрать подсказку паузы (true — была).
+   */
+  queue?: { recall(): string | null; sendNext(): boolean; dismissHint(): boolean }
 }
 
 export interface InputBarHandle {
@@ -246,6 +251,12 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     }
     if (ne.isComposing || ne.keyCode === 229) return
     const v = ta.value
+    const plain = !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
+    // Пауза очереди: esc сначала убирает подсказку (режим Claude остаётся).
+    if (e.key === 'Escape' && plain && !props.current.answer && v === '' && props.current.queue?.dismissHint()) {
+      e.preventDefault()
+      return
+    }
     // Свой ответ на вопрос агента: esc — назад к вопросу (набранное остаётся).
     if (e.key === 'Escape' && props.current.answer && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
       e.preventDefault()
@@ -273,11 +284,22 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       if (only(null)) {
         e.preventDefault()
         if (v.trim()) submit(v, false)
+        else if (v === '' && !props.current.answer) props.current.queue?.sendNext()
       }
       return
     }
     if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && only(null)) {
       const up = e.key === 'ArrowUp'
+      // ↑ в пустой строке — последнее сообщение очереди Claude обратно в строку (для правки).
+      if (up && v === '' && !props.current.answer) {
+        const text = props.current.queue?.recall() ?? null
+        if (text !== null) {
+          e.preventDefault()
+          nav.current = NAV_START
+          setLine(text, text.length)
+          return
+        }
+      }
       if (ta.selectionStart !== ta.selectionEnd) return
       const pos = ta.selectionStart
       if (up ? !onFirstLine(v, pos) : !onLastLine(v, pos)) return

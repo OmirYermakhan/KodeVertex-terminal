@@ -26,6 +26,22 @@ export interface PaneClaude {
   /** Модель и усилие, выбранные в `/model`: передаются процессу при (пере)запуске. */
   model: string | null
   effort: string | null
+  /**
+   * Сообщения, набранные, пока ход шёл (как в Claude Code): ждут конца хода и уходят по одному
+   * за ход. В ленте их нет, пока не отправлены.
+   */
+  queue: QueuedMessage[]
+  /** Очередь не уходит сама (ход прерван ⌃C, claude завершился): ↵ на пустой строке — следующее. */
+  paused: boolean
+  /** Подсказка «пауза — ↵ отправить следующее» в заголовке очереди (esc убирает). */
+  pauseHint: boolean
+}
+
+export interface QueuedMessage {
+  id: number
+  text: string
+  /** Каталог панели в момент набора (как у ⌘↵): сообщение уходит в сессию этого каталога. */
+  cwd?: string
 }
 
 interface SessionsStore {
@@ -49,7 +65,18 @@ interface Proc {
 const procs = new Map<string, Proc>()
 
 function get(paneId: string): PaneClaude {
-  return useClaudeSessions.getState().sessions[paneId] ?? { state: initialClaude(), procId: null, cwd: null, model: null, effort: null }
+  return (
+    useClaudeSessions.getState().sessions[paneId] ?? {
+      state: initialClaude(),
+      procId: null,
+      cwd: null,
+      model: null,
+      effort: null,
+      queue: [],
+      paused: false,
+      pauseHint: false,
+    }
+  )
 }
 
 function patch(paneId: string, f: (p: PaneClaude) => PaneClaude): void {
@@ -117,7 +144,10 @@ function start(paneId: string): Proc {
         invoke('claude_respond', { id: proc.id, requestId: r.requestId, response: denyResponse() }).catch(() => {})
       }
     }
+    const before = get(paneId).state.pending
     patchState(paneId, (s) => reduceClaude(s, line, Date.now()))
+    // Ход закончился (не прерван) — следующее сообщение из очереди.
+    if (before > 0 && get(paneId).state.pending === 0 && !proc.interrupted) sendNextQueued(paneId, undefined)
   })
   const onExit = new Channel<ClaudeExit>((e) => {
     // Ответов на управляющие запросы этого процесса уже не будет.
@@ -139,7 +169,8 @@ function start(paneId: string): Proc {
       if (!ok && resume !== null && !gotLine) state = { ...state, sessionId: null }
       // Вопрос без процесса не ответить: отменяем (блок над строкой ввода исчезает).
       state = cancelPrompts(state, undefined, 'exit')
-      return { ...p, procId: null, state }
+      // Очередь не уходит сама в новый процесс: пауза до ↵.
+      return { ...p, procId: null, state, ...pause(p) }
     })
   })
   proc.ready = invoke<string>('claude_start', { cwd, resume, model, effort, onLine, onExit })
@@ -158,7 +189,7 @@ function start(paneId: string): Proc {
     .catch((err: unknown) => {
       if (alive()) {
         procs.delete(paneId)
-        patch(paneId, (p) => ({ ...p, procId: null, state: failed(p.state, String(err), Date.now()) }))
+        patch(paneId, (p) => ({ ...p, procId: null, state: failed(p.state, String(err), Date.now()), ...pause(p) }))
       }
       return null
     })
@@ -270,6 +301,53 @@ export async function chooseModel(paneId: string, paneCwd: string | undefined, c
   }
 }
 
+/** Пауза очереди (с подсказкой, если в ней что-то есть). */
+const pause = (p: PaneClaude) => ({ paused: true, pauseHint: p.queue.length > 0 })
+
+let queueSeq = 0
+
+/** Следующее сообщение очереди — в Claude (снимает паузу). false — очередь пуста. */
+function sendNextQueued(paneId: string, paneCwd: string | undefined): boolean {
+  const cur = get(paneId)
+  if (cur.paused || cur.queue.length === 0) return false
+  const [head, ...rest] = cur.queue
+  patch(paneId, (p) => ({ ...p, queue: rest }))
+  void askClaude(paneId, head.cwd ?? paneCwd, head.text)
+  return true
+}
+
+/** ↵ на пустой строке: следующее из очереди, если ход не идёт (после паузы). */
+export function sendQueued(paneId: string, paneCwd: string | undefined): boolean {
+  const cur = get(paneId)
+  if (cur.state.busy || cur.queue.length === 0) return false
+  patch(paneId, (p) => ({ ...p, paused: false, pauseHint: false }))
+  return sendNextQueued(paneId, paneCwd)
+}
+
+/** ↑ в пустой строке: последнее сообщение очереди — обратно в строку (из очереди убирается). */
+export function recallQueued(paneId: string): string | null {
+  const q = get(paneId).queue
+  if (q.length === 0) return null
+  const last = q[q.length - 1]
+  patch(paneId, (p) => ({ ...p, queue: p.queue.slice(0, -1), pauseHint: p.pauseHint && p.queue.length > 1 }))
+  return last.text
+}
+
+/** ✕ / ⌫ на строке очереди. */
+export function removeQueued(paneId: string, id: number): void {
+  patch(paneId, (p) => {
+    const queue = p.queue.filter((m) => m.id !== id)
+    return { ...p, queue, pauseHint: p.pauseHint && queue.length > 0 }
+  })
+}
+
+/** esc: убрать подсказку паузы (очередь остаётся на паузе). false — подсказки не было. */
+export function dismissQueueHint(paneId: string): boolean {
+  if (!get(paneId).pauseHint) return false
+  patch(paneId, (p) => ({ ...p, pauseHint: false }))
+  return true
+}
+
 const addError = (paneId: string, text: string) =>
   patchState(paneId, (s) => ({ ...s, items: [...s.items, { type: 'error', text }] }))
 
@@ -322,6 +400,13 @@ export function claudeCwdKnown(paneId: string, paneCwd: string | undefined): boo
  * с тех пор перешла в другой каталог — новая сессия там; начало новой сессии отмечается в ленте.
  */
 export async function askClaude(paneId: string, paneCwd: string | undefined, text: string): Promise<void> {
+  // Ход идёт (в т. ч. ждёт ответа на вопрос или разрешение) — в очередь: в stdin посреди хода не пишем.
+  if (get(paneId).state.busy) {
+    patch(paneId, (p) => ({ ...p, queue: [...p.queue, { id: ++queueSeq, text, ...(paneCwd ? { cwd: paneCwd } : {}) }], pauseHint: p.pauseHint || p.paused }))
+    return
+  }
+  // Отправка вручную снимает паузу: после этого хода очередь снова уходит сама.
+  patch(paneId, (p) => (p.paused ? { ...p, paused: false, pauseHint: false } : p))
   const cwd = switchCwd(paneId, paneCwd)
   if (cwd === null) {
     patchState(paneId, (s) => failed(userSent(s, text, Date.now()), NO_CWD, Date.now()))
@@ -345,7 +430,7 @@ export async function askClaude(paneId: string, paneCwd: string | undefined, tex
     try {
       await invoke('claude_send', { id, text })
     } catch (err) {
-      patchState(paneId, (s) => failed(s, String(err), Date.now()))
+      patch(paneId, (p) => ({ ...p, state: failed(p.state, String(err), Date.now()), ...pause(p) }))
     }
   })
   return proc.chain
@@ -413,6 +498,8 @@ export function interruptClaude(paneId: string): boolean {
   const proc = procs.get(paneId)
   if (!get(paneId).state.busy || !proc) return false
   proc.interrupted = true
+  // Очередь остаётся, но сама не уходит: ↵ на пустой строке — следующее.
+  patch(paneId, (p) => ({ ...p, ...pause(p) }))
   // Прерванный ход — его вопросы и разрешения больше не ждут.
   patchState(paneId, (s) => cancelPrompts(s))
   // Процесс ещё запускается — отметки достаточно: askClaude не отправит вопрос.

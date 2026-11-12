@@ -15,7 +15,7 @@ describe('TabBar', () => {
 
   const setSession = (paneId: string, state: ClaudeState) =>
     act(() =>
-      useClaudeSessions.setState((s) => ({ sessions: { ...s.sessions, [paneId]: { state, procId: 'c', cwd: null, model: null, effort: null } } })),
+      useClaudeSessions.setState((s) => ({ sessions: { ...s.sessions, [paneId]: { state, procId: 'c', cwd: null, model: null, effort: null, queue: [], paused: false, pauseHint: false } } })),
     )
   const dots = () => screen.getAllByRole('tab').map((t) => t.querySelector('[data-testid="tab-dot"]')?.getAttribute('data-status') ?? null)
   const doneState = (endedAt: number): ClaudeState => {

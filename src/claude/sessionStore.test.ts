@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
 }))
 
-const { answerPermission, answerQuestion, interruptClaude, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
+const { recallQueued, removeQueued, sendQueued, dismissQueueHint, answerPermission, answerQuestion, interruptClaude, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
 
 const items = (pane: string) => useClaudeSessions.getState().sessions[pane]?.state.items ?? []
 const calls = (cmd: string) => invoke.mock.calls.filter((c) => c[0] === cmd)
@@ -302,5 +302,123 @@ describe('выход процесса и управляющие запросы',
     expect(Date.now() - t0).toBeLessThan(2000)
     const st = useClaudeSessions.getState().sessions.e.state
     expect(st.items.some((i) => i.type === 'error' && i.text === 'Не удалось сменить модель: Claude завершился')).toBe(true)
+  })
+})
+
+describe('очередь сообщений', () => {
+  let ch: { onLine: { onmessage(m: string): void }; onExit: { onmessage(e: unknown): void } } | null = null
+  beforeEach(() => {
+    stopClaude('u')
+    invoke.mockReset()
+    ch = null
+    invoke.mockImplementation((cmd: string, a: Record<string, unknown>) => {
+      if (cmd === 'claude_start') ch = a as unknown as typeof ch
+      return Promise.resolve(cmd === 'claude_start' ? 'pu' : undefined)
+    })
+  })
+  const sess = () => useClaudeSessions.getState().sessions.u
+  const sent = () => calls('claude_send').map((c) => (c[1] as { text: string }).text)
+  const users = () => items('u').filter((i) => i.type === 'user').map((i) => (i as { text: string }).text)
+  const result = () => ch!.onLine.onmessage(JSON.stringify({ type: 'result', subtype: 'success', result: 'ok', session_id: 's1' }))
+
+  it('пока ход идёт — сообщение в очередь, не в stdin; по result — следующее, по одному за ход', async () => {
+    await askClaude('u', '/w', 'первое')
+    await askClaude('u', '/w', 'второе')
+    await askClaude('u', '/w', 'третье')
+    expect(sent()).toEqual(['первое'])
+    expect(sess().queue.map((m) => m.text)).toEqual(['второе', 'третье'])
+    // Пузырь «Вы» — только в момент отправки.
+    expect(users()).toEqual(['первое'])
+    result()
+    await flush()
+    expect(sent()).toEqual(['первое', 'второе'])
+    expect(users()).toEqual(['первое', 'второе'])
+    expect(items('u').at(-1)).toMatchObject({ type: 'user', text: 'второе' })
+    expect(sess().queue.map((m) => m.text)).toEqual(['третье'])
+    expect(sess().state.busy).toBe(true)
+    result()
+    await flush()
+    expect(sent()).toEqual(['первое', 'второе', 'третье'])
+    expect(sess().queue).toEqual([])
+    result()
+    await flush()
+    expect(sess().state.busy).toBe(false)
+  })
+
+  it('↑ забирает последнее сообщение обратно; ✕ убирает', async () => {
+    await askClaude('u', '/w', 'первое')
+    await askClaude('u', '/w', 'a')
+    await askClaude('u', '/w', 'b')
+    await askClaude('u', '/w', 'c')
+    expect(recallQueued('u')).toBe('c')
+    removeQueued('u', sess().queue[0].id)
+    expect(sess().queue.map((m) => m.text)).toEqual(['b'])
+    expect(recallQueued('u')).toBe('b')
+    expect(recallQueued('u')).toBeNull()
+  })
+
+  it('⌃C — очередь сохраняется, пауза; ↵ на пустой строке шлёт следующее; esc убирает подсказку', async () => {
+    await askClaude('u', '/w', 'первое')
+    await askClaude('u', '/w', 'второе')
+    await askClaude('u', '/w', 'третье')
+    expect(interruptClaude('u')).toBe(true)
+    result()
+    await flush()
+    expect(sent()).toEqual(['первое'])
+    expect(sess()).toMatchObject({ paused: true, pauseHint: true })
+    expect(sess().queue).toHaveLength(2)
+    expect(dismissQueueHint('u')).toBe(true)
+    expect(sess()).toMatchObject({ paused: true, pauseHint: false })
+    expect(dismissQueueHint('u')).toBe(false)
+    expect(sendQueued('u', '/w')).toBe(true)
+    await flush()
+    expect(sent()).toEqual(['первое', 'второе'])
+    expect(sess().paused).toBe(false)
+    // Пауза снята: дальше снова по одному за ход.
+    result()
+    await flush()
+    expect(sent()).toEqual(['первое', 'второе', 'третье'])
+  })
+
+  it('выход claude — очередь сохраняется на паузе', async () => {
+    await askClaude('u', '/w', 'первое')
+    await askClaude('u', '/w', 'второе')
+    ch!.onExit.onmessage({ code: 1, stderr: 'boom' })
+    await flush()
+    expect(sent()).toEqual(['первое'])
+    expect(sess()).toMatchObject({ paused: true, pauseHint: true })
+    expect(sess().queue.map((m) => m.text)).toEqual(['второе'])
+    expect(sendQueued('u', '/w')).toBe(true)
+    await flush()
+    // Перезапуск процесса и отправка.
+    expect(calls('claude_start')).toHaveLength(2)
+    expect(sent()).toEqual(['первое', 'второе'])
+  })
+
+  it('ход идёт — sendQueued ничего не шлёт', async () => {
+    await askClaude('u', '/w', 'первое')
+    await askClaude('u', '/w', 'второе')
+    expect(sendQueued('u', '/w')).toBe(false)
+    expect(sent()).toEqual(['первое'])
+  })
+
+  it('ждущий вопрос агента — сообщение в очередь, вопрос остаётся', async () => {
+    await askClaude('u', '/w', 'первое')
+    const input = { questions: [{ question: 'Да?', header: '', multiSelect: false, options: [{ label: 'Да', description: '' }] }] }
+    ch!.onLine.onmessage(JSON.stringify({ type: 'control_request', request_id: 'r', request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input } }))
+    await askClaude('u', '/w', 'пока ждёт')
+    expect(sent()).toEqual(['первое'])
+    expect(calls('claude_respond')).toHaveLength(0)
+    expect(sess().queue.map((m) => m.text)).toEqual(['пока ждёт'])
+    const { pendingQuestion } = await import('./reducer')
+    expect(pendingQuestion(sess().state)).not.toBeNull()
+  })
+
+  it('/model во время хода не ставится в очередь', async () => {
+    await askClaude('u', '/w', 'первое')
+    void chooseModel('u', '/w', { alias: 'fable', effort: null, persist: false })
+    await flush()
+    expect(calls('claude_control').some((c) => (c[1] as { request: { subtype: string } }).request.subtype === 'set_model')).toBe(true)
+    expect(sess().queue).toEqual([])
   })
 })

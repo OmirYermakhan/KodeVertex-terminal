@@ -415,6 +415,8 @@ describe('TerminalPane', () => {
         // Вопрос Claude не попадает в историю команд.
         expect(getHistory()).toEqual([])
 
+        // Ход закончился — следующее сообщение уходит сразу (во время хода оно ждало бы в очереди).
+        act(() => startArgs().onLine.onmessage(JSON.stringify({ type: 'result', result: 'ok' })))
         type('ещё')
         keyIn('Enter', { metaKey: true })
         await act(async () => await flush())
@@ -487,6 +489,46 @@ describe('TerminalPane', () => {
         expect(document.querySelector('.aprompt')).toBeNull()
         expect(document.querySelector('.feed .qcard .q-ans')?.textContent).toBe('✓ Ответ: MySQL')
         expect(textarea().getAttribute('aria-label')).not.toBe('Ваш ответ на вопрос…')
+      })
+
+      it('очередь: пока ход идёт — сообщения в очередь над строкой ввода; ⌘↓ ввод → очередь → агенты; по result — отправка', async () => {
+        claudeOk()
+        await mounted()
+        type('claude')
+        keyIn('Enter')
+        await act(async () => await flush())
+        type('первое')
+        keyIn('Enter')
+        await act(async () => await flush())
+        type('второе')
+        keyIn('Enter')
+        type('третье')
+        keyIn('Enter')
+        await act(async () => await flush())
+        const sends = () => calls().filter((c) => c[0] === 'claude_send').map((c) => (c[1] as { text: string }).text)
+        expect(sends()).toEqual(['первое'])
+        const dock = document.querySelector('.dock')!
+        expect([...dock.children].map((c) => c.className.split(' ')[0])).toEqual(['agents', 'queue', 'input-wrap'])
+        expect([...dock.querySelectorAll('.qu-text')].map((r) => r.textContent)).toEqual(['второе', 'третье'])
+        expect(dock.querySelector('.agents .dh')!.textContent).toContain('· 2 в очереди')
+        expect([...document.querySelectorAll('.feed .you')].map((r) => r.textContent)).toEqual([expect.stringContaining('первое')])
+        // ⌘↓: строка ввода → очередь → панель агентов.
+        act(() => runPaneCommand('p', 'blockNext'))
+        expect(document.activeElement).toBe(dock.querySelector('.queue'))
+        act(() => runPaneCommand('p', 'blockNext'))
+        expect(document.activeElement).toBe(dock.querySelector('.agents'))
+        // ↑ в пустой строке — последнее обратно в строку.
+        textarea().focus()
+        keyIn('ArrowUp')
+        expect(textarea().value).toBe('третье')
+        expect(dock.querySelectorAll('.qu-row')).toHaveLength(1)
+        await act(async () => {
+          startArgs().onLine.onmessage(JSON.stringify({ type: 'result', subtype: 'success', result: 'ok', session_id: 's' }))
+          await flush()
+        })
+        expect(sends()).toEqual(['первое', 'второе'])
+        expect(document.querySelector('.queue')).toBeNull()
+        expect([...document.querySelectorAll('.feed .you')].map((r) => r.textContent)).toEqual([expect.stringContaining('первое'), expect.stringContaining('второе')])
       })
 
       it('ответ ↵ на варианте — фокус в строку ввода; разрешение — в том же блоке; при открытом /model фокус не забирается', async () => {
@@ -622,6 +664,7 @@ describe('TerminalPane', () => {
         await act(async () => await flush())
         expect(startArgs()).toMatchObject({ cwd: '/w', resume: 'S1' })
         expect(document.querySelectorAll('.cl-note')).toHaveLength(1)
+        act(() => startArgs().onLine.onmessage(result()))
         // Панель перешла в другой каталог, процесс ещё жив: он останавливается, новая сессия — там.
         act(() => void oscHandler(term, 7)('file://host/other'))
         invoke.mockClear()
@@ -735,6 +778,10 @@ describe('TerminalPane', () => {
         await mounted()
         type('1')
         keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        // Ход закончился раньше, чем claude_send вернулся: второе сообщение ждёт первого send.
+        const start = calls().find((c) => c[0] === 'claude_start')![1] as { onLine: { onmessage(l: string): void } }
+        act(() => start.onLine.onmessage(JSON.stringify({ type: 'result', result: 'ok' })))
         type('2')
         keyIn('Enter', { metaKey: true })
         await act(async () => await flush())
@@ -1041,7 +1088,7 @@ describe('TerminalPane', () => {
       return r
     }
     const withSession = () =>
-      act(() => useClaudeSessions.setState({ sessions: { p: { state: mockupScene(), procId: 'c1', cwd: '/w', model: null, effort: null } } }))
+      act(() => useClaudeSessions.setState({ sessions: { p: { state: mockupScene(), procId: 'c1', cwd: '/w', model: null, effort: null, queue: [], paused: false, pauseHint: false } } }))
     const panel = () => document.querySelector<HTMLElement>('.dock .agents')
 
     it('без Claude-сессии панели нет; с сессией — в доке над строкой ввода', async () => {

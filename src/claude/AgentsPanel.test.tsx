@@ -48,6 +48,11 @@ describe('AgentsPanel', () => {
     expect(document.querySelector('.row.focus')).toBeNull()
   })
 
+  it('очередь — «· N в очереди» в заголовке', () => {
+    render(<AgentsPanel state={mockupScene()} onExit={() => {}} now={T0} queued={2} />)
+    expect(document.querySelector('.dh span')!.textContent).toBe('Агенты · 2 работают · 1 ждёт · 1 готов · 2 в очереди')
+  })
+
   it('ошибка — красная точка', () => {
     const s = { ...initialClaude(), agents: [agent({ id: 'main', name: 'Главный', status: 'error', now: 'Ошибка', endedAt: T0 })] }
     render(<AgentsPanel state={s} onExit={() => {}} now={T0} />)
