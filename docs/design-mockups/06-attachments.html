@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KodeVertex Terminal — вложения</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#08090a;color:#f1f0eb;font-family:"Geist",system-ui,sans-serif;padding:40px 32px 80px}
+  .wrap{max-width:1300px;margin:0 auto}
+  .eyebrow{font-family:"Geist Mono",monospace;font-size:12px;color:#636972;letter-spacing:.08em;text-transform:uppercase}
+  h1{font-weight:500;font-size:30px;margin:10px 0 8px}
+  h2{font-weight:500;font-size:18px;margin:0 0 4px;color:#f1f0eb}
+  .lead{color:#8a9199;font-size:16px;max-width:940px;line-height:1.6;margin:0 0 26px}
+  .lead code{font-family:"Geist Mono",monospace;color:#c6f24e}
+  .note{color:#8a9199;font-size:14px;line-height:1.55;margin:0 0 12px}
+  .kbd{display:inline-block;font-family:"Geist Mono",monospace;font-size:11.5px;color:#e4e3dd;background:#16191d;border:1px solid #262a2f;border-bottom-width:2px;border-radius:4px;padding:0 5px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:28px}
+  .scene{min-width:0}
+  .scene.full{grid-column:1/-1}
+  .tag{font-family:"Geist Mono",monospace;font-size:11px;color:#c6f24e;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px}
+
+  .win{--bg:#1e1f22;--panel:#2b2d30;--panel2:#26282b;--rule:#393b40;--text:#bcbec4;--strong:#dfe1e5;--muted:#6f737a;--you:#2e436e;--acc:#3574f0;--accText:#548af7;--info:#56a8f5;--add:#6aab73;--del:#f75464;--warn:#e0b05a;--sans:"Inter",system-ui,sans-serif;--mono:"JetBrains Mono",monospace;
+    border-radius:12px;overflow:hidden;background:var(--bg);color:var(--text);border:1px solid var(--rule);font-family:var(--sans);display:flex;flex-direction:column;height:450px;position:relative}
+  .gallery{--bg:#1e1f22;--panel:#2b2d30;--panel2:#26282b;--rule:#393b40;--text:#bcbec4;--strong:#dfe1e5;--muted:#6f737a;--you:#2e436e;--acc:#3574f0;--accText:#548af7;--info:#56a8f5;--add:#6aab73;--del:#f75464;--warn:#e0b05a;--sans:"Inter",system-ui,sans-serif;--mono:"JetBrains Mono",monospace;
+    display:grid;grid-template-columns:repeat(3,1fr);gap:16px;padding:22px;border:1px solid #262a2f;border-radius:12px;background:#121315;align-items:start}
+  .bar{display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--rule);flex:none}
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--rule)}
+  .tabs{display:flex;gap:4px;margin-left:16px}
+  .tab{font-family:var(--mono);font-size:12px;color:var(--muted);padding:5px 11px;border-radius:6px;display:flex;align-items:center;gap:7px}
+  .tab.on{color:var(--strong);background:var(--bg)}
+  .tab.on i{width:6px;height:6px;border-radius:50%;background:var(--acc)}
+
+  .feed{flex:1;overflow:hidden;padding:16px 22px;position:relative;display:flex;flex-direction:column;justify-content:flex-end}
+  .who{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px}
+  .you{margin:0 0 12px auto;max-width:80%;background:var(--you);border-radius:10px 10px 2px 10px;padding:9px 14px;font-size:14.5px;line-height:1.75;color:var(--strong)}
+  .you .who{color:#9fb6e8;text-align:right}
+  .card{background:var(--panel);border:1px solid var(--rule);border-left:2px solid var(--acc);border-radius:8px;padding:11px 14px;margin-bottom:10px;max-width:76ch;position:relative}
+  .card .who{color:var(--accText)}
+  .card p{margin:0;font-size:14.5px;line-height:1.65}
+  .card code{font-family:var(--mono);font-size:12.5px;background:var(--bg);color:var(--accText);padding:1px 5px;border-radius:4px}
+  .blk{border:1px solid transparent;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-family:var(--mono);font-size:13px;line-height:1.7;position:relative}
+  .blk .cmd{color:var(--strong)} .blk .p{color:var(--accText)} .blk .ok{color:var(--add)} .blk .dim{color:var(--muted)} .blk .er{color:var(--del)}
+  .blk .bh{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}
+  .blk.sel{border-color:var(--acc);background:rgba(53,116,240,.06)}
+  .blk.fail{border-left:2px solid var(--del)}
+  .hover-act{position:absolute;right:8px;top:-12px;display:flex;gap:4px;font-family:var(--mono);font-size:11px}
+  .hover-act span{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:3px 8px;color:var(--text)}
+  .hover-act span.on{border-color:var(--acc);color:var(--strong);background:#232b3a}
+
+  .dock{flex:none;border-top:1px solid var(--rule);background:var(--panel2);position:relative}
+  .input{margin:8px 12px 10px;padding:9px 12px;background:var(--bg);border:1px solid var(--rule);border-radius:9px;font-family:var(--mono);font-size:13.5px;color:var(--muted)}
+  .input.focus{border-color:var(--acc)}
+  .line{display:flex;align-items:flex-start;gap:10px}
+  .line .ph{flex:1;color:var(--strong);line-height:26px}
+  .line .ph.empty{color:var(--muted)}
+  .line .hint{font-size:12px;line-height:26px;white-space:nowrap}
+  .clip{width:26px;height:26px;border-radius:6px;display:grid;place-items:center;color:var(--muted);flex:none}
+  .caret{display:inline-block;width:2px;height:16px;background:var(--accText);vertical-align:-3px;animation:pulse 1s steps(1) infinite}
+  @keyframes pulse{50%{opacity:.35}}
+
+  /* inline tokens */
+  .tk{display:inline-flex;align-items:center;gap:5px;height:21px;padding:0 7px 0 4px;margin:0 1px;border-radius:5px;background:#2a3346;border:1px solid #3a4865;font-family:var(--mono);font-size:12px;color:#cfdcf6;vertical-align:1px;white-space:nowrap;line-height:1;position:relative;cursor:default}
+  .tk .ico{width:13px;height:13px;color:#8fb0ee}
+  .tk .mini{width:15px;height:15px;border-radius:3px;flex:none;background:linear-gradient(180deg,#2b2d30 0 25%,#16171a 25%);box-shadow:inset 0 -5px 0 #3574f0;border:1px solid #4a5a7d}
+  .tk .mut{color:#8a9bc0}
+  .tk.sel{background:var(--acc);border-color:var(--acc);color:#fff}
+  .tk.sel .ico,.tk.sel .mut{color:#dbe6ff}
+  .tk.err{background:#3a2226;border-color:#6b2b33;color:#f3a6ae}
+  .tk.err .ico{color:var(--del)}
+  .tk.blkt{background:#262c25;border-color:#3d4a3b;color:#cfe3cd}
+  .tk.blkt .ico{color:var(--add)}
+  .tk.blkt.fail{background:#33252a;border-color:#5a3038;color:#f0c4c9}
+  .tk.blkt.fail .ico{color:var(--del)}
+  .tk.msg{background:#2f2a3b;border-color:#4a4161;color:#ddd3f2}
+  .tk.msg .ico{color:#b49cf0}
+  .you .tk{background:rgba(0,0,0,.22);border-color:rgba(255,255,255,.14);color:#e3eaf9}
+
+  /* preview popover */
+  .pv{width:300px;background:#232427;border:1px solid var(--rule);border-radius:10px;box-shadow:0 14px 40px rgba(0,0,0,.55);font-family:var(--mono);font-size:12px;color:var(--text);overflow:hidden}
+  .pv.float{position:absolute;z-index:8}
+  .pv .ph{display:flex;align-items:center;gap:7px;padding:8px 11px;border-bottom:1px solid var(--rule);color:var(--strong)}
+  .pv .ph .ico{width:14px;height:14px}
+  .pv .ph .m{margin-left:auto;color:var(--muted);font-size:11px}
+  .pv .body{padding:9px 11px;line-height:1.6}
+  .pv .ft{display:flex;gap:12px;padding:7px 11px;border-top:1px solid var(--rule);color:var(--muted);font-size:11px}
+  .pv .ft b{color:var(--text);font-weight:400}
+  .pv pre{margin:0;font-family:var(--mono);font-size:11.5px;line-height:1.6;white-space:pre;overflow:hidden}
+  .ln{color:#4f535a;display:inline-block;width:22px}
+  .k{color:#cf8e6d}.s{color:#6aab73}.f{color:#56a8f5}.t{color:#c77dbb}
+  .shot{height:150px;border-radius:6px;border:1px solid var(--rule);background:linear-gradient(180deg,#2b2d30 0 14%,#1b1c1f 14%);position:relative;overflow:hidden}
+  .shot::before{content:"";position:absolute;left:16px;right:60px;top:36px;height:12px;border-radius:3px;background:#36383d;box-shadow:0 22px 0 #36383d,0 44px 0 #36383d}
+  .shot[style*="64px"]::before{top:14px;height:6px;box-shadow:0 10px 0 #36383d}
+  .shot[style*="64px"]::after{top:38px;height:16px;line-height:16px;width:80px;font-size:9px}
+  .shot::after{content:"Оплатить";position:absolute;right:14px;top:108px;width:110px;height:24px;border-radius:5px;background:#3574f0;color:#fff;font:500 11px/24px var(--sans);text-align:center;outline:2px solid #f75464;outline-offset:3px}
+  .pdfp{height:150px;border-radius:4px;background:#e9e7e1;padding:14px 16px;position:relative}
+  .pdfp i{display:block;height:6px;border-radius:2px;background:#c5c2ba;margin-bottom:7px}
+  .pdfp i.h{height:10px;width:60%;background:#8d8a83;margin-bottom:12px}
+
+  .sbar{display:flex;height:26px;background:var(--panel);border-top:1px solid var(--rule);font-family:var(--mono);font-size:11px;color:var(--muted);flex:none}
+  .sg{display:flex;align-items:center;gap:6px;padding:0 12px;border-right:1px solid var(--rule)}
+  .sg b{color:var(--strong);font-weight:500}
+  .sg.v{background:var(--acc);color:#fff;font-weight:500}
+  .sg.sh{background:var(--panel2);color:var(--strong)}
+
+  /* @ picker */
+  .pop{position:absolute;left:12px;bottom:66px;width:66%;background:var(--panel);border:1px solid var(--rule);border-radius:9px;box-shadow:0 10px 30px rgba(0,0,0,.45);font-family:var(--mono);font-size:12.5px;overflow:hidden;z-index:4}
+  .pop .gh{padding:6px 12px 4px;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .pop .it{display:flex;align-items:center;gap:9px;padding:5px 12px;color:var(--text)}
+  .pop .it .d{margin-left:auto;color:var(--muted);font-size:11px}
+  .pop .it.on{background:#232b3a;color:var(--strong);box-shadow:inset 2px 0 0 var(--acc)}
+  .pop .it mark{background:none;color:var(--accText)}
+  .pop .ft{padding:6px 12px;border-top:1px solid var(--rule);color:var(--muted);font-size:11px}
+  .at{color:var(--accText)}
+  .ico{width:15px;height:15px;color:var(--muted);flex:none}
+  .ico.code{color:var(--info)} .ico.dir{color:var(--warn)} .ico.pdf{color:var(--del)} .ico.ok{color:var(--add)} .ico.bad{color:var(--del)} .ico.ai{color:#b49cf0}
+
+  /* drop overlay */
+  .drop{position:absolute;inset:38px 0 0 0;background:rgba(30,31,34,.78);backdrop-filter:blur(2px);display:grid;place-items:center;z-index:5}
+  .drop .zone{width:78%;height:70%;border:2px dashed var(--acc);border-radius:14px;background:rgba(53,116,240,.08);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--strong);font-size:16px}
+  .drop .zone small{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .drop .zone svg{color:var(--accText)}
+
+  .keysheet{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:30px}
+  .ks{border:1px solid #262a2f;border-radius:10px;padding:14px 16px;background:#0f1113}
+  .ks h3{margin:0 0 8px;font-size:14px;font-weight:500;color:#c6f24e;font-family:"Geist Mono",monospace;letter-spacing:.04em;text-transform:uppercase}
+  .ks li{display:flex;justify-content:space-between;gap:12px;color:#8a9199;font-size:13.5px;padding:3px 0}
+  .ks ul{list-style:none;margin:0;padding:0}
+  .glabel{font-family:"Geist Mono",monospace;font-size:11px;color:#8a9199;margin-bottom:6px;letter-spacing:.04em}
+  @media (max-width:900px){.grid,.keysheet,.gallery{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-clip" viewBox="0 0 16 16"><path d="M10.5 4.5 5.4 9.6a1.4 1.4 0 0 0 2 2l5.3-5.3a2.8 2.8 0 0 0-4-4L3.4 7.6a4.2 4.2 0 0 0 6 6l4.1-4.1" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></symbol>
+  <symbol id="i-code" viewBox="0 0 16 16"><path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-dir" viewBox="0 0 16 16"><path d="M1.8 4.2c0-.6.4-1 1-1h3.4l1.4 1.6h5.6c.6 0 1 .4 1 1v6.8c0 .6-.4 1-1 1H2.8c-.6 0-1-.4-1-1z" fill="none" stroke="currentColor" stroke-width="1.3"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 16 16"><path d="M4 1.8h5.2L12.5 5v9.2H4zM9 1.8V5.2h3.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 16 16"><path d="M8 2 14.5 13.5h-13z M8 6.5v3.2 M8 11.4v.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-term" viewBox="0 0 16 16"><path d="M3 4.5 6.5 8 3 11.5M8 11.5h5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-ai" viewBox="0 0 16 16"><path d="M8 1.8 9.4 6.6 14.2 8 9.4 9.4 8 14.2 6.6 9.4 1.8 8 6.6 6.6z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></symbol>
+  <symbol id="i-in" viewBox="0 0 24 24"><path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<div class="wrap">
+  <div class="eyebrow">KodeVertex Terminal · Лист 08 · вложения</div>
+  <h1>Вложения прямо в тексте и мини-просмотр</h1>
+  <p class="lead">Файл, картинка, блок терминала или сообщение Claude встают <b>прямо в текст</b> маленьким значком там, где стоял курсор. Получается фраза вида «сравни <code>[Form.tsx]</code> с <code>[скрин]</code>». Значок ведёт себя как одна буква. Наведите на него мышь или поставьте рядом курсор и нажмите <span class="kbd">␣</span>, чтобы увидеть мини-просмотр: картинку, первые строки кода, вывод команды или текст сообщения. Всё это работает и в отправленном сообщении.</p>
+
+  <div class="grid">
+
+    <!-- А: tokens inline -->
+    <div class="scene">
+      <div class="tag">А · значки внутри текста</div>
+      <h2>Пишете как обычно, вложения встают в строку</h2>
+      <p class="note">Цвет показывает тип вложения: синий — файл или картинка, зелёный и красный — блок терминала (красный, если команда упала), фиолетовый — сообщение Claude. <span class="kbd">⌫</span> сначала выделяет значок, второе нажатие удаляет его. Так ничего не сотрётся случайно.</p>
+      <div class="win">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <div class="tabs"><div class="tab on"><i></i>shop-app · claude</div><div class="tab">landing</div></div></div>
+        <div class="feed">
+          <div class="card"><div class="who">Главный · Opus 5.5</div><p>Форма оплаты готова. Проверьте, как она выглядит у вас.</p></div>
+        </div>
+        <div class="dock">
+          <div class="input focus">
+            <div class="line"><span class="clip"><svg width="16" height="16"><use href="#i-clip"/></svg></span>
+              <span class="ph">Кнопка уехала вправо, вот <span class="tk"><span class="mini"></span>скрин</span>. Тест тоже падает: <span class="tk blkt fail"><svg class="ico"><use href="#i-term"/></svg>npm test <span class="mut">· 1</span></span>, проверь <span class="tk"><svg class="ico"><use href="#i-code"/></svg>Form.tsx</span> и стили в <span class="tk sel"><svg class="ico"><use href="#i-dir"/></svg>styles/</span><span class="caret"></span></span>
+              <span class="hint">↵ отправить</span></div>
+          </div>
+        </div>
+        <div class="sbar"><div class="sg v">◆ CLAUDE</div><div class="sg">проект <b>shop-app</b></div><div class="sg">вложения <b>4</b></div></div>
+      </div>
+    </div>
+
+    <!-- Б: hover preview in input -->
+    <div class="scene">
+      <div class="tag">Б · мини-просмотр</div>
+      <h2>Навели на значок — видно, что внутри</h2>
+      <p class="note">Просмотр всплывает над значком. Из него можно открыть файл целиком (<span class="kbd">↵</span>), открыть его в редакторе (<span class="kbd">⌘</span> <span class="kbd">↵</span>) или убрать вложение (<span class="kbd">⌫</span>).</p>
+      <div class="win">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <div class="tabs"><div class="tab on"><i></i>shop-app · claude</div><div class="tab">landing</div></div></div>
+        <div class="feed">
+          <div class="card"><div class="who">Главный · Opus 5.5</div><p>Форма оплаты готова. Проверьте, как она выглядит у вас.</p></div>
+        </div>
+        <div class="pv float" style="left:150px;bottom:98px;width:330px">
+          <div class="ph"><svg class="ico code"><use href="#i-code"/></svg>src/Form.tsx<span class="m">строки 38–46</span></div>
+          <div class="body"><pre><span class="ln">38</span><span class="k">export function</span> <span class="f">PayButton</span>() {
+<span class="ln">39</span>  <span class="k">const</span> { pay } = <span class="f">usePayment</span>()
+<span class="ln">40</span>  <span class="k">return</span> (
+<span class="ln">41</span>    &lt;<span class="t">button</span> className=<span class="s">"pay"</span>
+<span class="ln">42</span>      onClick={pay}&gt;Оплатить&lt;/<span class="t">button</span>&gt;
+<span class="ln">43</span>  )
+<span class="ln">44</span>}</pre></div>
+          <div class="ft"><span><b>182</b> строки</span><span><b>6</b> KB</span><span style="margin-left:auto">↵ открыть · ⌘↵ в редакторе</span></div>
+        </div>
+        <div class="dock">
+          <div class="input focus">
+            <div class="line"><span class="clip"><svg width="16" height="16"><use href="#i-clip"/></svg></span>
+              <span class="ph">Почему не работает <span class="tk sel"><svg class="ico"><use href="#i-code"/></svg>Form.tsx<span class="mut">:42</span></span><span class="caret"></span></span>
+              <span class="hint">␣ просмотр</span></div>
+          </div>
+        </div>
+        <div class="sbar"><div class="sg v">◆ CLAUDE</div><div class="sg">проект <b>shop-app</b></div><div class="sg">вложения <b>1</b></div></div>
+      </div>
+    </div>
+
+    <!-- В: gallery of previews -->
+    <div class="scene full">
+      <div class="tag">В · какие бывают мини-просмотры</div>
+      <h2>Своя карточка для каждого типа</h2>
+      <p class="note">Карточки маленькие, примерно 300px, и читаются с одного взгляда. Длинное содержимое обрезается и прокручивается внутри.</p>
+      <div class="gallery">
+        <div><div class="glabel">картинка</div>
+          <div class="pv"><div class="ph"><span class="tk" style="margin:0"><span class="mini"></span>скрин</span><span class="m">1440×900 · 412 KB</span></div>
+            <div class="body"><div class="shot"></div></div>
+            <div class="ft"><span>Снимок экрана 14.32.png</span><span style="margin-left:auto">↵ целиком</span></div></div></div>
+
+        <div><div class="glabel">блок терминала</div>
+          <div class="pv"><div class="ph"><svg class="ico bad"><use href="#i-term"/></svg>npm test<span class="m" style="color:var(--del)">код 1 · 4.2 с</span></div>
+            <div class="body"><pre><span style="color:var(--muted)">  PASS  cart.test.ts</span>
+<span style="color:var(--del)">  FAIL  form.test.tsx</span>
+  ● PayButton › aligns left
+    expected <span class="s">"left"</span>
+    received <span style="color:var(--del)">"right"</span>
+<span style="color:var(--muted)">Tests: 1 failed, 23 passed</span></pre></div>
+            <div class="ft"><span>~/shop-app · 14:31</span><span style="margin-left:auto">↵ к блоку</span></div></div></div>
+
+        <div><div class="glabel">сообщение Claude</div>
+          <div class="pv"><div class="ph"><svg class="ico ai"><use href="#i-ai"/></svg>Архитектор · Fable 5.2<span class="m">14:20</span></div>
+            <div class="body" style="font-family:var(--sans);font-size:13px;line-height:1.55;color:var(--text)">Предлагаю три слоя: <code style="font-family:var(--mono);font-size:11.5px;color:var(--accText)">PaymentApi</code> → <code style="font-family:var(--mono);font-size:11.5px;color:var(--accText)">PaymentService</code> → экран. Ретраи и идемпотентность держим в сервисе, экран про них не знает…</div>
+            <div class="ft"><span><b>312</b> слов</span><span style="margin-left:auto">↵ к сообщению</span></div></div></div>
+
+        <div><div class="glabel">файл с кодом</div>
+          <div class="pv"><div class="ph"><svg class="ico code"><use href="#i-code"/></svg>src/styles/form.css<span class="m">2 KB</span></div>
+            <div class="body"><pre><span class="ln">29</span>.<span class="f">pay</span> {
+<span class="ln">30</span>  <span class="k">display</span>: flex;
+<span class="ln">31</span>  <span class="k">margin-left</span>: auto;
+<span class="ln">32</span>  <span class="k">padding</span>: 8px 16px;
+<span class="ln">33</span>}</pre></div>
+            <div class="ft"><span><b>64</b> строки</span><span style="margin-left:auto">↵ открыть</span></div></div></div>
+
+        <div><div class="glabel">папка</div>
+          <div class="pv"><div class="ph"><svg class="ico dir"><use href="#i-dir"/></svg>src/styles/<span class="m">7 файлов</span></div>
+            <div class="body"><pre><svg class="ico code" style="width:12px;height:12px;vertical-align:-2px"><use href="#i-code"/></svg> form.css         <span style="color:var(--muted)">2 KB</span>
+<svg class="ico code" style="width:12px;height:12px;vertical-align:-2px"><use href="#i-code"/></svg> cart.css         <span style="color:var(--muted)">4 KB</span>
+<svg class="ico code" style="width:12px;height:12px;vertical-align:-2px"><use href="#i-code"/></svg> tokens.css       <span style="color:var(--muted)">1 KB</span>
+<svg class="ico dir" style="width:12px;height:12px;vertical-align:-2px"><use href="#i-dir"/></svg> themes/          <span style="color:var(--muted)">3</span>
+<span style="color:var(--muted)">  … ещё 3</span></pre></div>
+            <div class="ft"><span>Claude получит путь</span><span style="margin-left:auto">↵ в Finder</span></div></div></div>
+
+        <div><div class="glabel">pdf</div>
+          <div class="pv"><div class="ph"><svg class="ico pdf"><use href="#i-doc"/></svg>form-spec.pdf<span class="m">стр. 1 из 6</span></div>
+            <div class="body"><div class="pdfp"><i class="h"></i><i></i><i style="width:85%"></i><i></i><i style="width:70%"></i><i></i><i style="width:40%"></i></div></div>
+            <div class="ft"><span><b>1.2</b> MB</span><span style="margin-left:auto">← → страницы · ↵ открыть</span></div></div></div>
+      </div>
+    </div>
+
+    <!-- Г: attach block / message from feed -->
+    <div class="scene">
+      <div class="tag">Г · вложить блок или сообщение</div>
+      <h2>Вывод команды — в вопрос одним нажатием</h2>
+      <p class="note">Выберите блок или сообщение в ленте (<span class="kbd">⌘</span> <span class="kbd">↑</span>) и нажмите <span class="kbd">⌘</span> <span class="kbd">L</span>, или перетащите его мышью в строку ввода. Значок встанет туда, где стоит курсор. В шелл-режиме <span class="kbd">⌘</span> <span class="kbd">L</span> переключает строку на Claude.</p>
+      <div class="win">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <div class="tabs"><div class="tab on"><i></i>shop-app · claude</div><div class="tab">landing</div></div></div>
+        <div class="feed">
+          <div class="blk">
+            <div class="bh"><span><span class="p">❯</span> <span class="cmd">git status</span></span><span>0.1 с</span></div><span class="dim">On branch</span> feature/payments</div>
+          <div class="blk sel fail">
+            <div class="hover-act"><span class="on">⌘L в сообщение</span><span>⌘⇧C копировать</span></div>
+            <div class="bh"><span><span class="p">❯</span> <span class="cmd">npm test</span></span><span class="er">код 1 · 4.2 с</span></div>
+            <span class="er">FAIL</span> form.test.tsx · PayButton › aligns left<br><span class="dim">Tests: 1 failed, 23 passed</span></div>
+        </div>
+        <div class="dock">
+          <div class="input focus">
+            <div class="line"><span class="clip"><svg width="16" height="16"><use href="#i-clip"/></svg></span>
+              <span class="ph">Почини <span class="tk blkt fail"><svg class="ico"><use href="#i-term"/></svg>npm test <span class="mut">· 1</span></span><span class="caret"></span></span>
+              <span class="hint">↵ отправить</span></div>
+          </div>
+        </div>
+        <div class="sbar"><div class="sg v">◆ CLAUDE</div><div class="sg">проект <b>shop-app</b></div><div class="sg">вложения <b>1</b></div></div>
+      </div>
+    </div>
+
+    <!-- Д: sent message -->
+    <div class="scene">
+      <div class="tag">Д · после отправки</div>
+      <h2>Значки остаются в тексте сообщения</h2>
+      <p class="note">Ваше сообщение читается так же, как вы его писали. Наведите на значок — откроется тот же мини-просмотр. Так видно, что именно получил Claude.</p>
+      <div class="win">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <div class="tabs"><div class="tab on"><i></i>shop-app · claude</div><div class="tab">landing</div></div></div>
+        <div class="feed">
+          <div class="pv float" style="left:300px;top:6px;width:210px">
+            <div class="body" style="padding:6px"><div class="shot" style="height:64px;transform:scale(1);"></div></div>
+            <div class="ft"><span>скрин · 1440×900</span><span style="margin-left:auto">↵ целиком</span></div></div>
+          <div class="you"><div class="who">Вы</div>Кнопка уехала вправо, вот <span class="tk" style="outline:1px solid #9fb6e8"><span class="mini"></span>скрин</span>. Тест тоже падает: <span class="tk"><svg class="ico"><use href="#i-term"/></svg>npm test · 1</span>, проверь <span class="tk"><svg class="ico"><use href="#i-code"/></svg>Form.tsx</span></div>
+          <div class="card"><div class="who">Главный · Opus 5.5</div><p>Лишний <code>margin-left: auto</code> в <code>form.css:31</code>. Убираю.</p></div>
+        </div>
+        <div class="dock"><div class="input"><div class="line"><span class="clip"><svg width="16" height="16"><use href="#i-clip"/></svg></span><span class="ph empty">Команда или вопрос Claude…</span><span class="hint">⌘↵ отправить агенту</span></div></div></div>
+        <div class="sbar"><div class="sg v">◆ CLAUDE</div><div class="sg">проект <b>shop-app</b></div></div>
+      </div>
+    </div>
+
+    <!-- Е: @ picker -->
+    <div class="scene">
+      <div class="tag">Е · выбор через @</div>
+      <h2>@ ищет по файлам, блокам и сообщениям</h2>
+      <p class="note">Подсказка разбита на группы. <span class="kbd">↵</span> вставляет значок, <span class="kbd">⇥</span> заходит в папку. Справа сразу виден мини-просмотр выбранного пункта.</p>
+      <div class="win">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <div class="tabs"><div class="tab on"><i></i>shop-app · claude</div><div class="tab">landing</div></div></div>
+        <div class="feed"></div>
+        <div class="pop" style="width:56%">
+          <div class="gh">Файлы</div>
+          <div class="it on"><svg class="ico code"><use href="#i-code"/></svg><span><mark>fo</mark>rm.css</span><span class="d">styles/</span></div>
+          <div class="it"><svg class="ico code"><use href="#i-code"/></svg><span><mark>Fo</mark>rm.tsx</span><span class="d">src/</span></div>
+          <div class="it"><svg class="ico pdf"><use href="#i-doc"/></svg><span><mark>fo</mark>rm-spec.pdf</span><span class="d">docs/</span></div>
+          <div class="gh">Блоки</div>
+          <div class="it"><svg class="ico bad"><use href="#i-term"/></svg><span>npm test <span style="color:var(--muted)">· <mark>fo</mark>rm.test.tsx</span></span><span class="d">код 1</span></div>
+          <div class="gh">Сообщения</div>
+          <div class="it"><svg class="ico ai"><use href="#i-ai"/></svg><span>Главный: «<mark>Fo</mark>rm готова…»</span><span class="d">14:28</span></div>
+          <div class="ft">↑↓ выбрать · ↵ вставить · ⇥ в папку · esc</div>
+        </div>
+        <div class="pv float" style="right:12px;bottom:120px;width:220px">
+          <div class="ph"><svg class="ico code"><use href="#i-code"/></svg>form.css</div>
+          <div class="body"><pre><span class="ln">29</span>.<span class="f">pay</span> {
+<span class="ln">30</span>  <span class="k">display</span>: flex;
+<span class="ln">31</span>  <span class="k">margin-left</span>: auto;</pre></div></div>
+        <div class="dock"><div class="input focus"><div class="line"><span class="clip"><svg width="16" height="16"><use href="#i-clip"/></svg></span><span class="ph">Посмотри <span class="at">@fo</span><span class="caret"></span></span><span class="hint">↵ вставить</span></div></div></div>
+        <div class="sbar"><div class="sg v">◆ CLAUDE</div><div class="sg">проект <b>shop-app</b></div></div>
+      </div>
+    </div>
+
+    <!-- Ж: drag & drop -->
+    <div class="scene">
+      <div class="tag">Ж · перетаскивание и ⌘V</div>
+      <h2>Бросили файл — значок встал у курсора</h2>
+      <p class="note">Пока файл над окном, лента затемняется. Скриншот из <span class="kbd">⌘</span> <span class="kbd">V</span> тоже становится значком. В шелл-режиме вместо значка вставляется экранированный путь, как в Terminal.app.</p>
+      <div class="win">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <div class="tabs"><div class="tab on"><i></i>shop-app · claude</div><div class="tab">landing</div></div></div>
+        <div class="feed">
+          <div class="card"><div class="who">Главный · Opus 5.5</div><p>Пришлите макет, если хотите сверить.</p></div>
+        </div>
+        <div class="dock"><div class="input"><div class="line"><span class="clip"><svg width="16" height="16"><use href="#i-clip"/></svg></span><span class="ph">Сверь с макетом </span><span class="hint">↵ отправить</span></div></div></div>
+        <div class="sbar"><div class="sg v">◆ CLAUDE</div><div class="sg">проект <b>shop-app</b></div></div>
+        <div class="drop"><div class="zone"><svg width="34" height="34"><use href="#i-in"/></svg>Отпустите, чтобы вставить в сообщение<small>mockup.pdf и ещё 2 · встанут туда, где курсор</small></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="keysheet">
+    <div class="ks"><h3>Вставить</h3><ul>
+      <li><span>Файл по имени, блок, сообщение</span><span><span class="kbd">@</span></span></li>
+      <li><span>Выбранный блок или сообщение</span><span><span class="kbd">⌘</span> <span class="kbd">L</span></span></li>
+      <li><span>Картинка из буфера</span><span><span class="kbd">⌘</span> <span class="kbd">V</span></span></li>
+      <li><span>Диалог файлов</span><span><span class="kbd">⌘</span> <span class="kbd">O</span></span></li>
+      <li><span>Перетащить файл или блок</span><span>мышью</span></li></ul></div>
+    <div class="ks"><h3>Значок в тексте</h3><ul>
+      <li><span>Мини-просмотр</span><span>наведение / <span class="kbd">␣</span> рядом</span></li>
+      <li><span>Открыть целиком</span><span><span class="kbd">↵</span> в просмотре</span></li>
+      <li><span>Открыть в редакторе</span><span><span class="kbd">⌘</span> <span class="kbd">↵</span></span></li>
+      <li><span>Удалить</span><span><span class="kbd">⌫</span> <span class="kbd">⌫</span></span></li>
+      <li><span>Перескочить</span><span><span class="kbd">←</span> <span class="kbd">→</span> как буква</span></li></ul></div>
+    <div class="ks"><h3>Что получает Claude</h3><ul>
+      <li><span>Картинка, PDF</span><span>видит сам файл</span></li>
+      <li><span>Код, папка, архив</span><span>путь <span style="color:#c6f24e;font-family:'Geist Mono',monospace">@…</span>, читает сам</span></li>
+      <li><span>Блок терминала</span><span>команда, код и вывод</span></li>
+      <li><span>Сообщение</span><span>его текст цитатой</span></li>
+      <li><span>Видео, аудио</span><span>красный значок, не уйдёт</span></li></ul></div>
+  </div>
+</div>
+</body>
+</html>
