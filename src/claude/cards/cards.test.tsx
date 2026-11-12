@@ -216,10 +216,10 @@ describe('карточки', () => {
     expect(container.querySelector('.cerr')?.textContent).toContain('claude не найден в PATH')
   })
 
-  it('ClaudeCard выбирает карточку и агента по agentId', () => {
+  it('ClaudeCard выбирает карточку и подписывает её переданным агентом', () => {
     const agents = [agent(), agent({ id: 'tu1', name: 'Архитектор', model: 'claude-fable-5-2' })]
     const { container } = render(
-      <ClaudeCard item={{ kind: 'claude', id: 'c1', item: { type: 'assistant', agentId: 'tu1', text: 'x', streaming: false } }} agents={agents} />,
+      <ClaudeCard item={{ kind: 'claude', id: 'c1', item: { type: 'assistant', agentId: 'tu1', text: 'x', streaming: false } }} agent={agents[1]} />,
     )
     expect(container.querySelector('[data-item-id="c1"]')).toHaveClass('card')
     expect(container.querySelector('.who')?.textContent).toBe('Архитектор · Fable 5.2')

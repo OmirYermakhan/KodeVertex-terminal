@@ -23,15 +23,22 @@ export type ShellEvent =
 /** Результат разбора OSC 133 — без времени, cwd и HTML. */
 export type ParsedOsc133 =
   | { t: 'prompt' }
+  /** Вторичное приглашение (PS2, `A;k=s`): команда не закончена, ZLE ждёт продолжения. */
+  | { t: 'continue' }
   | { t: 'start'; command: string }
   | { t: 'end'; exitCode: number }
 
 /** Замороженный блок длиннее этого числа строк сворачивается. */
 export const COLLAPSE_LINES = 2000
 
-/** Полезная нагрузка OSC 133 (после "133;"): 'A' | 'C;<base64>' | 'D;<код>'. */
+/** Полезная нагрузка OSC 133 (после "133;"): 'A' | 'A;k=s' | 'C;<base64>' | 'D;<код>'. */
 export function parseOsc133(data: string): ParsedOsc133 | null {
   if (data === 'A') return { t: 'prompt' }
+  if (data.startsWith('A;')) {
+    const params = data.slice(2).split(';')
+    if (!params.every((x) => /^[\w-]+=/.test(x))) return null
+    return params.includes('k=s') ? { t: 'continue' } : { t: 'prompt' }
+  }
   if (data.startsWith('C;')) {
     try {
       const bin = atob(data.slice(2))
@@ -95,6 +102,17 @@ export function applyShell(items: FeedItem[], ev: ShellEvent): FeedItem[] {
     running: true,
   })
   return next
+}
+
+/** Управляющие символы, кроме \t и \n (включая ESC и C1): в ZLE они стали бы нажатиями клавиш. */
+const UNSAFE_CONTROLS = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g
+
+/**
+ * Байты команды для ZLE: без управляющих символов, всегда через bracketed paste — табуляция и переводы
+ * строк остаются литералами (без дополнения и разбиения на команды), затем ↵.
+ */
+export function commandBytes(cmd: string): string {
+  return `\x1b[200~${cmd.replace(UNSAFE_CONTROLS, '')}\x1b[201~\r`
 }
 
 /** id Claude-элемента ленты по его индексу в ClaudeState.items панели (индексы только растут). */

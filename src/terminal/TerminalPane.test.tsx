@@ -176,7 +176,7 @@ describe('TerminalPane', () => {
       const { write } = await mounted()
       type('ls -la')
       keyIn('Enter')
-      expect(write).toHaveBeenCalledWith('ls -la\r')
+      expect(write).toHaveBeenCalledWith('\x1b[200~ls -la\x1b[201~\r')
       expect(textarea().value).toBe('')
       expect(getHistory()).toEqual(['ls -la'])
       keyIn('ArrowUp')
@@ -188,6 +188,52 @@ describe('TerminalPane', () => {
       type('for i in 1 2\ndo echo $i; done')
       keyIn('Enter')
       expect(write).toHaveBeenCalledWith('\x1b[200~for i in 1 2\ndo echo $i; done\x1b[201~\r')
+    })
+
+    it('управляющие символы вырезаются: `\x1b[201~` внутри не завершает paste раньше времени', async () => {
+      const { write } = await mounted()
+      type('echo a\x1b[201~; rm -rf x\x03')
+      keyIn('Enter')
+      expect(write).toHaveBeenCalledWith('\x1b[200~echo a[201~; rm -rf x\x1b[201~\r')
+    })
+
+    it('оболочка ещё не запущена — команда остаётся в строке', async () => {
+      render(<TerminalPane {...props()} focused initialCwd="/w" />)
+      type('ls')
+      keyIn('Enter')
+      expect(textarea().value).toBe('ls')
+      spawns[0].resolve()
+      await act(async () => await flush())
+      keyIn('Enter')
+      expect(spawns[0].handle.write).toHaveBeenCalledWith('\x1b[200~ls\x1b[201~\r')
+      expect(textarea().value).toBe('')
+    })
+
+    it('незаконченная команда (PS2): подсказка, ⌃C шлёт \x03 и очищает строку; новое приглашение убирает подсказку', async () => {
+      const { term, write } = await mounted()
+      type('echo "abc')
+      keyIn('Enter')
+      act(() => void oscHandler(term, 133)('A;k=s'))
+      expect(document.querySelector('.in-note')?.textContent).toBe('Команда не закончена — допишите или ⌃C')
+      type('def"')
+      keyIn('c', { ctrlKey: true })
+      expect(write).toHaveBeenLastCalledWith('\x03')
+      expect(textarea().value).toBe('')
+      act(() => void oscHandler(term, 133)('A'))
+      expect(document.querySelector('.in-note')).toBeNull()
+      // Продолжение команды — тем же путём; C убирает подсказку.
+      act(() => void oscHandler(term, 133)('A;k=s'))
+      type('done')
+      keyIn('Enter')
+      expect(write).toHaveBeenLastCalledWith('\x1b[200~done\x1b[201~\r')
+      act(() => void oscHandler(term, 133)('C;' + btoa('for x; do; done')))
+      expect(document.querySelector('.in-note')).toBeNull()
+    })
+
+    it('⌃C на пустой строке в простое — \x03 в оболочку', async () => {
+      const { write } = await mounted()
+      keyIn('c', { ctrlKey: true })
+      expect(write).toHaveBeenCalledWith('\x03')
     })
 
     it('пустая строка не отправляется', async () => {
@@ -228,7 +274,7 @@ describe('TerminalPane', () => {
         await flush(40)
       })
       keyIn('Enter')
-      expect(write).toHaveBeenCalledWith('cd src\r')
+      expect(write).toHaveBeenCalledWith('\x1b[200~cd src\x1b[201~\r')
     })
 
     it('cwd подсказок — из OSC 7', async () => {
@@ -379,6 +425,72 @@ describe('TerminalPane', () => {
         act(() => startArgs().onExit.onmessage({ code: 130, stderr: '' }))
         expect(document.querySelector('.cerr')).toBeNull()
         expect(useClaudeSessions.getState().sessions.p.state.busy).toBe(false)
+      })
+
+      it('перезапуск — в каталоге первого запуска; упавший молча --resume сбрасывает sessionId', async () => {
+        claudeOk()
+        const { term } = await mounted()
+        type('a')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        act(() => startArgs().onLine.onmessage(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'S1' })))
+        act(() => startArgs().onExit.onmessage({ code: 0, stderr: '' }))
+        act(() => void oscHandler(term, 7)('file://host/other'))
+        invoke.mockClear()
+        type('b')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        expect(startArgs()).toMatchObject({ cwd: '/w', resume: 'S1' })
+        // resume не удался: ни одной строки, код 1.
+        act(() => startArgs().onExit.onmessage({ code: 1, stderr: 'No conversation found' }))
+        expect(useClaudeSessions.getState().sessions.p.state.sessionId).toBeNull()
+        invoke.mockClear()
+        type('c')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        expect(startArgs()).toMatchObject({ cwd: '/w', resume: null })
+      })
+
+      it('⌃C, пока процесс запускается: вопрос не отправляется, строка не очищается', async () => {
+        let resolveStart!: (id: string) => void
+        invoke.mockImplementation((cmd: string) =>
+          cmd === 'claude_start' ? new Promise((r) => (resolveStart = r)) : Promise.resolve(undefined),
+        )
+        await mounted()
+        type('a')
+        keyIn('Enter', { metaKey: true })
+        type('draft')
+        keyIn('c', { ctrlKey: true })
+        expect(textarea().value).toBe('draft')
+        await act(async () => {
+          resolveStart('c1')
+          await flush()
+        })
+        expect(calls().some((c) => c[0] === 'claude_send')).toBe(false)
+        expect(useClaudeSessions.getState().sessions.p.state.busy).toBe(false)
+      })
+
+      it('claude_send идут по очереди', async () => {
+        const sends: Array<() => void> = []
+        invoke.mockImplementation((cmd: string) => {
+          if (cmd === 'claude_start') return Promise.resolve('c1')
+          if (cmd === 'claude_send') return new Promise<void>((r) => sends.push(r))
+          return Promise.resolve(undefined)
+        })
+        await mounted()
+        type('1')
+        keyIn('Enter', { metaKey: true })
+        type('2')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        expect(sends).toHaveLength(1)
+        await act(async () => {
+          sends[0]()
+          await flush()
+        })
+        expect(sends).toHaveLength(2)
+        const texts = calls().filter((c) => c[0] === 'claude_send').map((c) => c[1].text)
+        expect(texts).toEqual(['1', '2'])
       })
 
       it('закрытие панели останавливает процесс claude', async () => {

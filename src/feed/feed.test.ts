@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyShell, COLLAPSE_LINES, formatDuration, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from './feed'
+import { applyShell, commandBytes, COLLAPSE_LINES, formatDuration, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from './feed'
 import type { FeedClaudeItem } from '../claude/reducer'
 
 const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
@@ -110,5 +110,17 @@ describe('syncClaude', () => {
     expect(syncClaude(feed, c2, c2)).toBe(feed)
     expect(syncClaude([], c2, [...c2, u('x')], 3)).toEqual([])
     expect(syncClaude([], c2, [...c2, u('x')], 2).map((f) => f.id)).toEqual(['cl-2'])
+  })
+})
+
+describe('commandBytes и PS2', () => {
+  it('всегда bracketed paste; ESC и прочие C0/C1 вырезаются, \t и \n остаются', () => {
+    expect(commandBytes('ls')).toBe('\x1b[200~ls\x1b[201~\r')
+    expect(commandBytes('echo a\x1b[201~; rm x\x03\r')).toBe('\x1b[200~echo a[201~; rm x\x1b[201~\r')
+    expect(commandBytes('a\tb\nc\x7f\x9b')).toBe('\x1b[200~a\tb\nc\x1b[201~\r')
+  })
+  it('133;A;k=s — вторичное приглашение', () => {
+    expect(parseOsc133('A;k=s')).toEqual({ t: 'continue' })
+    expect(parseOsc133('A;aid=1')).toEqual({ t: 'prompt' })
   })
 })

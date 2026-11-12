@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 
-const { InputBar, ASK_HINT, PLACEHOLDER } = await import('./InputBar')
+const { InputBar, ASK_HINT, CONTINUATION_NOTE, PLACEHOLDER } = await import('./InputBar')
 const { resetHistory, pushHistory } = await import('./history')
 type Handle = import('./InputBar').InputBarHandle
 
@@ -15,7 +15,7 @@ function setup(over: Partial<Parameters<typeof InputBar>[0]> = {}) {
     completions: false,
     cwd: () => '/w',
     home: '/h',
-    onRun: vi.fn(),
+    onRun: vi.fn(() => true),
     onAsk: vi.fn(),
     onInterrupt: vi.fn(() => false),
     onClearFeed: vi.fn(),
@@ -94,16 +94,37 @@ describe('InputBar', () => {
     expect(ta.value).toBe('l1\nl2')
   })
 
+  it('↵ при неготовой оболочке (onRun → false) оставляет текст и не пишет в историю', () => {
+    const { p, ta, set, key } = setup()
+    vi.mocked(p.onRun).mockReturnValue(false)
+    set('make')
+    key('Enter')
+    expect(p.onRun).toHaveBeenCalledWith('make')
+    expect(ta.value).toBe('make')
+    key('ArrowUp')
+    expect(ta.value).toBe('make')
+  })
+
+  it('подсказка о незаконченной команде', () => {
+    const { container, rerender, p } = setup()
+    expect(container.querySelector('.in-note')).toBeNull()
+    rerender(<InputBar {...p} continuation />)
+    expect(container.querySelector('.in-note')!.textContent).toBe(CONTINUATION_NOTE)
+  })
+
   it('⌃C очищает строку; если прерван Claude — строку не трогает; ⌃L — onClearFeed', () => {
     const { p, ta, set, key } = setup()
     set('abc')
     key('c', { ctrlKey: true })
-    expect(p.onInterrupt).toHaveBeenCalled()
+    expect(p.onInterrupt).toHaveBeenCalledWith(false)
     expect(ta.value).toBe('')
     vi.mocked(p.onInterrupt).mockReturnValue(true)
     set('abc')
     key('c', { ctrlKey: true })
     expect(ta.value).toBe('abc')
+    set('')
+    key('c', { ctrlKey: true })
+    expect(p.onInterrupt).toHaveBeenLastCalledWith(true)
     key('l', { ctrlKey: true })
     expect(p.onClearFeed).toHaveBeenCalled()
   })

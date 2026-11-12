@@ -16,7 +16,7 @@ import { matchKey } from '../keys/keymap'
 import { parseOsc7 } from './osc'
 import { useHome } from '../status/useGitInfo'
 import { spawnPty, type PtyHandle } from './ptyClient'
-import { applyShell, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
+import { applyShell, commandBytes, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
 import { askClaude, interruptClaude, stopClaude, useClaudeSessions } from '../claude/sessionStore'
 import { InputBar, type InputBarHandle } from '../input/InputBar'
@@ -60,11 +60,6 @@ function remeasureFont(term: Terminal): void {
   term.options.fontFamily = 'monospace'
   term.options.fontFamily = family
   term.clearTextureAtlas()
-}
-
-/** Команда для ZLE: многострочная — через bracketed paste (одна строка буфера), затем ↵. */
-export function commandBytes(cmd: string): string {
-  return cmd.includes('\n') ? `\x1b[200~${cmd}\x1b[201~\r` : cmd + '\r'
 }
 
 const NO_CLAUDE_ITEMS: readonly FeedClaudeItem[] = []
@@ -156,6 +151,13 @@ export function TerminalPane(p: TerminalPaneProps) {
   const runningRef = useRef(false)
   // То же для рендера: строка ввода неактивна, пока идёт команда.
   const [running, setRunning] = useState(false)
+  // ZLE во вторичном приглашении (PS2): команда не закончена.
+  const [cont, setCont] = useState(false)
+  const contRef = useRef(false)
+  const setContinuation = (v: boolean) => {
+    contRef.current = v
+    setCont(v)
+  }
 
   // Claude-сессия панели (стор по paneId): её элементы — в той же ленте, по времени появления.
   const claude = useClaudeSessions((st) => st.sessions[p.paneId])
@@ -227,7 +229,12 @@ export function TerminalPane(p: TerminalPaneProps) {
     // Блоки: zsh сообщает начало (C) и конец (D) команды.
     term.parser.registerOscHandler(133, (data) => {
       const ev = parseOsc133(data)
-      if (!ev || ev.t === 'prompt') return true
+      if (!ev) return true
+      if (ev.t === 'prompt' || ev.t === 'continue') {
+        setContinuation(ev.t === 'continue')
+        return true
+      }
+      setContinuation(false)
       const at = Date.now()
       if (ev.t === 'start') {
         // Стираем эхо набранной строки ZLE — в живом терминале только вывод команды.
@@ -394,9 +401,28 @@ export function TerminalPane(p: TerminalPaneProps) {
     [focusActive],
   )
 
-  const onRun = useCallback((cmd: string) => handleRef.current?.write(commandBytes(cmd)), [])
+  // Оболочка ещё не запущена — команду не теряем: строка ввода её сохранит.
+  const onRun = useCallback((cmd: string) => {
+    const h = handleRef.current
+    if (!h) return false
+    h.write(commandBytes(cmd))
+    return true
+  }, [])
   const onAsk = useCallback((text: string) => void askClaude(p.paneId, cwdRef.current, text), [p.paneId])
-  const onInterrupt = useCallback(() => interruptClaude(p.paneId), [p.paneId])
+  const onInterrupt = useCallback(
+    (empty: boolean) => {
+      // Незаконченная команда (PS2): ⌃C сбрасывает строку ZLE.
+      if (contRef.current) {
+        handleRef.current?.write('\x03')
+        return false
+      }
+      if (interruptClaude(p.paneId)) return true
+      // Пустая строка в простое — ⌃C в оболочку, как в обычном терминале.
+      if (empty) handleRef.current?.write('\x03')
+      return false
+    },
+    [p.paneId],
+  )
   const onClearFeed = useCallback(() => {
     // Идущий блок не трогаем (строка ввода в это время и так неактивна).
     setItems((it) => it.filter((x) => x.kind === 'shell' && x.running))
@@ -479,6 +505,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         <InputBar
           ref={inputRef}
           disabled={running || alt}
+          continuation={cont}
           completions={p.focused && !settingsOpen && settings.pathCompletions}
           cwd={() => cwdRef.current}
           home={home || null}

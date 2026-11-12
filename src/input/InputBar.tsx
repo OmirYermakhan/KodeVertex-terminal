@@ -12,6 +12,7 @@ const POPUP_GAP = 4
 
 export const PLACEHOLDER = 'Команда или вопрос Claude…'
 export const ASK_HINT = '⌘↵ отправить агенту'
+export const CONTINUATION_NOTE = 'Команда не закончена — допишите или ⌃C'
 
 export interface InputBarProps {
   /** Идёт shell-команда: строка неактивна, ввод — в живом терминале. */
@@ -20,12 +21,14 @@ export interface InputBarProps {
   completions: boolean
   cwd: () => string | undefined
   home: string | null
-  /** ↵: команда в оболочку. */
-  onRun(cmd: string): void
+  /** Оболочка ждёт продолжения команды (PS2): над полем подсказка. */
+  continuation?: boolean
+  /** ↵: команда в оболочку; false — не отправлена (оболочка не готова), строка остаётся. */
+  onRun(cmd: string): boolean
   /** ⌘↵: вопрос в Claude-сессию панели. */
   onAsk(text: string): void
-  /** ⌃C: true — прерван ход Claude, строку не трогаем; false — строка очищается. */
-  onInterrupt(): boolean
+  /** ⌃C (empty — строка пуста): true — прерван ход Claude, строку не трогаем; false — строка очищается. */
+  onInterrupt(empty: boolean): boolean
   /** ⌃L: очистить ленту. */
   onClearFeed(): void
 }
@@ -68,15 +71,18 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [])
 
   const submit = useCallback((text: string, ask: boolean) => {
-    nav.current = NAV_START
-    setLine('', 0)
-    completionRef.current.reset()
     if (ask) {
       props.current.onAsk(text)
     } else {
+      if (!props.current.onRun(text)) {
+        setLine(text, text.length)
+        return
+      }
       pushHistory(text)
-      props.current.onRun(text)
     }
+    nav.current = NAV_START
+    setLine('', 0)
+    completionRef.current.reset()
   }, [setLine])
 
   const completion = useCompletion({
@@ -159,7 +165,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     }
     if (only('ctrl') && e.key.toLowerCase() === 'c') {
       e.preventDefault()
-      if (props.current.onInterrupt()) return
+      if (props.current.onInterrupt(v === '')) return
       nav.current = NAV_START
       completionRef.current.close()
       setLine('', 0)
@@ -201,6 +207,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           onPick={completion.pick}
         />
       )}
+      {p.continuation && !p.disabled && <div className="in-note">{CONTINUATION_NOTE}</div>}
       <div className={'input' + (p.disabled ? ' off' : '')} onMouseDown={(e) => {
         // Клик по рамке/подсказке — фокус в поле.
         if (e.target !== taRef.current) {

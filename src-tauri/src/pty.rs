@@ -515,14 +515,30 @@ pub(crate) mod tests {
   }
 
   #[test]
-  fn reports_zle_buffer() {
+  fn bracketed_paste_runs_as_one_command() {
     let home = temp_home();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[]));
-    run(&m, &id, &out, "cd sr", "\x1b]6973;5;cd sr\x07");
-    // Ctrl-U очищает строку, Enter завершает её.
-    m.write(&id, b"\x15").unwrap();
-    run(&m, &id, &out, "\n", "\x1b]6973;-\x07");
+    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(b"\x1b]133;A\x07", 0));
+    // Так строка ввода отправляет команду: табуляция внутри — литерал, а не дополнение.
+    // base64("echo a\tb") = ZWNobyBhCWI=
+    run(&m, &id, &out, "\x1b[200~echo a\tb\x1b[201~\r", "\x1b]133;C;ZWNobyBhCWI=\x07");
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
+  fn continuation_prompt_emits_marker_and_ctrl_c_resets() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(b"\x1b]133;A\x07", 0));
+    let from = out.len();
+    run(&m, &id, &out, "\x1b[200~echo \"abc\x1b[201~\r", "\x1b]133;A;k=s\x07");
+    // ⌃C сбрасывает незаконченную строку: новое основное приглашение.
+    m.write(&id, b"\x03").unwrap();
+    let after = out.len();
+    assert!(out.wait_for(b"\x1b]133;A\x07", after), "вывод: {:?}", out.text());
+    assert!(find_from(&out, "\x1b]133;C;", from).is_none(), "команда не должна была запуститься");
     m.kill(&id).unwrap();
   }
 
@@ -538,18 +554,6 @@ pub(crate) mod tests {
       "mkdir -p '100%done/при вет' && cd '100%done/при вет'\n",
       "/100%25done/%D0%BF%D1%80%D0%B8%20%D0%B2%D0%B5%D1%82\x07",
     );
-    m.kill(&id).unwrap();
-  }
-
-  #[test]
-  fn zle_report_replaces_control_chars() {
-    let home = temp_home();
-    let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[]));
-    // Ctrl-V Ctrl-J вставляет литеральный перевод строки в буфер.
-    // Ждём, пока ZLE примет ввод, и только потом вставляем перевод строки.
-    run(&m, &id, &out, "echo a;b", "\x1b]6973;8;echo a;b\x07");
-    run(&m, &id, &out, "\x16\x0a", "\x1b]6973;9;echo a;b \x07");
     m.kill(&id).unwrap();
   }
 

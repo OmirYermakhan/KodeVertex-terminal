@@ -7,6 +7,11 @@ import { ShellBlockView } from './ShellBlockView'
 
 const NO_AGENTS: readonly Agent[] = []
 
+function agentOf(agents: readonly Agent[], it: ClaudeItem): Agent | undefined {
+  const x = it.item
+  return x.type === 'assistant' || x.type === 'action' ? agents.find((a) => a.id === x.agentId) : undefined
+}
+
 export interface FeedProps {
   items: FeedItem[]
   selectedId: string | null
@@ -38,7 +43,7 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
         ) : renderClaude ? (
           <Fragment key={it.id}>{renderClaude(it)}</Fragment>
         ) : (
-          <ClaudeCard key={it.id} item={it} agents={agents} />
+          <ClaudeCard key={it.id} item={it} agent={agentOf(agents, it)} />
         ),
       )}
       {park}

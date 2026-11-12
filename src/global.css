@@ -266,4 +266,5 @@ body {
 .input .ph { position: absolute; left: 0; top: 0; line-height: var(--input-lh, 18px); white-space: nowrap; overflow: hidden; max-width: 100%; pointer-events: none; }
 .input .caret { display: inline-block; width: 8px; height: 16px; background: var(--accText); vertical-align: -3px; animation: kv-pulse 1s steps(1) infinite; }
 .in-hint { flex: none; white-space: nowrap; line-height: var(--input-lh, 18px); }
+.in-note { margin: 8px 16px -2px; font-family: var(--font-code); font-size: 11.5px; color: var(--warn); }
 .in-measure { position: absolute; left: 0; top: 0; visibility: hidden; white-space: pre; pointer-events: none; }

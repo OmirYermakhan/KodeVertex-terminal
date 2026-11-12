@@ -13,6 +13,11 @@ export interface PaneClaude {
   state: ClaudeState
   /** id процесса на стороне Rust; null — процесс не запущен (ещё или уже). */
   procId: string | null
+  /**
+   * Каталог первого запуска: сессии Claude привязаны к каталогу проекта, поэтому перезапуск
+   * (с --resume) — там же, даже если панель с тех пор сделала cd.
+   */
+  cwd: string | null
 }
 
 interface SessionsStore {
@@ -28,13 +33,15 @@ const STDERR_LINES = 12
 interface Proc {
   ready: Promise<string | null>
   id: string | null
-  /** Пользователь прервал ход (⌃C): выход процесса после этого — не ошибка. */
+  /** Пользователь прервал ход (⌃C): выход процесса после этого — не ошибка; неотправленное не шлём. */
   interrupted: boolean
+  /** Отправки по очереди: claude_send — async-команда, параллельные вызовы могли бы переставиться. */
+  chain: Promise<void>
 }
 const procs = new Map<string, Proc>()
 
 function get(paneId: string): PaneClaude {
-  return useClaudeSessions.getState().sessions[paneId] ?? { state: initialClaude(), procId: null }
+  return useClaudeSessions.getState().sessions[paneId] ?? { state: initialClaude(), procId: null, cwd: null }
 }
 
 function patch(paneId: string, f: (p: PaneClaude) => PaneClaude): void {
@@ -73,23 +80,31 @@ export function exitMessage(e: ClaudeExit): string {
   return tail ? `${head}:\n${tail}` : head
 }
 
-function start(paneId: string, cwd: string | undefined): Proc {
-  const proc: Proc = { ready: Promise.resolve(null), id: null, interrupted: false }
+function start(paneId: string, paneCwd: string | undefined): Proc {
+  const proc: Proc = { ready: Promise.resolve(null), id: null, interrupted: false, chain: Promise.resolve() }
   const alive = () => procs.get(paneId) === proc
+  const prev = get(paneId)
+  const resume = prev.state.sessionId
+  const cwd = prev.cwd ?? paneCwd ?? null
+  if (prev.cwd === null && cwd !== null) patch(paneId, (p) => ({ ...p, cwd }))
+  let gotLine = false
   const onLine = new Channel<string>((line) => {
+    gotLine = true
     if (alive()) patchState(paneId, (s) => reduceClaude(s, line, Date.now()))
   })
   const onExit = new Channel<ClaudeExit>((e) => {
     if (!alive()) return
     procs.delete(paneId)
     const ok = e.code === 0 || proc.interrupted
-    patch(paneId, (p) => ({
-      procId: null,
-      state: ok ? stopped(p.state, Date.now()) : failed(p.state, exitMessage(e), Date.now()),
-    }))
+    patch(paneId, (p) => {
+      let state = ok ? stopped(p.state, Date.now()) : failed(p.state, exitMessage(e), Date.now())
+      // --resume упал, не сказав ни строки (сессии нет или она из другого каталога) — дальше начинаем
+      // новую сессию, а не повторяем тот же resume на каждый ⌘↵.
+      if (!ok && resume !== null && !gotLine) state = { ...state, sessionId: null }
+      return { ...p, procId: null, state }
+    })
   })
-  const resume = get(paneId).state.sessionId
-  proc.ready = invoke<string>('claude_start', { cwd: cwd ?? null, resume, onLine, onExit })
+  proc.ready = invoke<string>('claude_start', { cwd, resume, onLine, onExit })
     .then((id) => {
       if (!alive()) {
         // Панель закрыли, пока процесс запускался.
@@ -103,7 +118,7 @@ function start(paneId: string, cwd: string | undefined): Proc {
     .catch((err: unknown) => {
       if (alive()) {
         procs.delete(paneId)
-        patch(paneId, (p) => ({ procId: null, state: failed(p.state, String(err), Date.now()) }))
+        patch(paneId, (p) => ({ ...p, procId: null, state: failed(p.state, String(err), Date.now()) }))
       }
       return null
     })
@@ -119,21 +134,30 @@ export async function askClaude(paneId: string, cwd: string | undefined, text: s
   patchState(paneId, (s) => userSent(s, text, Date.now()))
   const proc = procs.get(paneId) ?? start(paneId, cwd)
   proc.interrupted = false
-  const id = await proc.ready
-  if (id === null || procs.get(paneId) !== proc) return
-  try {
-    await invoke('claude_send', { id, text })
-  } catch (err) {
-    patchState(paneId, (s) => failed(s, String(err), Date.now()))
-  }
+  proc.chain = proc.chain.then(async () => {
+    const id = await proc.ready
+    if (id === null || procs.get(paneId) !== proc) return
+    // ⌃C пришёл, пока процесс запускался: вопрос не отправляем.
+    if (proc.interrupted) {
+      patchState(paneId, (s) => stopped(s, Date.now()))
+      return
+    }
+    try {
+      await invoke('claude_send', { id, text })
+    } catch (err) {
+      patchState(paneId, (s) => failed(s, String(err), Date.now()))
+    }
+  })
+  return proc.chain
 }
 
 /** ⌃C: прервать текущий ход Claude. false — Claude не занят, прерывать нечего. */
 export function interruptClaude(paneId: string): boolean {
   const proc = procs.get(paneId)
-  if (!get(paneId).state.busy || !proc?.id) return false
+  if (!get(paneId).state.busy || !proc) return false
   proc.interrupted = true
-  invoke('claude_interrupt', { id: proc.id }).catch(() => {})
+  // Процесс ещё запускается — отметки достаточно: askClaude не отправит вопрос.
+  if (proc.id) invoke('claude_interrupt', { id: proc.id }).catch(() => {})
   return true
 }
 

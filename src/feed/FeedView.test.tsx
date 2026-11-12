@@ -36,6 +36,17 @@ describe('Feed', () => {
     expect(screen.getByText('Привет')).toBeInTheDocument()
   })
 
+  it('карточку подписывает агент по agentId', () => {
+    const ag = (id: string, name: string) => ({ id, parentId: null, name, model: 'claude-opus-5-5', status: 'running' as const, now: '', history: [], step: null, startedAt: 0, endedAt: null, tokens: 0 })
+    const a1 = ag('main', 'Главный')
+    const items: FeedItem[] = [{ kind: 'claude', id: 'c1', item: { type: 'assistant', agentId: 'main', text: 'x', streaming: false } }]
+    const { container, rerender } = render(<Feed items={items} agents={[a1, ag('t', 'Поиск')]} selectedId={null} renderLive={() => null} />)
+    const who = container.querySelector('.who')!
+    expect(who.textContent).toBe('Главный · Opus 5.5')
+    rerender(<Feed items={items} agents={[a1, ag('t', 'Поиск 2')]} selectedId={null} renderLive={() => null} />)
+    expect(container.querySelector('.who')).toBe(who)
+  })
+
   it('renderClaude подменяет вид Claude-элемента (шов для Task 6)', () => {
     const items: FeedItem[] = [{ kind: 'claude', id: 'c1', item: { type: 'error', text: 'нет claude' } }]
     render(<Feed items={items} selectedId={null} renderLive={() => null} renderClaude={(it) => <i>card {it.id}</i>} />)

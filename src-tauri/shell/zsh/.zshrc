@@ -13,7 +13,8 @@ ZDOTDIR="$KV_ZDOTDIR"
 autoload -Uz add-zsh-hook
 
 # Режим блоков (KV_BLOCKS=1): границы команд по OSC 133 и скрытое приглашение.
-# 133;A — начало приглашения, 133;C;<base64 команды> — старт, 133;D;<код> — конец.
+# 133;A — начало приглашения, 133;C;<base64 команды> — старт, 133;D;<код> — конец,
+# 133;A;k=s — вторичное приглашение (PS2): команда не закончена, ZLE ждёт продолжения.
 if [[ -n "$KV_BLOCKS" ]]; then
   typeset -g _kv_cmd_ran=
   _kv_blocks_precmd() {
@@ -35,6 +36,8 @@ if [[ -n "$KV_BLOCKS" ]]; then
   }
   _kv_blocks_hide_prompt() {
     PROMPT=''
+    # Вместо текста PS2 — только маркер: строка ввода покажет подсказку «Команда не закончена».
+    PROMPT2=$'%{\e]133;A;k=s\a%}'
     RPROMPT=''
     PROMPT_EOL_MARK=''
   }
@@ -64,23 +67,3 @@ _kv_osc7() {
   printf '\e]7;file://%s%s\a' "$HOST" "$out"
 }
 add-zsh-hook precmd _kv_osc7
-
-# Сообщаем терминалу строку ввода ZLE (OSC 6973): позиция курсора и буфер.
-# add-zle-hook-widget складывается с хуками, уже заданными пользователем.
-autoload -Uz add-zle-hook-widget
-typeset -g _kv_last_report=
-_kv_report_buffer() {
-  emulate -L zsh
-  # Управляющие символы заменяем пробелом: OSC не рвётся, CURSOR не сдвигается.
-  local b=${BUFFER//[[:cntrl:]]/ }
-  [[ "$CURSOR:$b" == "$_kv_last_report" ]] && return
-  _kv_last_report="$CURSOR:$b"
-  print -rn -- $'\e]6973;'"$CURSOR;$b"$'\a'
-}
-_kv_report_end() {
-  emulate -L zsh
-  _kv_last_report=
-  print -rn -- $'\e]6973;-\a'
-}
-add-zle-hook-widget line-pre-redraw _kv_report_buffer
-add-zle-hook-widget line-finish _kv_report_end
