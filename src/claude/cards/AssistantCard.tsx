@@ -17,14 +17,17 @@ export const AssistantCard = memo(function AssistantCard({
   text,
   streaming,
   id,
+  selected,
 }: {
   agent: Agent | undefined
   text: string
   streaming: boolean
   id?: string
+  /** Выбран ⌘↑ (⌘L вложит его в сообщение). */
+  selected?: boolean
 }) {
   return (
-    <div className={isFable(agent) ? 'card fable' : 'card'} data-item-id={id}>
+    <div className={(isFable(agent) ? 'card fable' : 'card') + (selected ? ' sel' : '')} data-item-id={id}>
       <div className="who">{agentSignature(agent)}</div>
       <Markdown text={text} streaming={streaming} />
     </div>

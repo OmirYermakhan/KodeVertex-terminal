@@ -13,6 +13,7 @@ import { useGitInfo } from './status/useGitInfo'
 import Toasts from './notify/Toasts'
 import { installNotifications } from './notify/notify'
 import { useClaudeSessions } from './claude/sessionStore'
+import { installDragDrop, useAttachCount } from './attach/dragDrop'
 
 const REPEATABLE = new Set<Action>(['fontBigger', 'fontSmaller'])
 
@@ -28,12 +29,22 @@ export default function App() {
   const git = useGitInfo(cwd)
   const claude = useClaudeSessions((s) => (focusedPane ? s.sessions[focusedPane]?.state : undefined))
   const settingsOpen = useUi((s) => s.settingsOpen)
+  const attachments = useAttachCount((s) => (focusedPane ? (s.counts[focusedPane] ?? 0) : 0))
 
   useEffect(() => {
     useSettings.getState().load()
   }, [])
 
   useEffect(() => installNotifications(), [])
+  // Файлы из Finder: оверлей и вставка — в панели под курсором (иначе в панели в фокусе).
+  useEffect(
+    () =>
+      installDragDrop(() => {
+        const s = useTabs.getState()
+        return s.tabs.find((x) => x.id === s.active)?.focused ?? null
+      }),
+    [],
+  )
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -71,7 +82,7 @@ export default function App() {
         )}
       </div>
       <div data-testid="statusbar" className="statusbar">
-        <StatusBar cwd={cwd} git={git} claude={claude} />
+        <StatusBar cwd={cwd} git={git} claude={claude} attachments={attachments} />
       </div>
       <Toasts />
       <SettingsPanel open={settingsOpen} onClose={() => useUi.getState().setSettingsOpen(false)} />

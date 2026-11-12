@@ -422,3 +422,40 @@ describe('очередь сообщений', () => {
     expect(sess().queue).toEqual([])
   })
 })
+
+describe('вложения: отправка и очередь', () => {
+  let ch: { onLine: { onmessage(m: string): void } } | null = null
+  beforeEach(() => {
+    stopClaude('v')
+    invoke.mockReset()
+    ch = null
+    invoke.mockImplementation((cmd: string, a: Record<string, unknown>) => {
+      if (cmd === 'claude_start') ch = a as unknown as typeof ch
+      return Promise.resolve(cmd === 'claude_start' ? 'pv' : undefined)
+    })
+  })
+  const T = '￼'
+  const img = { id: 'i1', kind: 'image' as const, label: 'скрин', path: '/data/attachments/1.png' }
+  const file = { id: 'f1', kind: 'file' as const, label: 'Form.tsx', path: '/w/src/Form.tsx' }
+  const result = () => ch!.onLine.onmessage(JSON.stringify({ type: 'result', subtype: 'success', result: 'ok', session_id: 's1' }))
+
+  it('значки → текст для Claude и файлы для Rust; пузырь «Вы» хранит значки как есть', async () => {
+    await askClaude('v', '/w', `вот ${T}, проверь ${T}`, [img, file])
+    expect(calls('claude_send')).toEqual([
+      ['claude_send', { id: 'pv', text: 'вот [Изображение 1], проверь @src/Form.tsx', files: [{ kind: 'image', path: '/data/attachments/1.png' }] }],
+    ])
+    expect(items('v').at(-1)).toEqual({ type: 'user', text: `вот ${T}, проверь ${T}`, tokens: [img, file] })
+  })
+
+  it('в очереди значки едут с сообщением; ↑ возвращает текст со значками; уходят при отправке', async () => {
+    await askClaude('v', '/w', 'первое')
+    await askClaude('v', '/w', `a ${T}`, [file])
+    await askClaude('v', '/w', `b ${T}`, [img])
+    const q = useClaudeSessions.getState().sessions.v.queue
+    expect(q.map((m) => m.tokens)).toEqual([[file], [img]])
+    expect(recallQueued('v')).toEqual({ text: `b ${T}`, tokens: [img] })
+    result()
+    await flush()
+    expect(calls('claude_send').at(-1)![1]).toEqual({ id: 'pv', text: 'a @src/Form.tsx' })
+  })
+})

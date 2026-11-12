@@ -2,6 +2,8 @@
 // шёл, ждёт конца хода. Строки — приглушённые пузыри «Вы» (макет 04 .you), заголовок — как .dh.
 import { forwardRef, useImperativeHandle, useRef, useState, type KeyboardEvent } from 'react'
 import type { QueuedMessage } from './sessionStore'
+import { segments } from '../attach/doc'
+import { CLIP_PATH, Token } from '../attach/tokenView'
 
 export const QUEUE_KEYS = '↑ в пустой строке — изменить последнее · ⌫ убрать · esc к вводу'
 export const PAUSE_HINT = 'пауза — ↵ отправить следующее'
@@ -93,7 +95,19 @@ export const QueuePanel = forwardRef<QueuePanelHandle, QueuePanelProps>(function
               boxRef.current?.focus()
             }}
           >
-            <span className="qu-text">{m.text}</span>
+            <span className="qu-text">
+              {m.tokens && m.tokens.length > 0
+                ? segments({ text: m.text, tokens: m.tokens }).map((s, i) => (s.type === 'text' ? s.text : <Token key={s.token.id + i} token={s.token} />))
+                : m.text}
+            </span>
+            {m.tokens && m.tokens.length > 0 && (
+              <span className="qu-clip" title={`Вложений: ${m.tokens.length}`}>
+                <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+                  <path d={CLIP_PATH} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                </svg>
+                {m.tokens.length}
+              </span>
+            )}
             <span className="qu-tag">ждёт</span>
             <button
               type="button"

@@ -5,8 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 
-const { InputBar, ASK_HINT, CLAUDE_HINT, CLAUDE_PLACEHOLDER, CONTINUATION_NOTE, PLACEHOLDER } = await import('./InputBar')
+const { InputBar, ASK_HINT, CLAUDE_HINT, CLAUDE_PLACEHOLDER, CONTINUATION_NOTE, PLACEHOLDER, UNSUPPORTED_NOTE } = await import('./InputBar')
+const { AT_HINT } = await import('../completion/CompletionPopup')
+const { TOKEN_CHAR: T } = await import('../attach/types')
 const { resetHistory, pushHistory } = await import('./history')
+const { domText, setSelection, getSelection: getSel } = await import('./richDom')
 type Handle = import('./InputBar').InputBarHandle
 
 function setup(over: Partial<Parameters<typeof InputBar>[0]> = {}) {
@@ -24,11 +27,21 @@ function setup(over: Partial<Parameters<typeof InputBar>[0]> = {}) {
   }
   const ref = createRef<Handle>()
   const r = render(<InputBar ref={ref} {...p} />)
-  const ta = r.container.querySelector('textarea')!
-  const set = (v: string, cursor = v.length) =>
-    fireEvent.change(ta, { target: { value: v, selectionStart: cursor, selectionEnd: cursor } })
-  const key = (k: string, o: KeyboardEventInit = {}) => fireEvent.keyDown(ta, { key: k, ...o })
-  return { ...r, p, ta, set, key, ref }
+  const ed = r.container.querySelector<HTMLElement>('.in-ta')!
+  const ta = {
+    get value() {
+      return domText(ed)
+    },
+  }
+  // Набор: текст в поле, курсор — в cursor, событие input (как после набора браузером).
+  const set = (v: string, cursor = v.length) => {
+    if (document.activeElement !== ed) act(() => ed.focus())
+    ed.textContent = v
+    setSelection(ed, cursor)
+    fireEvent.input(ed)
+  }
+  const key = (k: string, o: KeyboardEventInit = {}) => fireEvent.keyDown(ed, { key: k, ...o })
+  return { ...r, p, ta, ed, set, key, ref }
 }
 
 describe('InputBar', () => {
@@ -63,15 +76,12 @@ describe('InputBar', () => {
     expect(ta.value).toBe('')
   })
 
-  it('⇧↵ — новая строка, поле растёт до 8 строк', () => {
+  it('⇧↵ — новая строка в месте курсора', () => {
     const { p, ta, set, key } = setup()
-    set('a')
+    set('ab', 1)
     key('Enter', { shiftKey: true })
     expect(p.onRun).not.toHaveBeenCalled()
-    set('a\nb')
-    expect(ta.rows).toBe(2)
-    set(Array(12).fill('x').join('\n'))
-    expect(ta.rows).toBe(8)
+    expect(ta.value).toBe('a\nb')
   })
 
   it('↑/↓ листают историю только с первой/последней строки', () => {
@@ -131,8 +141,9 @@ describe('InputBar', () => {
   })
 
   it('неактивна, пока идёт команда', () => {
-    const { ta } = setup({ disabled: true })
-    expect(ta).toBeDisabled()
+    const { ed } = setup({ disabled: true })
+    expect(ed).toHaveAttribute('aria-disabled', 'true')
+    expect(ed).not.toHaveAttribute('contenteditable', 'plaintext-only')
   })
 
   describe('команда claude и режим Claude', () => {
@@ -488,5 +499,171 @@ describe('InputBar: очередь сообщений Claude', () => {
     expect(container.querySelector('.in-mode')).not.toBeNull()
     key('Escape')
     expect(container.querySelector('.in-mode')).toBeNull()
+  })
+})
+
+describe('InputBar: значки вложений', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    invoke.mockResolvedValue([])
+    resetHistory()
+  })
+  const tok = (id: string, over: Record<string, unknown> = {}) => ({ id, kind: 'file' as const, label: `${id}.tsx`, path: `/w/${id}.tsx`, ...over })
+  const claude = (s: ReturnType<typeof setup>) => {
+    s.set('claude')
+    s.key('Enter')
+  }
+  const caretAt = (s: ReturnType<typeof setup>, pos: number) => setSelection(s.ed, pos)
+
+  it('вставка у курсора только в режиме Claude; значок — span .tk; счёт значков наружу', () => {
+    const onTokens = vi.fn()
+    const s = setup({ onTokens })
+    expect(s.ref.current!.insertTokens([tok('a')])).toBe(false)
+    claude(s)
+    s.set('см ')
+    act(() => void s.ref.current!.insertTokens([tok('a'), tok('b')]))
+    expect(s.ta.value).toBe(`см ${T} ${T}`)
+    expect([...s.ed.querySelectorAll('.tk')].map((e) => e.textContent)).toEqual(['a.tsx', 'b.tsx'])
+    expect(onTokens).toHaveBeenLastCalledWith(2)
+  })
+
+  it('⌘L из оболочки: claude: true переключает строку в режим Claude', () => {
+    const s = setup()
+    s.set('почини ')
+    act(() => void s.ref.current!.insertTokens([tok('npm', { kind: 'block', label: 'npm test', block: { command: 'npm test', exitCode: 1, cwd: '/w', output: '', durationMs: 1, at: 0 } })], { claude: true }))
+    expect(s.container.querySelector('.in-mode')).not.toBeNull()
+    expect(s.ed.querySelector('.tk')!.className).toBe('tk blkt fail')
+    expect(s.ed.querySelector('.tk .mut')!.textContent).toBe('· 1')
+  })
+
+  it('⌫ рядом со значком: первое — выделяет (.tk.sel), второе — удаляет; ←/→ перескакивают его', () => {
+    const s = setup()
+    claude(s)
+    s.set('ab')
+    act(() => void s.ref.current!.insertTokens([tok('x')]))
+    expect(s.ta.value).toBe(`ab ${T}`)
+    s.key('Backspace')
+    expect(s.ed.querySelector('.tk')!.classList.contains('sel')).toBe(true)
+    expect(s.ta.value).toBe(`ab ${T}`)
+    s.key('Backspace')
+    expect(s.ta.value).toBe('ab ')
+    // ←/→ — как одна буква.
+    act(() => void s.ref.current!.insertTokens([tok('y')]))
+    expect(s.ta.value).toBe(`ab ${T}`)
+    caretAt(s, 3)
+    s.key('ArrowRight')
+    expect(getSel(s.ed)).toEqual({ start: 4, end: 4 })
+    s.key('ArrowLeft')
+    expect(getSel(s.ed)).toEqual({ start: 3, end: 3 })
+    // ⌦ симметрично.
+    s.key('Delete')
+    expect(s.ed.querySelector('.tk.sel')).not.toBeNull()
+    s.key('Delete')
+    expect(s.ta.value).toBe('ab ')
+  })
+
+  it('↵ отдаёт текст со значками и сами значки; другая клавиша снимает выделение значка', () => {
+    const s = setup()
+    claude(s)
+    s.set('см')
+    act(() => void s.ref.current!.insertTokens([tok('f')]))
+    s.key('Backspace')
+    s.key('a')
+    expect(s.ed.querySelector('.tk.sel')).toBeNull()
+    s.key('Enter')
+    expect(s.p.onAsk).toHaveBeenCalledWith(`см ${T}`, [expect.objectContaining({ id: 'f', path: '/w/f.tsx' })])
+    expect(s.ta.value).toBe('')
+  })
+
+  it('красный значок не уходит: подсказка, строка остаётся', () => {
+    const s = setup()
+    claude(s)
+    s.set('глянь ')
+    act(() => void s.ref.current!.insertTokens([tok('clip', { kind: 'unsupported', label: 'clip.mov', reason: 'Видео' })]))
+    s.key('Enter')
+    expect(s.p.onAsk).not.toHaveBeenCalled()
+    expect(s.container.querySelector('.in-note')!.textContent).toBe(UNSUPPORTED_NOTE)
+    expect(s.ta.value).toBe(`глянь ${T}`)
+  })
+
+  it('вставка текста вокруг значков: значки на месте; копирование — читаемым видом', () => {
+    const s = setup()
+    claude(s)
+    s.set('a')
+    act(() => void s.ref.current!.insertTokens([tok('f')]))
+    caretAt(s, 1)
+    fireEvent.paste(s.ed, { clipboardData: { getData: () => 'XY', types: ['text/plain'], items: [] } })
+    expect(s.ta.value).toBe(`aXY ${T}`)
+    setSelection(s.ed, 0, s.ta.value.length)
+    const setData = vi.fn()
+    fireEvent.copy(s.ed, { clipboardData: { setData } })
+    expect(setData).toHaveBeenCalledWith('text/plain', 'aXY /w/f.tsx')
+  })
+
+  it('набор браузером рядом со значком сохраняет значок', () => {
+    const s = setup()
+    claude(s)
+    act(() => void s.ref.current!.insertTokens([tok('f')]))
+    const zw = [...s.ed.childNodes].filter((n) => n.nodeType === 3).at(-1) as Text
+    zw.data = zw.data + '!'
+    fireEvent.input(s.ed)
+    expect(s.ta.value).toBe(`${T}!`)
+    s.key('Enter')
+    expect(s.p.onAsk).toHaveBeenCalledWith(`${T}!`, [expect.objectContaining({ id: 'f' })])
+  })
+
+  it('файлы: в оболочке — экранированные пути через пробел, в режиме Claude — значки (Rust определяет тип)', async () => {
+    invoke.mockImplementation((cmd: string, a: { paths: string[] }) =>
+      Promise.resolve(cmd === 'attach_inspect' ? a.paths.map((p) => ({ path: p, name: p.split('/').pop(), exists: true, isDir: p.endsWith('dir'), size: 10 })) : []),
+    )
+    const s = setup()
+    s.set('ls')
+    act(() => s.ref.current!.insertPaths(['/w/my file.txt', '/w/b.png']))
+    expect(s.ta.value).toBe('ls /w/my\\ file.txt /w/b.png')
+    s.set('')
+    claude(s)
+    await act(async () => {
+      s.ref.current!.insertPaths(['/w/a.png', '/w/dir', '/w/c.mov'])
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect([...s.ed.querySelectorAll('.tk')].map((e) => [e.className, e.textContent])).toEqual([
+      ['tk', 'a.png'],
+      ['tk', 'dir/'],
+      ['tk err', 'c.mov'],
+    ])
+  })
+
+  it('↑ в пустой строке возвращает из очереди сообщение со значками', () => {
+    const recall = vi.fn().mockReturnValueOnce({ text: `x ${T}`, tokens: [tok('q')] }).mockReturnValue(null)
+    const s = setup({ queue: { recall, sendNext: vi.fn(() => false), dismissHint: vi.fn(() => false) } })
+    claude(s)
+    s.key('ArrowUp')
+    expect(s.ta.value).toBe(`x ${T}`)
+    expect(s.ed.querySelector('.tk')!.textContent).toBe('q.tsx')
+  })
+
+  it('`@путь` в режиме Claude: подсказки путей, ↵ вставляет значок вместо `@…`', async () => {
+    invoke.mockImplementation((cmd: string, a: { paths?: string[] }) => {
+      if (cmd === 'fs_list') return Promise.resolve([{ name: 'Form.tsx', isDir: false, isSymlink: false }, { name: 'styles', isDir: true, isSymlink: false }])
+      if (cmd === 'attach_inspect') return Promise.resolve(a.paths!.map((p) => ({ path: p, name: p.split('/').pop(), exists: true, isDir: false, size: 1 })))
+      return Promise.resolve(null)
+    })
+    const s = setup({ completions: true })
+    claude(s)
+    s.set('глянь @Fo')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50))
+    })
+    expect(invoke).toHaveBeenCalledWith('fs_list', expect.objectContaining({ dir: '/w' }))
+    expect(s.container.querySelector('.cp-hint')!.textContent).toBe(AT_HINT)
+    s.key('Enter')
+    expect(s.p.onAsk).not.toHaveBeenCalled()
+    expect(s.ta.value).toBe(`глянь ${T}`)
+    expect(s.ed.querySelector('.tk')!.textContent).toBe('Form.tsx')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    s.key('Enter')
+    expect(s.p.onAsk).toHaveBeenCalledWith(`глянь ${T}`, [expect.objectContaining({ path: '/w/Form.tsx', kind: 'file' })])
   })
 })

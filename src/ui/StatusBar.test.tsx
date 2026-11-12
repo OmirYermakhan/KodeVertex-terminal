@@ -26,6 +26,14 @@ describe('helpers', () => {
 describe('StatusBar', () => {
   const segs = (c: HTMLElement) => Array.from(c.querySelectorAll('.sg')).map((x) => x.textContent)
 
+  it('«вложения N» после проекта, только если значки есть (макет 06)', () => {
+    const now = new Date(2026, 0, 1, 14, 32)
+    const { container, rerender } = render(<StatusBar cwd="/Users/me/shop-app" git={git} now={now} attachments={4} />)
+    expect(segs(container).slice(0, 2)).toEqual(['проект shop-app', 'вложения 4'])
+    rerender(<StatusBar cwd="/Users/me/shop-app" git={git} now={now} attachments={0} />)
+    expect(segs(container).join()).not.toContain('вложения')
+  })
+
   it('без Claude-сессии: проект, ветка, отметка изменений и время справа — без сегментов Claude', () => {
     const { container } = render(
       <StatusBar cwd="/Users/me/shop-app/src" git={git} now={new Date(2026, 0, 1, 14, 32)} />,

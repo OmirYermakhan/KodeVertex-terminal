@@ -208,10 +208,15 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 /* Панель: лента блоков (макет 04-main-window, .feed/.blk) */
 .pane { position: relative; display: flex; flex-direction: column; height: 100%; box-sizing: border-box; background: var(--bg); }
 .feed { flex: 1; min-height: 0; overflow: auto; padding: 16px 22px; position: relative; box-sizing: border-box; }
-.blk { box-sizing: border-box; border: 1px solid transparent; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-family: var(--font-code); font-size: var(--size-code); line-height: 1.7; max-width: 76ch; color: var(--text); }
+.blk { position: relative; box-sizing: border-box; border: 1px solid transparent; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-family: var(--font-code); font-size: var(--size-code); line-height: 1.7; max-width: 76ch; color: var(--text); }
 .blk .cmd { color: var(--strong); }
 .blk .p { color: var(--accText); }
-.blk .bh { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+.blk .bh { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); user-select: none; -webkit-user-select: none; }
+/* Панелька над блоком (макет 06, сцена Г): при наведении и у выбранного. */
+.hover-act { position: absolute; right: 8px; top: -12px; z-index: 2; display: none; gap: 4px; font-family: var(--font-code); font-size: 11px; line-height: normal; }
+.blk:hover .hover-act, .blk.sel .hover-act { display: flex; }
+.hover-act button { font: inherit; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 3px 8px; color: var(--text); cursor: pointer; }
+.hover-act button.on { border-color: var(--acc); color: var(--strong); background: color-mix(in srgb, var(--acc) 12%, var(--bg)); }
 .blk.sel { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 6%, transparent); }
 .blk.err { border-left: 2px solid var(--del); padding-left: 11px; }
 .blk .exit { color: var(--del); }
@@ -231,7 +236,8 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .you { box-sizing: border-box; margin: 0 0 12px auto; max-width: 60%; background: var(--you); border-radius: 10px 10px 2px 10px; padding: 9px 14px; font-family: var(--font-text); font-size: calc(var(--size-text) - 1.5px); line-height: normal; color: var(--strong); white-space: pre-wrap; overflow-wrap: anywhere; }
 .you .who { color: color-mix(in srgb, var(--accText) 45%, var(--strong)); text-align: right; white-space: normal; }
 .card { box-sizing: border-box; background: var(--panel); border: 1px solid var(--rule); border-left: 2px solid var(--acc); border-radius: 8px; padding: 11px 14px; margin-bottom: 10px; max-width: 76ch; color: var(--text); font-family: var(--font-text); }
-.card .who { color: var(--accText); }
+.card .who { color: var(--accText); user-select: none; -webkit-user-select: none; }
+.card.sel { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 6%, var(--panel)); }
 .card.fable { border-left-color: #e8c46a; }
 .card.fable .who { color: #e8c46a; }
 .card.cerr { border-color: var(--del); }
@@ -334,16 +340,50 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 @keyframes kv-pulse { 50% { opacity: 0.35; } }
 .md .caret { display: inline-block; width: 8px; height: 1em; margin-left: 2px; background: var(--accText); vertical-align: -0.15em; animation: kv-pulse 1s steps(1) infinite; }
 
-/* Строка ввода (макет 04-main-window, .dock/.input): без плашек папки/ветки (спек §4.3). */
+/* Строка ввода (макет 04-main-window, .dock/.input): без плашек папки/ветки (спек §4.3).
+   Скрепка слева и строка высотой 26px — макет 06-attachments (.line/.clip). */
 .dock { flex: none; border-top: 1px solid var(--rule); background: var(--panel2); }
 .input-wrap { position: relative; }
-.input { display: flex; align-items: center; gap: 10px; margin: 8px 12px 10px; padding: 10px 14px; background: var(--bg); border: 1px solid var(--rule); border-radius: 9px; font-family: var(--font-code); font-size: calc(var(--size-code) + 0.5px); color: var(--muted); cursor: text; box-sizing: border-box; }
+.input { --input-lh: 26px; display: flex; align-items: flex-start; gap: 10px; margin: 8px 12px 10px; padding: 9px 12px; background: var(--bg); border: 1px solid var(--rule); border-radius: 9px; font-family: var(--font-code); font-size: calc(var(--size-code) + 0.5px); color: var(--muted); cursor: text; box-sizing: border-box; }
 .input.off { cursor: default; }
 .input.off .ph, .input.off .in-ta { opacity: 0.5; }
 .in-field { position: relative; flex: 1; min-width: 0; display: flex; }
-.in-ta { flex: 1; min-width: 0; display: block; box-sizing: border-box; margin: 0; padding: 0; border: 0; outline: none; resize: none; background: transparent; color: var(--strong); font: inherit; line-height: var(--input-lh, 18px); caret-color: var(--accText); white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; font-variant-ligatures: var(--liga); }
+.in-ta { flex: 1; min-width: 0; display: block; box-sizing: border-box; margin: 0; padding: 0; border: 0; outline: none; resize: none; background: transparent; color: var(--strong); font: inherit; line-height: var(--input-lh, 18px); min-height: var(--input-lh, 18px); max-height: calc(var(--input-lh, 18px) * 8); caret-color: var(--accText); white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; font-variant-ligatures: var(--liga); -webkit-user-modify: read-write-plaintext-only; }
 .in-ta.empty { caret-color: transparent; }
-.in-ta:disabled { background: transparent; color: var(--muted); }
+.in-ta[aria-disabled='true'] { background: transparent; color: var(--muted); -webkit-user-modify: read-only; }
+.clip { flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; display: grid; place-items: center; background: transparent; color: var(--muted); cursor: pointer; }
+.clip:hover:not(:disabled) { color: var(--strong); background: color-mix(in srgb, var(--strong) 8%, transparent); }
+.clip:disabled { cursor: default; opacity: 0.5; }
+
+/* Значки вложений в тексте (макет 06-attachments .tk): синий — файл/картинка, зелёный/красный —
+   блок терминала, фиолетовый — сообщение Claude, красный — не уйдёт. Цвета — токены темы --tk*. */
+.tk { box-sizing: border-box; display: inline-flex; align-items: center; gap: 5px; height: 21px; padding: 0 7px 0 4px; margin: 0 1px; border-radius: 5px; background: var(--tk); border: 1px solid var(--tkRule); font-family: var(--font-code); font-size: 12px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--tkText); vertical-align: 1px; white-space: nowrap; line-height: 1; position: relative; cursor: default; user-select: none; -webkit-user-select: none; }
+.tk .ico { width: 13px; height: 13px; flex: none; color: var(--tkIco); }
+.tk .mini { box-sizing: border-box; width: 15px; height: 15px; flex: none; border-radius: 3px; background: linear-gradient(180deg, var(--panel) 0 25%, color-mix(in srgb, var(--bg) 70%, #000) 25%); box-shadow: inset 0 -5px 0 var(--acc); border: 1px solid var(--tkMini); }
+.tk .mini.pic { background-size: cover; background-position: center; box-shadow: none; }
+.tk .mut { color: var(--tkMut); }
+.tk.sel { background: var(--acc); border-color: var(--acc); color: var(--onAcc); }
+.tk.sel .ico, .tk.sel .mut { color: color-mix(in srgb, var(--onAcc) 85%, var(--acc)); }
+.tk.err { background: var(--tkErr); border-color: var(--tkErrRule); color: var(--tkErrText); }
+.tk.err .ico { color: var(--del); }
+.tk.blkt { background: var(--tkOk); border-color: var(--tkOkRule); color: var(--tkOkText); }
+.tk.blkt .ico { color: var(--add); }
+.tk.blkt.fail { background: var(--tkFail); border-color: var(--tkFailRule); color: var(--tkFailText); }
+.tk.blkt.fail .ico { color: var(--del); }
+.tk.msg { background: var(--tkMsg); border-color: var(--tkMsgRule); color: var(--tkMsgText); }
+.tk.msg .ico { color: var(--tkMsgIco); }
+.tk.sel.err, .tk.sel.blkt, .tk.sel.msg { background: var(--acc); border-color: var(--acc); color: var(--onAcc); }
+.tk.sel.err .ico, .tk.sel.blkt .ico, .tk.sel.msg .ico { color: color-mix(in srgb, var(--onAcc) 85%, var(--acc)); }
+.you .tk, .you .tk.blkt, .you .tk.blkt.fail, .you .tk.msg, .you .tk.err { background: var(--tkYou); border-color: var(--tkYouRule); color: var(--tkYouText); }
+.you .tk .mut { color: inherit; }
+.you.tks { line-height: 1.75; }
+.tk-ghost { position: absolute; z-index: 30; pointer-events: none; opacity: 0.92; }
+
+/* Файлы над окном (макет 06, сцена Ж): лента затемняется, рамка «Отпустите, чтобы вставить…». */
+.drop { position: absolute; inset: 0; z-index: 20; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 78%, transparent); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); pointer-events: none; }
+.drop .zone { box-sizing: border-box; width: 78%; height: 70%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 2px dashed var(--acc); border-radius: 14px; background: color-mix(in srgb, var(--acc) 8%, transparent); color: var(--strong); font-family: var(--font-text); font-size: 16px; line-height: normal; }
+.drop .zone small { font-family: var(--font-code); font-size: 12px; color: var(--muted); }
+.drop .zone svg { color: var(--accText); }
 .input .ph { position: absolute; left: 0; top: 0; line-height: var(--input-lh, 18px); white-space: nowrap; overflow: hidden; max-width: 100%; pointer-events: none; }
 .input .caret { display: inline-block; width: 8px; height: 16px; background: var(--accText); vertical-align: -3px; animation: kv-pulse 1s steps(1) infinite; }
 /* Режим Claude (`claude` ↵): метка слева в поле, высота строки как у поля. */
@@ -360,6 +400,8 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .qu-row { box-sizing: border-box; display: flex; align-items: center; gap: 10px; flex: none; height: 32px; max-width: 60%; min-width: 0; padding: 0 8px 0 14px; background: color-mix(in srgb, var(--you) 45%, transparent); border: 1px solid transparent; border-radius: 10px 10px 2px 10px; font-family: var(--font-text); font-size: calc(var(--size-text) - 1.5px); line-height: normal; color: var(--text); cursor: default; }
 .queue:focus-within .qu-row.focus { border-color: var(--acc); }
 .qu-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qu-clip { flex: none; display: inline-flex; align-items: center; gap: 3px; font-family: var(--font-code); font-size: 11px; color: var(--muted); }
+.qu-text .tk { height: 19px; }
 .qu-tag { flex: none; font-family: var(--font-code); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 .qu-x { flex: none; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 11px; line-height: 20px; cursor: pointer; }
 .qu-x:hover { color: var(--strong); background: color-mix(in srgb, var(--strong) 10%, transparent); }

@@ -24,10 +24,13 @@ export interface FeedProps {
   onScroll?: () => void
   /** Слот для xterm, пока он не показан (держит ширину блока, см. TerminalPane). */
   park?: ReactNode
+  /** Блок — значком в строку ввода («⌘L в сообщение»). */
+  onAttach?(id: string): void
+  onCopy?(id: string): void
 }
 
 export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
-  { items, selectedId, renderLive, agents = NO_AGENTS, renderClaude, onScroll, park },
+  { items, selectedId, renderLive, agents = NO_AGENTS, renderClaude, onScroll, park, onAttach, onCopy },
   ref,
 ) {
   return (
@@ -39,11 +42,13 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
             block={it}
             selected={it.id === selectedId}
             live={it.running ? renderLive(it) : undefined}
+            onAttach={onAttach}
+            onCopy={onCopy}
           />
         ) : renderClaude ? (
           <Fragment key={it.id}>{renderClaude(it)}</Fragment>
         ) : (
-          <ClaudeCard key={it.id} item={it} agent={agentOf(agents, it)} />
+          <ClaudeCard key={it.id} item={it} agent={agentOf(agents, it)} selected={it.id === selectedId} />
         ),
       )}
       {park}

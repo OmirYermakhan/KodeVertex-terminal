@@ -1,3 +1,4 @@
+mod attach;
 mod claude;
 mod claude_settings;
 mod fonts;
@@ -55,6 +56,7 @@ pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_notification::init())
+    .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       settings::settings_load,
       settings::settings_save,
@@ -74,6 +76,8 @@ pub fn run() {
       claude::claude_control,
       claude::claude_respond,
       claude_settings::claude_save_defaults,
+      attach::attach_inspect,
+      attach::attach_clipboard_image,
       slash_commands::claude_slash_commands
     ])
     .manage(pty::PtyManager::default())
@@ -85,6 +89,10 @@ pub fn run() {
       }
     })
     .setup(|app| {
+      // Скрины из буфера (attachments/) старше 30 дней — в фоне, запуск не ждёт.
+      if let Ok(dir) = attach::dir(app.handle()) {
+        std::thread::spawn(move || attach::cleanup(&dir, attach::KEEP, std::time::SystemTime::now()));
+      }
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()

@@ -19,7 +19,14 @@ function useClock(fixed?: Date): Date {
 }
 
 // Статус-бар (макет 04-main-window `.sbar`). Сегменты Claude — только при сессии в фокусной панели.
-export default function StatusBar(p: { cwd?: string; git: GitInfo | null; now?: Date; claude?: ClaudeState | null }) {
+export default function StatusBar(p: {
+  cwd?: string
+  git: GitInfo | null
+  now?: Date
+  claude?: ClaudeState | null
+  /** Значков в строке ввода панели в фокусе (макет 06: «вложения N»). */
+  attachments?: number
+}) {
   const home = useHome()
   const now = useClock(p.now)
   const c = p.claude
@@ -36,6 +43,11 @@ export default function StatusBar(p: { cwd?: string; git: GitInfo | null; now?: 
       {p.cwd && (
         <div className="sg">
           проект <b>{projectName(p.cwd, p.git, home)}</b>
+        </div>
+      )}
+      {(p.attachments ?? 0) > 0 && (
+        <div className="sg">
+          вложения <b>{p.attachments}</b>
         </div>
       )}
       {p.git?.branch && (

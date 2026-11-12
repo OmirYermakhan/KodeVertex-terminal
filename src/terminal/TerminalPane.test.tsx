@@ -128,6 +128,8 @@ const { getHistory, resetHistory } = await import('../input/history')
 const { useClaudeSessions } = await import('../claude/sessionStore')
 const { mockupScene } = await import('../claude/fixtures/mockupScene')
 const { runAction } = await import('../keys/actions')
+const { initialClaude } = await import('../claude/reducer')
+const { domText, setSelection } = await import('../input/richDom')
 
 const flush = (ms = 0) => new Promise((r) => setTimeout(r, ms))
 
@@ -137,9 +139,16 @@ const oscHandler = (t: FakeTerminal, id: number) =>
   t.parser.registerOscHandler.mock.calls.find((c) => c[0] === id)![1] as OscHandler
 const oscHandlerOf = (t: FakeTerminal) => oscHandler(t, 133)
 const keyHandler = (t: FakeTerminal) => t.attachCustomKeyEventHandler.mock.calls[0][0] as KeyHandler
-const textarea = () => document.querySelector<HTMLTextAreaElement>('.in-ta')!
-/** Набор в строке ввода: значение и курсор в конце. */
-const type = (v: string) => fireEvent.change(textarea(), { target: { value: v, selectionStart: v.length, selectionEnd: v.length } })
+const textarea = () => document.querySelector<HTMLElement>('.in-ta')!
+/** Текст строки ввода (значки — TOKEN_CHAR). */
+const inputText = () => domText(textarea())
+/** Набор в строке ввода: значение и курсор в конце (как после набора браузером). */
+const type = (v: string) => {
+  const el = textarea()
+  el.textContent = v
+  setSelection(el, v.length)
+  fireEvent.input(el)
+}
 const keyIn = (key: string, o: KeyboardEventInit = {}) => fireEvent.keyDown(textarea(), { key, ...o })
 
 function props() {
@@ -180,10 +189,10 @@ describe('TerminalPane', () => {
       type('ls -la')
       keyIn('Enter')
       expect(write).toHaveBeenCalledWith('\x1b[200~ls -la\x1b[201~\r')
-      expect(textarea().value).toBe('')
+      expect(inputText()).toBe('')
       expect(getHistory()).toEqual(['ls -la'])
       keyIn('ArrowUp')
-      expect(textarea().value).toBe('ls -la')
+      expect(inputText()).toBe('ls -la')
     })
 
     it('многострочная команда уходит одной строкой ZLE (bracketed paste)', async () => {
@@ -204,12 +213,12 @@ describe('TerminalPane', () => {
       render(<TerminalPane {...props()} focused initialCwd="/w" />)
       type('ls')
       keyIn('Enter')
-      expect(textarea().value).toBe('ls')
+      expect(inputText()).toBe('ls')
       spawns[0].resolve()
       await act(async () => await flush())
       keyIn('Enter')
       expect(spawns[0].handle.write).toHaveBeenCalledWith('\x1b[200~ls\x1b[201~\r')
-      expect(textarea().value).toBe('')
+      expect(inputText()).toBe('')
     })
 
     it('незаконченная команда (PS2): подсказка, ⌃C шлёт \x03 и очищает строку; новое приглашение убирает подсказку', async () => {
@@ -221,7 +230,7 @@ describe('TerminalPane', () => {
       type('def"')
       keyIn('c', { ctrlKey: true })
       expect(write).toHaveBeenLastCalledWith('\x03')
-      expect(textarea().value).toBe('')
+      expect(inputText()).toBe('')
       act(() => void oscHandler(term, 133)('A'))
       expect(document.querySelector('.in-note')).toBeNull()
       // Продолжение команды — тем же путём; C убирает подсказку.
@@ -261,16 +270,16 @@ describe('TerminalPane', () => {
       const { term, write } = await mounted()
       type('ls')
       keyIn('Enter')
-      expect(textarea()).toBeDisabled()
+      expect(textarea()).toHaveAttribute('aria-disabled', 'true')
       act(() => void oscHandler(term, 133)('A'))
-      expect(textarea()).not.toBeDisabled()
+      expect(textarea()).not.toHaveAttribute('aria-disabled')
       expect(document.activeElement).toBe(textarea())
       // Оболочка молчит — через 2 с строка снова активна.
       type('pwd')
       keyIn('Enter')
-      expect(textarea()).toBeDisabled()
+      expect(textarea()).toHaveAttribute('aria-disabled', 'true')
       await act(async () => await flush(2100))
-      expect(textarea()).not.toBeDisabled()
+      expect(textarea()).not.toHaveAttribute('aria-disabled')
       expect(write).toHaveBeenCalledTimes(2)
     })
 
@@ -314,7 +323,7 @@ describe('TerminalPane', () => {
       expect(invoke).toHaveBeenCalledWith('fs_list', { dir: '/w', dirsOnly: true, includeHidden: false })
       expect(document.querySelector('.input-wrap .cp')).not.toBeNull()
       keyIn('Tab')
-      expect(textarea().value).toBe('cd Документы/')
+      expect(inputText()).toBe('cd Документы/')
       expect(write).not.toHaveBeenCalled()
       // esc при открытом попапе закрывает его.
       await act(async () => await flush(40))
@@ -359,12 +368,11 @@ describe('TerminalPane', () => {
       expect(document.querySelector('.cp')).toBeNull()
     })
 
-    it('⇧↵ не отправляет (перенос строки — поведение поля)', async () => {
+    it('⇧↵ не отправляет — перенос строки в поле', async () => {
       const { write } = await mounted()
       type('echo a')
-      const ev = new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true, cancelable: true })
-      textarea().dispatchEvent(ev)
-      expect(ev.defaultPrevented).toBe(false)
+      keyIn('Enter', { shiftKey: true })
+      expect(inputText()).toBe('echo a\n')
       expect(write).not.toHaveBeenCalled()
     })
 
@@ -372,7 +380,7 @@ describe('TerminalPane', () => {
       const { term } = await mounted()
       type('abc')
       keyIn('c', { ctrlKey: true })
-      expect(textarea().value).toBe('')
+      expect(inputText()).toBe('')
       for (const c of ['a', 'b']) {
         act(() => void oscHandler(term, 133)('C;' + btoa(c)))
         act(() => void oscHandler(term, 133)('D;0'))
@@ -404,7 +412,7 @@ describe('TerminalPane', () => {
         await mounted()
         type('что тут?')
         keyIn('Enter', { metaKey: true })
-        expect(textarea().value).toBe('')
+        expect(inputText()).toBe('')
         expect(document.querySelector('.you')?.textContent).toContain('что тут?')
         await act(async () => await flush())
         // claude_control — запрос текущих модели и усилия после запуска.
@@ -520,7 +528,7 @@ describe('TerminalPane', () => {
         // ↑ в пустой строке — последнее обратно в строку.
         textarea().focus()
         keyIn('ArrowUp')
-        expect(textarea().value).toBe('третье')
+        expect(inputText()).toBe('третье')
         expect(dock.querySelectorAll('.qu-row')).toHaveLength(1)
         await act(async () => {
           startArgs().onLine.onmessage(JSON.stringify({ type: 'result', subtype: 'success', result: 'ok', session_id: 's' }))
@@ -638,7 +646,7 @@ describe('TerminalPane', () => {
         type('draft')
         keyIn('c', { ctrlKey: true })
         expect(invoke).toHaveBeenCalledWith('claude_interrupt', { id: 'c1' })
-        expect(textarea().value).toBe('draft')
+        expect(inputText()).toBe('draft')
         act(() => startArgs().onExit.onmessage({ code: 130, stderr: '' }))
         expect(document.querySelector('.cerr')).toBeNull()
         expect(useClaudeSessions.getState().sessions.p.state.busy).toBe(false)
@@ -759,7 +767,7 @@ describe('TerminalPane', () => {
         keyIn('Enter', { metaKey: true })
         type('draft')
         keyIn('c', { ctrlKey: true })
-        expect(textarea().value).toBe('draft')
+        expect(inputText()).toBe('draft')
         await act(async () => {
           resolveStart('c1')
           await flush()
@@ -974,6 +982,59 @@ describe('TerminalPane', () => {
       expect(document.querySelector('.blk.sel')).toBeNull()
     })
 
+    it('⌘L: выбранный блок — значком у курсора, строка в режиме Claude; кнопка «⌘L в сообщение» — то же; уходит <terminal_block>', async () => {
+      invoke.mockImplementation((cmd: string) => Promise.resolve(cmd === 'claude_start' ? 'c1' : undefined))
+      const { term } = await mounted()
+      osc133(term, 'C;' + b64('npm test'))
+      term.lines = ['out1', 'out2']
+      osc133(term, 'D;1')
+      type('почини ')
+      act(() => runPaneCommand('p', 'blockPrev'))
+      act(() => runPaneCommand('p', 'blockAttach'))
+      expect(document.querySelector('.input .in-mode')).not.toBeNull()
+      const tk = textarea().querySelector('.tk')!
+      expect(tk.className).toBe('tk blkt fail')
+      expect(tk.textContent).toBe('npm test · 1')
+      expect(inputText()).toBe('почини \ufffc')
+      // Панелька над выбранным блоком.
+      const btn = document.querySelector<HTMLButtonElement>('.blk.sel .hover-act button.on')!
+      expect(btn.textContent).toBe('⌘L в сообщение')
+      expect(document.querySelector('.blk.sel .hover-act')!.textContent).toContain('⌘⇧C копировать')
+      fireEvent.click(btn)
+      expect(textarea().querySelectorAll('.tk')).toHaveLength(2)
+      keyIn('Backspace')
+      keyIn('Backspace')
+      keyIn('Enter')
+      await act(async () => {
+        await flush()
+        await flush()
+      })
+      const send = invoke.mock.calls.find((c) => c[0] === 'claude_send')!
+      expect(send[1]).toEqual({
+        id: 'c1',
+        text: 'почини [Блок 1]\n\n<terminal_block n="1" cmd="npm test" exit="1" cwd="/w">\nout1\nout2\n</terminal_block>',
+      })
+      // Пузырь «Вы» — со значком.
+      expect(document.querySelector('.you .tk')!.textContent).toBe('npm test · 1')
+    })
+
+    it('ответ Claude тоже выбирается ⌘↑ и вкладывается ⌘L сообщением', async () => {
+      await mounted()
+      act(() =>
+        useClaudeSessions.setState({
+          sessions: {
+            p: { ...useClaudeSessions.getState().sessions.p, state: { ...initialClaude(), items: [{ type: 'assistant', agentId: 'main', text: 'Форма **оплаты** готова.', streaming: false }] } } as never,
+          },
+        }),
+      )
+      act(() => runPaneCommand('p', 'blockPrev'))
+      expect(document.querySelector('.card.sel')).not.toBeNull()
+      act(() => runPaneCommand('p', 'blockAttach'))
+      const tk = textarea().querySelector('.tk')!
+      expect(tk.className).toBe('tk msg')
+      expect(tk.textContent).toBe('Главный: «Форма оплаты гото…»')
+    })
+
     it('хоткеи блоков не уходят в xterm', async () => {
       const { term } = await mounted()
       const k = (o: KeyboardEventInit) => keyHandler(term)(new KeyboardEvent('keydown', o))
@@ -985,10 +1046,10 @@ describe('TerminalPane', () => {
       const { term } = await mounted()
       expect(document.activeElement).toBe(textarea())
       osc133(term, 'C;' + b64('ls'))
-      expect(textarea()).toBeDisabled()
+      expect(textarea()).toHaveAttribute('aria-disabled', 'true')
       osc133(term, 'D;0')
       expect(host().closest('.feed-park')).not.toBeNull()
-      expect(textarea()).not.toBeDisabled()
+      expect(textarea()).not.toHaveAttribute('aria-disabled')
       expect(document.activeElement).toBe(textarea())
     })
 
@@ -1024,7 +1085,7 @@ describe('TerminalPane', () => {
       osc133(term, 'A')
       const blk = document.querySelector('.blk:not(.feed-park .blk)')!
       expect(blk).toHaveClass('run')
-      expect(textarea()).toBeDisabled()
+      expect(textarea()).toHaveAttribute('aria-disabled', 'true')
       expect(host().closest('.feed-park')).toBeNull()
       act(() => void oscHandler(term, 7)('file:///remote'))
       expect(onCwd.mock.calls.map((c) => c[0])).toEqual(['/a'])
@@ -1047,7 +1108,7 @@ describe('TerminalPane', () => {
       expect(blocks()).toHaveLength(2)
       expect(blocks()[1].querySelector('.cmd')!.textContent).toBe('ls )')
       expect(blocks()[1].querySelector('.out')).not.toBeNull()
-      expect(textarea()).not.toBeDisabled()
+      expect(textarea()).not.toHaveAttribute('aria-disabled')
     })
 
     it('конец команды при активном alt screen — содержимое alt не замораживается', async () => {

@@ -2,7 +2,9 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import {
+  AT_COMMAND,
   applyCompletion,
+  atContext,
   completeLine,
   completionContext,
   rankEntries,
@@ -43,6 +45,10 @@ export interface CompletionOptions {
   home: string | null
   /** Подстановка: новое значение поля и курсор (UTF-16); run — сразу выполнить строку. */
   replace: (value: string, cursor: number, run: boolean) => void
+  /** 'at' — режим Claude: подсказки только для `@путь`, выбор вставляет значок (insert). */
+  mode?: () => 'shell' | 'at'
+  /** `@путь` выбран: значок вместо [from, to) строки ввода (UTF-16). */
+  insert?: (path: string, isDir: boolean, from: number, to: number) => void
 }
 
 /** Достаточно для KeyboardEvent и React-события клавиатуры. */
@@ -93,10 +99,12 @@ export const joinPath = (dir: string, name: string) => (dir.endsWith('/') ? dir 
  * подставить, null — попап закроется, а строка выполнится как набрана. По этому же значению
  * строится подсказка попапа, так что она всегда совпадает с поведением.
  */
-export function enterAction(s: CompletionState): 'go' | 'substitute' | null {
+export function enterAction(s: CompletionState): 'go' | 'substitute' | 'insert' | null {
   const ctx = s.ctx
   const item = s.items[s.selected]
   if (!s.open || !ctx || !item) return null
+  // `@путь`: ↵ всегда вставляет значок выбранного.
+  if (ctx.command === AT_COMMAND) return 'insert'
   const repl = applyCompletion(ctx, item)
   // Токен уже равен элементу — подставлять нечего.
   if (ctx.token === repl || ctx.token + '/' === repl || ctx.token === repl + '/') return null
@@ -183,7 +191,8 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
     const nl = buffer.indexOf('\n', cursor)
     const lineEnd = nl < 0 ? buffer.length : nl
     const text = buffer.slice(lineStart, lineEnd)
-    const ctx = completionContext(text, [...buffer.slice(lineStart, cursor)].length)
+    const at = options.mode?.() === 'at'
+    const ctx = (at ? atContext : completionContext)(text, [...buffer.slice(lineStart, cursor)].length)
     const { cwd: getCwd, home } = options
     const cwd = getCwd()
     if (!ctx || !cwd || (ctx.dirPart.startsWith('~') && !home)) return close()
@@ -216,10 +225,18 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
     close()
   }
 
-  const apply = (i: number, run: boolean) => {
+  const apply = (i: number, run: boolean, insert = false) => {
     const item = cur.items[i]
     const { ctx, buffer, lineStart, lineEnd } = cur
     if (!cur.open || !item || !ctx) return
+    // `@путь`: файл (или папка по ↵) — значком; папка по Tab — заходим в неё.
+    if (ctx.command === AT_COMMAND && (insert || !item.isDir) && options.insert) {
+      const from = lineStart + ctx.tokenStart
+      const path = joinPath(cur.dir, item.name)
+      close()
+      options.insert(path, item.isDir, from, from + ctx.token.length)
+      return
+    }
     let { value, cursor } = completeLine(buffer.slice(lineStart, lineEnd), ctx, item)
     // ↵ на cd: каталог без завершающего слэша, строка сразу выполняется.
     if (run && value.slice(0, cursor).endsWith('/')) {
@@ -260,7 +277,7 @@ function createController(initial: CompletionOptions, publish: (s: CompletionSta
           close()
           return false
         }
-        apply(cur.selected, action === 'go')
+        apply(cur.selected, action === 'go', action === 'insert')
         return true
       }
       case 'Escape':

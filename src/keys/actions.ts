@@ -38,7 +38,8 @@ export function runAction(a: Action): void {
     case 'toggleAgents': return useUi.getState().toggleAgents()
     case 'blockPrev':
     case 'blockNext':
-    case 'blockCopy': {
+    case 'blockCopy':
+    case 'blockAttach': {
       const t = tabs.tabs.find((x) => x.id === tabs.active)
       return t && runPaneCommand(t.focused, a)
     }

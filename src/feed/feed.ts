@@ -195,13 +195,19 @@ export const COLLAPSED_ROWS = 200
 
 export type SelectionMove = { id: string | null; leave: boolean }
 
+/** Выбирается ⌘↑/⌘↓: завершённый shell-блок или законченный ответ Claude (их можно вложить ⌘L). */
+export function selectable(it: FeedItem): boolean {
+  if (it.kind === 'shell') return !it.running
+  return it.item.type === 'assistant' && !it.item.streaming && it.item.text.trim() !== ''
+}
+
 /**
- * ⌘↑/⌘↓ по завершённым shell-блокам. Без выбора ⌘↑ берёт последний блок.
+ * ⌘↑/⌘↓ по завершённым shell-блокам и ответам Claude. Без выбора ⌘↑ берёт последний.
  * ⌘↓ с последнего блока снимает выбор и сообщает leave — дальше фокус уходит из ленты
  * (в панель агентов, Task 8).
  */
 export function moveSelection(items: FeedItem[], selected: string | null, dir: 'up' | 'down'): SelectionMove {
-  const ids = items.filter((it): it is ShellBlock => it.kind === 'shell' && !it.running).map((b) => b.id)
+  const ids = items.filter(selectable).map((b) => b.id)
   const i = selected === null ? -1 : ids.indexOf(selected)
   if (dir === 'up') {
     if (ids.length === 0) return { id: null, leave: false }

@@ -31,6 +31,10 @@ import { blockText, cleanSerializedHtml } from '../feed/blockHtml'
 import { Feed } from '../feed/FeedView'
 import { LiveTerminal } from '../feed/LiveTerminal'
 import { registerPaneCommands, type BlockAction } from '../feed/paneCommands'
+import { feedAttachment } from '../attach/fromFeed'
+import { DROP_TITLE, DROP_TITLE_SHELL, DROP_TITLE_SHELL_MANY, dropSubline, registerDropTarget, setAttachCount, useDrop } from '../attach/dragDrop'
+import { DROP_PATH, Token } from '../attach/tokenView'
+import type { Attachment } from '../attach/types'
 
 const RESIZE_DEBOUNCE_MS = 50
 /** Живой терминал внутри блока — не выше этой доли ленты, дальше скролл внутри xterm. */
@@ -614,7 +618,73 @@ export function TerminalPane(p: TerminalPaneProps) {
   )
   // ⌃D на пустой строке — EOF в оболочку, как в обычном терминале (zsh с ignoreeof его проигнорирует).
   const onEof = useCallback(() => handleRef.current?.write('\x04'), [])
-  const onAsk = useCallback((text: string) => void askClaude(p.paneId, cwdRef.current, text), [p.paneId])
+  const onAsk = useCallback(
+    (text: string, tokens?: Attachment[]) => void askClaude(p.paneId, cwdRef.current, text, tokens),
+    [p.paneId],
+  )
+  const onTokens = useCallback((n: number) => setAttachCount(p.paneId, n), [p.paneId])
+  useEffect(() => {
+    const paneId = p.paneId
+    return () => setAttachCount(paneId, 0)
+  }, [p.paneId])
+
+  /** Блок или ответ Claude из ленты — значком у курсора строки ввода (из оболочки — в режим Claude). */
+  const attachItem = useCallback((id: string | null) => {
+    const it = id ? itemsRef.current.find((x) => x.id === id) : undefined
+    const agents = useClaudeSessions.getState().sessions[callbacks.current.paneId]?.state.agents
+    const tok = feedAttachment(it, agents)
+    if (tok) inputRef.current?.insertTokens([tok], { claude: true })
+  }, [])
+  const copyItem = useCallback((id: string | null) => {
+    const it = id ? itemsRef.current.find((x) => x.id === id) : undefined
+    const text = it?.kind === 'shell' ? (it.html ? blockText(it.html) : '') : it?.item.type === 'assistant' ? it.item.text : ''
+    if (text) navigator.clipboard?.writeText(text).catch(() => {})
+  }, [])
+
+  // Перетаскивание блока (за строку команды) или ответа (за подпись) в строку ввода — значком.
+  const [drag, setDrag] = useState<{ token: Attachment; x: number; y: number } | null>(null)
+  const onPanePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
+    const head = (e.target as Element).closest?.('.blk .bh, .card .who')
+    const host = head?.closest<HTMLElement>('[data-block-id], [data-item-id]')
+    const id = host?.dataset.blockId ?? host?.dataset.itemId
+    if (!id) return
+    const sx = e.clientX
+    const sy = e.clientY
+    let token: Attachment | null = null
+    const stop = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', stop)
+      setDrag(null)
+    }
+    const move = (ev: PointerEvent) => {
+      if (!token) {
+        if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return
+        const agents = useClaudeSessions.getState().sessions[callbacks.current.paneId]?.state.agents
+        token = feedAttachment(itemsRef.current.find((x) => x.id === id), agents)
+        if (!token) return stop()
+      }
+      ev.preventDefault()
+      const box = paneRef.current?.getBoundingClientRect()
+      setDrag({ token, x: ev.clientX - (box?.left ?? 0), y: ev.clientY - (box?.top ?? 0) })
+    }
+    const up = (ev: PointerEvent) => {
+      stop()
+      if (!token) return
+      const over = typeof document.elementFromPoint === 'function' ? document.elementFromPoint(ev.clientX, ev.clientY) : null
+      if (over && paneRef.current?.querySelector('.input')?.contains(over)) inputRef.current?.insertTokens([token], { claude: true })
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', stop)
+  }, [])
+
+  // Файлы из Finder над этой панелью: оверлей; брошены — у курсора строки ввода.
+  const dropHere = useDrop((s) => (s.paneId === p.paneId ? s.paths : null))
+  /** Строка ввода в режиме Claude: брошенные файлы станут значками (иначе — путями). */
+  const [acceptsTokens, setAcceptsTokens] = useState(false)
+  useEffect(() => registerDropTarget(p.paneId, (paths) => inputRef.current?.insertPaths(paths)), [p.paneId])
   const onClearFeed = useCallback(() => {
     // Идущий блок и незаконченный ответ Claude (с ним — всё после него) не трогаем:
     // иначе продолжение ответа после ⌃L не появилось бы.
@@ -676,7 +746,7 @@ export function TerminalPane(p: TerminalPaneProps) {
   // Выбранный блок держим в видимой области.
   useEffect(() => {
     if (!selected) return
-    const el = feedRef.current?.querySelector<HTMLElement>(`[data-block-id="${selected}"]`)
+    const el = feedRef.current?.querySelector<HTMLElement>(`[data-block-id="${selected}"], [data-item-id="${selected}"]`)
     el?.scrollIntoView?.({ block: 'nearest' })
   }, [selected])
 
@@ -686,8 +756,12 @@ export function TerminalPane(p: TerminalPaneProps) {
         // Полноэкранная программа: лента скрыта, выбирать нечего.
         if (altRef.current) return
         if (a === 'blockCopy') {
-          const b = itemsRef.current.find((it): it is ShellBlock => it.kind === 'shell' && it.id === selectedRef.current)
-          if (b?.html) navigator.clipboard?.writeText(blockText(b.html)).catch(() => {})
+          copyItem(selectedRef.current)
+          return
+        }
+        // ⌘L: выбранный блок или ответ — значком в строку ввода (макет 06, сцена Г).
+        if (a === 'blockAttach') {
+          attachItem(selectedRef.current)
           return
         }
         // ⌘↓ из строки ввода при ждущем вопросе агента — к вопросу.
@@ -711,7 +785,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         // ⌘↓ с последнего блока или из строки ввода — фокус в панель агентов (если она показана).
         if (m.leave) agentsRef.current?.focus()
       }),
-    [p.paneId, focusPrompt],
+    [p.paneId, focusPrompt, attachItem, copyItem],
   )
 
   const liveHeight = Math.min(hostHeight, livePx)
@@ -726,6 +800,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       ref={paneRef}
       data-pane-id={p.paneId}
       onFocus={() => callbacks.current.onFocus()}
+      onPointerDown={onPanePointerDown}
       // Клик по ленте возвращает ввод туда, где он идёт: в строку ввода, а пока идёт команда — в xterm.
       onMouseUp={(e) => {
         // Кнопки ленты («Показать всё» и т. п.), само поле и выделение текста не трогаем.
@@ -743,6 +818,8 @@ export function TerminalPane(p: TerminalPaneProps) {
         selectedId={selected}
         renderLive={renderLive}
         onScroll={onFeedScroll}
+        onAttach={attachItem}
+        onCopy={copyItem}
         park={
           // Пока xterm не показан, он стоит здесь: невидим, но сохраняет ширину текста блока (cols).
           // inert: спрятанный xterm не получает фокус по Tab/⇧Tab (ввод вслепую в ZLE).
@@ -798,6 +875,8 @@ export function TerminalPane(p: TerminalPaneProps) {
           home={home || null}
           onRun={onRun}
           onAsk={onAsk}
+          onTokens={onTokens}
+          onAcceptsTokens={setAcceptsTokens}
           onEnterClaude={onEnterClaude}
           onChooseModel={onChooseModel}
           modelInfo={modelInfo}
@@ -808,6 +887,22 @@ export function TerminalPane(p: TerminalPaneProps) {
       </div>
       {alt && (
         <LiveTerminal host={host} parkRef={parkRef} mode="overlay" hostHeight={hostHeight} height={0} onAttach={onAttach} onDetach={onDetach} />
+      )}
+      {dropHere && !alt && !(running || awaiting) && (
+        <div className="drop" aria-live="polite">
+          <div className="zone">
+            <svg width="34" height="34" viewBox="0 0 24 24" aria-hidden="true">
+              <path d={DROP_PATH} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            {acceptsTokens ? DROP_TITLE : dropHere.length > 1 ? DROP_TITLE_SHELL_MANY : DROP_TITLE_SHELL}
+            <small>{dropSubline(dropHere)}</small>
+          </div>
+        </div>
+      )}
+      {drag && (
+        <div className="tk-ghost" style={{ left: drag.x + 12, top: drag.y + 10 }} aria-hidden="true">
+          <Token token={drag.token} />
+        </div>
       )}
     </div>
   )

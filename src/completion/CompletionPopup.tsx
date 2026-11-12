@@ -4,6 +4,8 @@ import { foldForMatch, matchIndices } from './completion'
 import { enterAction, type CompletionState, type FsPreviewTS } from './useCompletion'
 
 export const LIST_WIDTH = 280
+/** Подсказка выбора `@путь` в режиме Claude (макет 06, сцена Е). */
+export const AT_HINT = '↑↓ выбрать · ↵ вставить · ⇥ в папку · esc'
 export const PREVIEW_WIDTH = 300
 const ROW_HEIGHT = 22
 const MAX_ROWS = 10
@@ -100,7 +102,7 @@ export function CompletionPopup({ state, x, y, onPick, previewFits = true }: Com
   const query = state.ctx.namePart
   // Подсказка ↵ — ровно то, что сделает ↵ (см. enterAction); иначе ↵ выполняет строку и не упоминается.
   const action = enterAction(state)
-  const enter = action === 'go' ? ' · ↵ перейти' : action === 'substitute' ? ' · ↵ подставить' : ''
+  const enter = action === 'go' ? ' · ↵ перейти' : action === 'substitute' ? ' · ↵ подставить' : action === 'insert' ? ' · ↵ вставить' : ''
   const bodyHeight = Math.min(state.items.length, MAX_ROWS) * ROW_HEIGHT
 
   return (
@@ -132,7 +134,7 @@ export function CompletionPopup({ state, x, y, onPick, previewFits = true }: Com
         )}
       </div>
       <div className="cp-hint" style={{ height: HINT_HEIGHT, lineHeight: `${HINT_HEIGHT}px` }}>
-        ↑↓ выбрать · Tab подставить{enter} · esc
+        {action === 'insert' ? AT_HINT : <>↑↓ выбрать · Tab подставить{enter} · esc</>}
       </div>
     </div>
   )

@@ -2,11 +2,16 @@
 // Чистая логика: входное состояние не мутируется, любой мусор игнорируется.
 import { actionTitle, modelLabel, nowLabel } from './labels'
 import { parsePermissionRequest, type Question } from './questions'
+import type { Attachment } from '../attach/types'
 
 export { actionTitle, modelLabel, nowLabel }
 
 export type FeedClaudeItem =
-  | { type: 'user'; text: string }
+  /**
+   * Сообщение пользователя. Со значками вложений: text — с TOKEN_CHAR на их местах, tokens — по
+   * порядку (хранятся как есть, не разбираются из текста: правка сообщения вернёт их в строку).
+   */
+  | { type: 'user'; text: string; tokens?: Attachment[] }
   | { type: 'assistant'; agentId: string; text: string; streaming: boolean }
   | {
       type: 'action'
@@ -145,13 +150,13 @@ function ensureAgent(s: ClaudeState, id: string, now: number): ClaudeState {
   return { ...s, agents: [...s.agents, newAgent(id, MAIN, 'Агент', now)] }
 }
 
-export function userSent(s: ClaudeState, text: string, now: number): ClaudeState {
+export function userSent(s: ClaudeState, text: string, now: number, tokens?: Attachment[]): ClaudeState {
   const next: ClaudeState = {
     ...s,
     busy: true,
     pending: s.pending + 1,
     currentAgentId: MAIN,
-    items: [...s.items, { type: 'user', text }],
+    items: [...s.items, tokens && tokens.length > 0 ? { type: 'user', text, tokens } : { type: 'user', text }],
   }
   return patchAgent(next, MAIN, { status: 'running', startedAt: now, endedAt: null, now: 'Думает' })
 }

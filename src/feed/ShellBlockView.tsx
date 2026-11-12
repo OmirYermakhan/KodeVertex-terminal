@@ -7,7 +7,14 @@ export interface ShellBlockViewProps {
   selected: boolean
   /** Живой терминал running-блока. */
   live?: ReactNode
+  /** «⌘L в сообщение» в панельке над блоком (макет 06, сцена Г). */
+  onAttach?(id: string): void
+  /** «⌘⇧C копировать». */
+  onCopy?(id: string): void
 }
+
+export const ATTACH_ACTION = '⌘L в сообщение'
+export const COPY_ACTION = '⌘⇧C копировать'
 
 function Output({ block }: { block: ShellBlock }) {
   const [all, setAll] = useState(false)
@@ -29,11 +36,26 @@ function Output({ block }: { block: ShellBlock }) {
   )
 }
 
-export const ShellBlockView = memo(function ShellBlockView({ block, selected, live }: ShellBlockViewProps) {
+export const ShellBlockView = memo(function ShellBlockView({ block, selected, live, onAttach, onCopy }: ShellBlockViewProps) {
   const failed = block.exitCode !== null && block.exitCode !== 0
   const cls = ['blk', selected && 'sel', failed && 'err', block.running && 'run'].filter(Boolean).join(' ')
   return (
     <div className={cls} data-block-id={block.id}>
+      {!block.running && (onAttach || onCopy) && (
+        // Панелька над блоком: видна при наведении и у выбранного блока (CSS).
+        <div className="hover-act">
+          {onAttach && (
+            <button type="button" className="on" onMouseDown={(e) => e.preventDefault()} onClick={() => onAttach(block.id)}>
+              {ATTACH_ACTION}
+            </button>
+          )}
+          {onCopy && (
+            <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => onCopy(block.id)}>
+              {COPY_ACTION}
+            </button>
+          )}
+        </div>
+      )}
       <div className="bh">
         <span>
           <span className="p">❯</span> <span className="cmd">{block.command}</span>

@@ -230,11 +230,17 @@ impl ClaudeManager {
     Ok(id)
   }
 
-  /// Пишет сообщение пользователя в stdin процесса одной JSON-строкой.
+  /// Пишет текстовое сообщение пользователя в stdin процесса одной JSON-строкой.
+  #[cfg(test)]
   pub fn send(&self, id: &str, text: &str) -> Result<(), String> {
+    self.send_content(id, vec![serde_json::json!({ "type": "text", "text": text })])
+  }
+
+  /// Сообщение пользователя из готовых блоков (текст, image, document — см. attach::build_content).
+  pub fn send_content(&self, id: &str, content: Vec<serde_json::Value>) -> Result<(), String> {
     let msg = serde_json::json!({
       "type": "user",
-      "message": { "role": "user", "content": [{ "type": "text", "text": text }] }
+      "message": { "role": "user", "content": content }
     });
     let mut line = msg.to_string();
     line.push('\n');
@@ -412,10 +418,21 @@ pub async fn claude_start(
 }
 
 #[tauri::command]
-pub async fn claude_send(manager: State<'_, ClaudeManager>, id: String, text: String) -> Result<(), String> {
-  // Запись в пайп может блокироваться (claude не читает stdin) — не держим async-поток.
+pub async fn claude_send(
+  manager: State<'_, ClaudeManager>,
+  id: String,
+  text: String,
+  files: Option<Vec<crate::attach::SendFile>>,
+) -> Result<(), String> {
+  // Чтение и base64 вложений, запись в пайп (может блокироваться, если claude не читает stdin) —
+  // не в async-потоке.
   let m = manager.inner().clone();
-  tauri::async_runtime::spawn_blocking(move || m.send(&id, &text)).await.map_err(|e| e.to_string())?
+  tauri::async_runtime::spawn_blocking(move || {
+    let content = crate::attach::build_content(&text, files.as_deref().unwrap_or(&[]))?;
+    m.send_content(&id, content)
+  })
+  .await
+  .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -521,6 +538,25 @@ mod tests {
     assert_eq!(line["message"]["role"], "user");
     assert_eq!(line["message"]["content"][0]["type"], "text");
     assert_eq!(line["message"]["content"][0]["text"], text);
+    m.stop(&id).unwrap();
+  }
+
+  #[test]
+  fn send_content_writes_text_and_image_blocks() {
+    let d = tempfile::tempdir().unwrap();
+    let img = d.path().join("s.png");
+    image::RgbaImage::from_pixel(3, 3, image::Rgba([1, 2, 3, 255])).save(&img).unwrap();
+    let files = vec![crate::attach::SendFile { kind: "image".into(), path: img.to_string_lossy().into() }];
+    let content = crate::attach::build_content("вот [Изображение 1]", &files).unwrap();
+    let m = ClaudeManager::default();
+    let (id, lrx, _erx) = start(&m, &fake()).unwrap();
+    take(&lrx, 38);
+    m.send_content(&id, content).unwrap();
+    let echo: serde_json::Value = serde_json::from_str(&lrx.recv_timeout(WAIT).unwrap()).unwrap();
+    let c = &echo["line"]["message"]["content"];
+    assert_eq!(c[0]["text"], "вот [Изображение 1]");
+    assert_eq!(c[1]["type"], "image");
+    assert_eq!(c[1]["source"]["type"], "base64");
     m.stop(&id).unwrap();
   }
 

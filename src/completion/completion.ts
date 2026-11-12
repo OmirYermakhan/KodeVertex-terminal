@@ -93,6 +93,37 @@ export function completionContext(buffer: string, cursor: number): CompletionCon
   }
 }
 
+/** Команда контекста `@путь` (режим Claude): значок файла вместо текста. */
+export const AT_COMMAND = '@'
+
+/**
+ * `@путь` у курсора в режиме Claude: `@` в начале слова (после начала строки, пробела или значка),
+ * до курсора без пробелов, после курсора — конец слова. cursor — индекс в code points.
+ */
+export function atContext(buffer: string, cursor: number): CompletionContext | null {
+  const chars = [...buffer]
+  if (cursor < 0 || cursor > chars.length) return null
+  const idx = chars.slice(0, cursor).join('').length
+  const after = buffer[idx]
+  if (after !== undefined && !/\s/.test(after)) return null
+  const before = buffer.slice(0, idx)
+  const m = /(^|[\s\ufffc])@([^\s\ufffc@]*)$/.exec(before)
+  if (!m) return null
+  const name = m[2]
+  const slash = name.lastIndexOf('/')
+  const dirPart = name.slice(0, slash + 1)
+  const namePart = name.slice(slash + 1)
+  return {
+    command: AT_COMMAND,
+    tokenStart: idx - name.length - 1,
+    token: '@' + name,
+    dirPart,
+    namePart,
+    dirsOnly: false,
+    includeHidden: namePart.startsWith('.'),
+  }
+}
+
 function normalize(path: string): string {
   const out: string[] = []
   for (const seg of path.split('/')) {
@@ -209,6 +240,8 @@ export function applyCompletion(
   ctx: CompletionContext,
   entry: { name: string; isDir: boolean },
 ): string {
+  // `@путь` — не для оболочки: имя как есть.
+  if (ctx.command === AT_COMMAND) return '@' + ctx.dirPart + entry.name + (entry.isDir ? '/' : '')
   // Ведущие - + = без каталога стали бы опцией, стеком каталогов или =cmd.
   const name = ctx.dirPart === '' && /^[-+=]/.test(entry.name) ? './' + entry.name : entry.name
   const full = ctx.dirPart + name

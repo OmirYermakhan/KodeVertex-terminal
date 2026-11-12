@@ -26,6 +26,29 @@ export interface ThemeTokens {
   fn: string
   num: string
   com: string
+  /** Значки вложений (макет 06 .tk): файл, блок (ok/fail), сообщение, неподдерживаемое, значок в пузыре «Вы». */
+  tk: string
+  tkRule: string
+  tkText: string
+  tkIco: string
+  tkMut: string
+  tkMini: string
+  tkOk: string
+  tkOkRule: string
+  tkOkText: string
+  tkFail: string
+  tkFailRule: string
+  tkFailText: string
+  tkMsg: string
+  tkMsgRule: string
+  tkMsgText: string
+  tkMsgIco: string
+  tkErr: string
+  tkErrRule: string
+  tkErrText: string
+  tkYou: string
+  tkYouRule: string
+  tkYouText: string
 }
 
 export interface Theme {
@@ -64,6 +87,28 @@ export const THEMES: Record<ThemeId, Theme> = {
       fn: '#7fb6f2',
       num: '#f2c46b',
       com: '#636972',
+      tk: '#1f2a35',
+      tkRule: '#314459',
+      tkText: '#e3e9ec',
+      tkIco: '#aaccef',
+      tkMut: '#84a5c9',
+      tkMini: '#405975',
+      tkOk: '#161e1a',
+      tkOkRule: '#314e38',
+      tkOkText: '#e0ebdc',
+      tkFail: '#23191b',
+      tkFailRule: '#4c2d2f',
+      tkFailText: '#f1d7d3',
+      tkMsg: '#211e2a',
+      tkMsgRule: '#423854',
+      tkMsgText: '#ebe3ee',
+      tkMsgIco: '#d4b6fa',
+      tkErr: '#271b1d',
+      tkErrRule: '#593435',
+      tkErrText: '#f0bfbc',
+      tkYou: '#1b1e23',
+      tkYouRule: '#45484c',
+      tkYouText: '#fefdf7',
     },
   },
   warm: {
@@ -94,6 +139,28 @@ export const THEMES: Record<ThemeId, Theme> = {
       fn: '#9bb4c9',
       num: '#c9a0c9',
       com: '#7a746a',
+      tk: '#313436',
+      tkRule: '#454c51',
+      tkText: '#e5e3dd',
+      tkIco: '#bbc8d2',
+      tkMut: '#98a2a8',
+      tkMini: '#556068',
+      tkOk: '#272923',
+      tkOkRule: '#46523f',
+      tkOkText: '#e2e4d4',
+      tkFail: '#2f2724',
+      tkFailRule: '#523d37',
+      tkFailText: '#ead7cc',
+      tkMsg: '#2f2a2c',
+      tkMsgRule: '#4d414b',
+      tkMsgText: '#e9dedc',
+      tkMsgIco: '#d3b4cf',
+      tkErr: '#332926',
+      tkErrRule: '#5c443d',
+      tkErrText: '#e6c5b9',
+      tkYou: '#282522',
+      tkYouRule: '#4e4b46',
+      tkYouText: '#fbf6ec',
     },
   },
   cold: {
@@ -124,6 +191,28 @@ export const THEMES: Record<ThemeId, Theme> = {
       fn: '#8fb8ff',
       num: '#79d0e0',
       com: '#66727f',
+      tk: '#2a3547',
+      tkRule: '#3d4d69',
+      tkText: '#e2ebf7',
+      tkIco: '#b3cefc',
+      tkMut: '#8aa7d5',
+      tkMini: '#4c6185',
+      tkOk: '#1f2a2c',
+      tkOkRule: '#385649',
+      tkOkText: '#ddede8',
+      tkFail: '#2c262d',
+      tkFailRule: '#543b40',
+      tkFailText: '#eedcdf',
+      tkMsg: '#282a39',
+      tkMsgRule: '#44415d',
+      tkMsgText: '#e6e5f5',
+      tkMsgIco: '#c7b8f2',
+      tkErr: '#30292f',
+      tkErrRule: '#604146',
+      tkErrText: '#efc6c9',
+      tkYou: '#202730',
+      tkYouRule: '#464d57',
+      tkYouText: '#fbffff',
     },
   },
   light: {
@@ -154,6 +243,28 @@ export const THEMES: Record<ThemeId, Theme> = {
       fn: '#2f6fb3',
       num: '#b5641a',
       com: '#9a9ea4',
+      tk: '#d5dfe6',
+      tkRule: '#b6cadc',
+      tkText: '#101a24',
+      tkIco: '#224b76',
+      tkMut: '#4b7199',
+      tkMini: '#9db9d5',
+      tkOk: '#e5ece1',
+      tkOkRule: '#b5d1b7',
+      tkOkText: '#112017',
+      tkFail: '#f1e3de',
+      tkFailRule: '#e7c3bd',
+      tkFailText: '#331a19',
+      tkMsg: '#eae1f1',
+      tkMsgRule: '#d7c1f3',
+      tkMsgText: '#201635',
+      tkMsgIco: '#6832bc',
+      tkErr: '#f0e0da',
+      tkErrRule: '#e4b9b2',
+      tkErrText: '#592522',
+      tkYou: '#eae9e2',
+      tkYouRule: '#c0bfb9',
+      tkYouText: '#000003',
     },
   },
   as: {
@@ -184,6 +295,28 @@ export const THEMES: Record<ThemeId, Theme> = {
       fn: '#56a8f5',
       num: '#2aacb8',
       com: '#7a7e85',
+      tk: '#2a3346',
+      tkRule: '#3a4865',
+      tkText: '#cfdcf6',
+      tkIco: '#8fb0ee',
+      tkMut: '#8a9bc0',
+      tkMini: '#4a5a7d',
+      tkOk: '#262c25',
+      tkOkRule: '#3d4a3b',
+      tkOkText: '#cfe3cd',
+      tkFail: '#33252a',
+      tkFailRule: '#5a3038',
+      tkFailText: '#f0c4c9',
+      tkMsg: '#2f2a3b',
+      tkMsgRule: '#4a4161',
+      tkMsgText: '#ddd3f2',
+      tkMsgIco: '#b49cf0',
+      tkErr: '#3a2226',
+      tkErrRule: '#6b2b33',
+      tkErrText: '#f3a6ae',
+      tkYou: '#243456',
+      tkYouRule: '#4b5d82',
+      tkYouText: '#e3eaf9',
     },
   },
 }

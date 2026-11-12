@@ -6,6 +6,9 @@ import { cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaud
 import { allowResponse, alwaysResponse, answerResponse, denyResponse, parsePermissionRequest } from './questions'
 import type { PermissionDecision } from './reducer'
 import { GET_SETTINGS, effortRequest, modelNote, persistedModel, setModelRequest, type ModelChoice } from './models'
+import { docOf } from '../attach/doc'
+import { serialize } from '../attach/serialize'
+import type { Attachment, Doc } from '../attach/types'
 
 export type { ModelChoice }
 
@@ -39,7 +42,10 @@ export interface PaneClaude {
 
 export interface QueuedMessage {
   id: number
+  /** Текст; со значками — TOKEN_CHAR на их местах. */
   text: string
+  /** Значки вложений по порядку (едут с сообщением, ↑ возвращает их в строку). */
+  tokens?: Attachment[]
   /** Каталог панели в момент набора (как у ⌘↵): сообщение уходит в сессию этого каталога. */
   cwd?: string
 }
@@ -312,7 +318,7 @@ function sendNextQueued(paneId: string, paneCwd: string | undefined): boolean {
   if (cur.paused || cur.queue.length === 0) return false
   const [head, ...rest] = cur.queue
   patch(paneId, (p) => ({ ...p, queue: rest }))
-  void askClaude(paneId, head.cwd ?? paneCwd, head.text)
+  void askClaude(paneId, head.cwd ?? paneCwd, head.text, head.tokens)
   return true
 }
 
@@ -324,13 +330,16 @@ export function sendQueued(paneId: string, paneCwd: string | undefined): boolean
   return sendNextQueued(paneId, paneCwd)
 }
 
-/** ↑ в пустой строке: последнее сообщение очереди — обратно в строку (из очереди убирается). */
-export function recallQueued(paneId: string): string | null {
+/**
+ * ↑ в пустой строке: последнее сообщение очереди — обратно в строку (из очереди убирается).
+ * Без значков — текст, со значками — Doc (текст и значки).
+ */
+export function recallQueued(paneId: string): string | Doc | null {
   const q = get(paneId).queue
   if (q.length === 0) return null
   const last = q[q.length - 1]
   patch(paneId, (p) => ({ ...p, queue: p.queue.slice(0, -1), pauseHint: p.pauseHint && p.queue.length > 1 }))
-  return last.text
+  return last.tokens && last.tokens.length > 0 ? docOf(last.text, last.tokens) : last.text
 }
 
 /** ✕ / ⌫ на строке очереди. */
@@ -399,24 +408,28 @@ export function claudeCwdKnown(paneId: string, paneCwd: string | undefined): boo
  * сообщении (и заново после выхода — с `--resume`, если id сессии известен). Если панель
  * с тех пор перешла в другой каталог — новая сессия там; начало новой сессии отмечается в ленте.
  */
-export async function askClaude(paneId: string, paneCwd: string | undefined, text: string): Promise<void> {
+export async function askClaude(paneId: string, paneCwd: string | undefined, text: string, tokens?: Attachment[]): Promise<void> {
+  const toks = tokens && tokens.length > 0 ? tokens : undefined
   // Ход идёт (в т. ч. ждёт ответа на вопрос или разрешение) — в очередь: в stdin посреди хода не пишем.
   if (get(paneId).state.busy) {
-    patch(paneId, (p) => ({ ...p, queue: [...p.queue, { id: ++queueSeq, text, ...(paneCwd ? { cwd: paneCwd } : {}) }], pauseHint: p.pauseHint || p.paused }))
+    const msg: QueuedMessage = { id: ++queueSeq, text, ...(toks ? { tokens: toks } : {}), ...(paneCwd ? { cwd: paneCwd } : {}) }
+    patch(paneId, (p) => ({ ...p, queue: [...p.queue, msg], pauseHint: p.pauseHint || p.paused }))
     return
   }
   // Отправка вручную снимает паузу: после этого хода очередь снова уходит сама.
   patch(paneId, (p) => (p.paused ? { ...p, paused: false, pauseHint: false } : p))
   const cwd = switchCwd(paneId, paneCwd)
   if (cwd === null) {
-    patchState(paneId, (s) => failed(userSent(s, text, Date.now()), NO_CWD, Date.now()))
+    patchState(paneId, (s) => failed(userSent(s, text, Date.now(), toks), NO_CWD, Date.now()))
     return
   }
   // Новая сессия (не продолжение): в ленте — строка с её каталогом.
   if (!procs.has(paneId) && get(paneId).state.sessionId === null) {
     patchState(paneId, (s) => ({ ...s, items: [...s.items, { type: 'session', cwd }] }))
   }
-  patchState(paneId, (s) => userSent(s, text, Date.now()))
+  patchState(paneId, (s) => userSent(s, text, Date.now(), toks))
+  // Значки → текст и файлы (картинки и pdf base64 собирает Rust); пути — относительно каталога сессии.
+  const out = toks ? serialize(docOf(text, toks), cwd) : { text, files: [] }
   const proc = procs.get(paneId) ?? start(paneId)
   proc.interrupted = false
   proc.chain = proc.chain.then(async () => {
@@ -428,7 +441,7 @@ export async function askClaude(paneId: string, paneCwd: string | undefined, tex
       return
     }
     try {
-      await invoke('claude_send', { id, text })
+      await invoke('claude_send', { id, text: out.text, ...(out.files.length > 0 ? { files: out.files } : {}) })
     } catch (err) {
       patch(paneId, (p) => ({ ...p, state: failed(p.state, String(err), Date.now()), ...pause(p) }))
     }
