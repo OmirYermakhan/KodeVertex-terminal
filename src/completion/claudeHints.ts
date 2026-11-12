@@ -116,10 +116,26 @@ export interface HintRow {
   alias: number
 }
 
-function bestAlias(query: string, item: HintItem, slash: boolean): { score: number; alias: number } | null {
+const fold = (s: string) => s.normalize('NFC').toLowerCase()
+
+/** Совпадение с началом варианта или его части `dir:name`; null — не префикс. */
+function prefixScore(query: string, alias: string): number | null {
+  const q = fold(query)
+  const a = fold(alias)
+  if (a.startsWith(q)) return 2000 - Math.min(a.length, 999)
+  if (a.split(':').slice(1).some((seg) => seg.startsWith(q))) return 1000 - Math.min(a.length, 999)
+  return null
+}
+
+function bestAlias(
+  query: string,
+  item: HintItem,
+  slash: boolean,
+  score: (q: string, a: string) => number | null,
+): { score: number; alias: number } | null {
   let best: { score: number; alias: number } | null = null
   item.aliases.forEach((a, i) => {
-    const s = fuzzyScore(query, slash ? a.slice(1) : a)
+    const s = score(query, slash ? a.slice(1) : a)
     if (s !== null && (best === null || s > best.score)) best = { score: s, alias: i }
   })
   return best
@@ -127,18 +143,24 @@ function bestAlias(query: string, item: HintItem, slash: boolean): { score: numb
 
 /**
  * Строки попапа: группы в постоянном порядке, внутри группы — по качеству совпадения
- * (при равенстве — исходный порядок). Пустой запрос — весь список.
+ * (при равенстве — исходный порядок). Пустой запрос — весь список. Если запрос — начало
+ * какой-то команды (варианта или части `dir:name`), показываются только такие; нечёткий
+ * поиск — лишь когда префиксных совпадений нет.
  */
 export function rankHints(ctx: HintContext, items: HintItem[]): HintRow[] {
   const query = hintQuery(ctx)
   const slash = ctx.kind === 'slash'
-  const all = ctx.bare ? [ENTER_ROW, ...items] : items
-  const scored: { row: HintRow; score: number; order: number }[] = []
-  all.forEach((item, order) => {
-    if (item.enter && query !== '') return
-    const b = bestAlias(query, item, slash)
-    if (b) scored.push({ row: { item, alias: b.alias }, score: b.score, order })
-  })
+  const all = (ctx.bare ? [ENTER_ROW, ...items] : items).filter((item) => !(item.enter && query !== ''))
+  const collect = (score: (q: string, a: string) => number | null) => {
+    const out: { row: HintRow; score: number; order: number }[] = []
+    all.forEach((item, order) => {
+      const b = bestAlias(query, item, slash, score)
+      if (b) out.push({ row: { item, alias: b.alias }, score: b.score, order })
+    })
+    return out
+  }
+  let scored = query === '' ? [] : collect(prefixScore)
+  if (scored.length === 0) scored = collect(fuzzyScore)
   scored.sort((a, b) => {
     const g = GROUP_ORDER.indexOf(a.row.item.group) - GROUP_ORDER.indexOf(b.row.item.group)
     if (g !== 0) return g

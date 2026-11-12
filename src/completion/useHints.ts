@@ -23,7 +23,7 @@ export interface HintsState {
   rows: HintRow[]
   /** -1 — ничего не выбрано (весь список показан без набора). */
   selected: number
-  /** Выбор менялся ↑/↓ с момента показа. */
+  /** Строка выбрана: ↑/↓ или набран запрос (тогда выбрана первая). */
   navigated: boolean
   buffer: string
 }
@@ -47,8 +47,8 @@ export interface HintsApi {
 const CLOSED: HintsState = { open: false, ctx: null, rows: [], selected: -1, navigated: false, buffer: '' }
 
 /**
- * Что сделает ↵ при открытом попапе: 'run' — подставить выбранное и выполнить; null — попап
- * закроется, строка выполнится как набрана. Подсказка попапа строится по этому же значению.
+ * Что сделает ↵ при открытом попапе: 'run' — подставить выбранное и выполнить (выбрано ↑↓ или
+ * набран запрос — тогда первая строка); null — попап закроется, строка выполнится как набрана. Подсказка попапа строится по этому же значению.
  */
 export function hintEnterAction(s: HintsState): 'run' | null {
   return s.open && s.navigated && s.rows[s.selected] ? 'run' : null
@@ -124,14 +124,14 @@ export function createHints(initial: HintsOptions, publish: (s: HintsState) => v
     if (!ctx) return close()
     const rows = rankHints(ctx, itemsFor(ctx))
     if (rows.length === 0) return close()
-    // Весь список без набора — ничего не выбрано; с набором подсвечено лучшее совпадение.
-    const selected = hintQuery(ctx) === '' ? -1 : 0
+    // Весь список без набора — ничего не выбрано; с набором лучшее совпадение выбрано (↵ выполняет его).
+    const typedQuery = hintQuery(ctx) !== ''
     // Тот же запрос (пришли команды) — выбор сохраняется, если строка осталась.
     if (cur.open && cur.ctx && cur.buffer === buffer && cur.navigated) {
       const keep = rows.findIndex((r) => r.item === cur.rows[cur.selected]?.item)
       if (keep >= 0) return set({ open: true, ctx, rows, selected: keep, navigated: true, buffer })
     }
-    set({ open: true, ctx, rows, selected, navigated: false, buffer })
+    set({ open: true, ctx, rows, selected: typedQuery ? 0 : -1, navigated: typedQuery, buffer })
   }
 
   const reset = () => {

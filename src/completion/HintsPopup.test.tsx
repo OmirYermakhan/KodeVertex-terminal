@@ -45,7 +45,7 @@ describe('HintsPopup', () => {
     expect(hintKeys(state('claude', 'shell', { selected: 0, navigated: true }))).toBe(
       '↑↓ выбрать · ↵ выполнить · esc закрыть',
     )
-    expect(hintKeys(state('/c', 'claude', { selected: 0 }))).toBe('↑↓ выбрать · ⇥ подставить · ↵ отправить · esc закрыть')
+    expect(hintKeys(state('/c', 'claude', { selected: 0, navigated: true }))).toBe('↑↓ выбрать · ⇥ подставить · ↵ отправить · esc закрыть')
   })
 
   it('клик — onPick', () => {

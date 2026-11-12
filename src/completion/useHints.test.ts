@@ -54,11 +54,23 @@ describe('createHints', () => {
     expect(replace).toHaveBeenCalledWith('claude', 6, true)
   })
 
-  it('с набором подсвечено лучшее совпадение; Tab подставляет, ↵ без ↑↓ — как набрано', () => {
+  it('с набором первая строка выбрана: ↵ выполняет её, ↓ — вторая, ↑ — по кругу', () => {
     const { s, key, type, replace } = setup()
-    type('claude --c')
+    type('claude -')
     expect(s().selected).toBe(0)
-    expect(key('Enter')).toBe(false)
+    expect(hintEnterAction(s())).toBe('run')
+    key('ArrowDown')
+    expect(s().rows[s().selected].item.aliases).toEqual(['-r', '--resume'])
+    key('ArrowUp')
+    key('ArrowUp')
+    expect(s().selected).toBe(s().rows.length - 1)
+    type('claude --c')
+    expect(key('Enter')).toBe(true)
+    expect(replace).toHaveBeenCalledWith('claude --continue', 17, true)
+  })
+
+  it('Tab подставляет выбранное', () => {
+    const { key, type, replace } = setup()
     type('claude --co')
     expect(key('Tab')).toBe(true)
     expect(replace).toHaveBeenCalledWith('claude --continue ', 18, false)

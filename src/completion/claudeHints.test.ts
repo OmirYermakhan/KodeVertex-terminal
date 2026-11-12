@@ -48,9 +48,23 @@ describe('rankHints', () => {
 
   it('фильтрует по набранному, группы сохраняют порядок', () => {
     expect(labels(hintContext('claude --c', 10, 'shell'))).toEqual(['--continue'])
-    expect(labels(hintContext('claude -r', 9, 'shell'))).toEqual(['-r', '--version'])
+    expect(labels(hintContext('claude -r', 9, 'shell'))).toEqual(['-r'])
     expect(labels(hintContext('claude doc', 10, 'shell'))).toEqual(['doctor'])
     expect(labels(hintContext('claude привет', 13, 'shell'))).toEqual([])
+  })
+
+  it('есть префиксные совпадения — только они; иначе нечёткий поиск', () => {
+    expect(labels(hintContext('claude --r', 10, 'shell'))).toEqual(['--resume'])
+    expect(labels(hintContext('claude -', 8, 'shell'))).toEqual(['-c', '-r', '--tui', '--version'])
+    expect(labels(hintContext('claude cfg', 10, 'shell'))).toEqual(['config'])
+    expect(labels(hintContext('/ex', 3, 'claude'), BUILTIN_SLASH)).toEqual(['/exit'])
+    const items = customSlashItems([
+      { name: 'git:sync', description: '', source: 'project' },
+      { name: 'synth', description: '', source: 'user' },
+    ])
+    // Начало части `dir:name` — тоже префикс.
+    expect(labels(hintContext('/syn', 4, 'claude'), items)).toEqual(['/git:sync', '/synth'])
+    expect(labels(hintContext('/gsy', 4, 'claude'), items)).toEqual(['/git:sync'])
   })
 
   it('slash: встроенные, затем проектные и личные', () => {
