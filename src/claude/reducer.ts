@@ -35,11 +35,27 @@ export type FeedClaudeItem =
       step: number
       answers: string[]
       done: boolean
-      /** Процесс claude завершился, не дождавшись ответа. */
-      cancelled?: boolean
+      /** Ответа больше не ждут: exit — процесс завершился; stop — ход прерван/закончен или CLI отменил запрос. */
+      cancelled?: CancelReason
+    }
+  /** Запрос разрешения инструмента (can_use_tool не для вопроса). */
+  | {
+      type: 'permission'
+      requestId: string
+      toolUseId: string | null
+      agentId: string
+      tool: string
+      input: Record<string, unknown>
+      suggestions: unknown[] | null
+      done: boolean
+      decision?: PermissionDecision
+      cancelled?: CancelReason
     }
   /** Начало новой сессии Claude: каталог, в котором она работает. */
   | { type: 'session'; cwd: string; /** Вход в режим Claude из строки ввода (`claude`): с подсказкой. */ mode?: boolean }
+
+export type PermissionDecision = 'allow' | 'always' | 'deny'
+export type CancelReason = 'exit' | 'stop'
 
 export interface Agent {
   id: string // 'main' | toolUseId
@@ -316,7 +332,9 @@ function onUser(s: ClaudeState, ev: Rec, now: number): ClaudeState {
   return next
 }
 
-function onResult(s: ClaudeState, ev: Rec, now: number): ClaudeState {
+function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
+  // Ход закончен — его вопросы и запросы разрешений больше не ждут ответа.
+  const s = cancelPrompts(prev)
   const isError = ev.is_error === true
   const cost = typeof ev.total_cost_usd === 'number' ? ev.total_cost_usd : s.costUsd
   let contextMax = s.contextMax
@@ -376,22 +394,47 @@ function onControl(s: ClaudeState, ev: Rec): ClaudeState {
 
 function onControlRequest(s: ClaudeState, ev: Rec, now: number): ClaudeState {
   const r = parsePermissionRequest(ev)
-  if (!r || r.kind !== 'ask') return s
-  if (s.items.some((it) => it.type === 'question' && it.requestId === r.requestId)) return s
+  if (!r || r.kind === 'deny') return s
+  if (s.items.some((it) => (it.type === 'question' || it.type === 'permission') && it.requestId === r.requestId)) return s
   const action = s.items.find((it) => it.type === 'action' && it.toolUseId === r.toolUseId)
   const agentId = action?.type === 'action' ? action.agentId : MAIN
   const next = ensureAgent(s, agentId, now)
-  return patchAgent(
-    {
-      ...next,
-      items: [
-        ...next.items,
-        { type: 'question', requestId: r.requestId, toolUseId: r.toolUseId, agentId, questions: r.questions, input: r.input, step: 0, answers: [], done: false },
-      ],
-    },
-    agentId,
-    { status: 'waiting', now: 'Ждёт ответа' },
-  )
+  const item: FeedClaudeItem =
+    r.kind === 'ask'
+      ? { type: 'question', requestId: r.requestId, toolUseId: r.toolUseId, agentId, questions: r.questions, input: r.input, step: 0, answers: [], done: false }
+      : { type: 'permission', requestId: r.requestId, toolUseId: r.toolUseId, agentId, tool: r.tool, input: r.input, suggestions: r.suggestions, done: false }
+  return patchAgent({ ...next, items: [...next.items, item] }, agentId, {
+    status: 'waiting',
+    now: r.kind === 'ask' ? 'Ждёт ответа' : 'Ждёт разрешения',
+  })
+}
+
+type PromptItem = Extract<FeedClaudeItem, { type: 'question' | 'permission' }>
+const isPending = (it: FeedClaudeItem): it is PromptItem =>
+  (it.type === 'question' || it.type === 'permission') && !it.done && !it.cancelled
+
+/** Первый ждущий ответа запрос агента панели (вопрос или разрешение) — для блока над строкой ввода. */
+export function pendingPrompt(s: ClaudeState): PromptItem | null {
+  return s.items.find(isPending) ?? null
+}
+
+/** Ждущие запросы отменены (все или только requestId): ответа на них больше не ждут. */
+export function cancelPrompts(s: ClaudeState, requestId?: string, reason: CancelReason = 'stop'): ClaudeState {
+  if (!s.items.some((it) => isPending(it) && (requestId === undefined || it.requestId === requestId))) return s
+  return {
+    ...s,
+    items: s.items.map((it) => (isPending(it) && (requestId === undefined || it.requestId === requestId) ? { ...it, cancelled: reason } : it)),
+  }
+}
+
+/** Решение по запросу разрешения. */
+export function decidePermission(s: ClaudeState, requestId: string, decision: PermissionDecision): ClaudeState {
+  const i = s.items.findIndex((it) => it.type === 'permission' && it.requestId === requestId)
+  const it = s.items[i]
+  if (!it || it.type !== 'permission' || !isPending(it)) return s
+  const items = s.items.slice()
+  items[i] = { ...it, done: true, decision }
+  return { ...s, items }
 }
 
 function patchQuestion(
@@ -435,19 +478,10 @@ export function finishQuestion(s: ClaudeState, requestId: string): ClaudeState {
   )
 }
 
-/** Первый ещё не отвеченный вопрос панели (для блока над строкой ввода). */
+/** Первый ждущий вопрос (не разрешение). */
 export function pendingQuestion(s: ClaudeState): Extract<FeedClaudeItem, { type: 'question' }> | null {
-  for (const it of s.items) if (it.type === 'question' && !it.done && !it.cancelled) return it
-  return null
-}
-
-/** Все ждущие вопросы — отменены (процесс claude завершился). */
-export function cancelQuestions(s: ClaudeState): ClaudeState {
-  if (!pendingQuestion(s)) return s
-  return {
-    ...s,
-    items: s.items.map((it) => (it.type === 'question' && !it.done && !it.cancelled ? { ...it, cancelled: true } : it)),
-  }
+  const p = pendingPrompt(s)
+  return p?.type === 'question' ? p : null
 }
 
 export function reduceClaude(s: ClaudeState, line: string | object, now: number): ClaudeState {
@@ -485,6 +519,8 @@ export function reduceClaude(s: ClaudeState, line: string | object, now: number)
         return onControl(s, ev)
       case 'control_request':
         return onControlRequest(s, ev, now)
+      case 'control_cancel_request':
+        return typeof ev.request_id === 'string' ? cancelPrompts(s, ev.request_id) : s
       default:
         return s
     }

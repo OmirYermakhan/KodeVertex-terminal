@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
 }))
 
-const { answerQuestion, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
+const { answerPermission, answerQuestion, interruptClaude, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
 
 const items = (pane: string) => useClaudeSessions.getState().sessions[pane]?.state.items ?? []
 const calls = (cmd: string) => invoke.mock.calls.filter((c) => c[0] === cmd)
@@ -123,10 +123,25 @@ describe('chooseModel (/model)', () => {
     expect(state().state.items.at(-1)).toEqual({ type: 'error', text: `Модель не сохранена по умолчанию: ${saveError}` })
   })
 
-  it('после выбора процесс перезапускается с --model/--effort', async () => {
+  it('модель панели запоминается после set_model; перезапуск — с --model/--effort', async () => {
     await chooseModel('m', '/w', { alias: 'sonnet', effort: 'low', persist: false })
-    expect(calls('claude_start')[0][1]).toMatchObject({ model: 'sonnet', effort: 'low' })
+    expect(state()).toMatchObject({ model: 'sonnet', effort: 'low' })
+    const first = calls('claude_start')[0][1] as { onExit: { onmessage(e: unknown): void } }
+    first.onExit.onmessage({ code: 0, stderr: '' })
+    await askClaude('m', '/w', 'дальше')
+    expect(calls('claude_start')[1][1]).toMatchObject({ model: 'sonnet', effort: 'low' })
   })
+
+  it('set_model не прошёл — модель панели не меняется, карточка ошибки; ответ не ждём 10 с после выхода', async () => {
+    enterClaude('m', '/w')
+    await flush()
+    invoke.mockImplementation((cmd: string) => (cmd === 'claude_control' ? Promise.reject('нет сессии') : Promise.resolve()))
+    await chooseModel('m', '/w', { alias: 'haiku', effort: null, persist: true })
+    expect(state().model).toBeNull()
+    expect(state().state.items.at(-1)).toEqual({ type: 'error', text: 'Не удалось сменить модель: нет сессии' })
+    expect(calls('claude_save_defaults')).toHaveLength(0)
+  })
+
 })
 
 describe('вопросы агента', () => {
@@ -149,14 +164,36 @@ describe('вопросы агента', () => {
   const line = (tool: string, inp: object) =>
     JSON.stringify({ type: 'control_request', request_id: 'rq', request: { subtype: 'can_use_tool', tool_name: tool, input: inp, tool_use_id: 't' } })
 
-  it('прочий инструмент — разрешается сразу с исходным вводом', async () => {
+  it('разрешение ждёт решения: запретить / разрешить / всегда; ввод не объект — запрет сразу', async () => {
     enterClaude('q', '/w')
     await flush()
-    onLine!.onmessage(line('Bash', { command: 'ls' }))
-    expect(calls('claude_respond')).toEqual([
-      ['claude_respond', { id: 'proc-q', requestId: 'rq', response: { behavior: 'allow', updatedInput: { command: 'ls' } } }],
+    const send = (rid: string, inp: unknown, extra = {}) =>
+      onLine!.onmessage(JSON.stringify({ type: 'control_request', request_id: rid, request: { subtype: 'can_use_tool', tool_name: 'Bash', input: inp, ...extra } }))
+    send('a', { command: 'git push' })
+    expect(calls('claude_respond')).toHaveLength(0)
+    expect(items('q').at(-1)).toMatchObject({ type: 'permission', requestId: 'a' })
+    await answerPermission('q', 'a', 'deny')
+    send('b', { command: 'ls' })
+    await answerPermission('q', 'b', 'allow')
+    const sug = [{ type: 'addRules', behavior: 'allow', destination: 'session', rules: [{ toolName: 'Bash' }] }]
+    send('c', { command: 'ls' }, { permission_suggestions: sug })
+    await answerPermission('q', 'c', 'always')
+    send('d', 'строка')
+    expect(calls('claude_respond').map((c) => c[1])).toEqual([
+      { id: 'proc-q', requestId: 'a', response: { behavior: 'deny', message: 'Пользователь запретил' } },
+      { id: 'proc-q', requestId: 'b', response: { behavior: 'allow', updatedInput: { command: 'ls' } } },
+      { id: 'proc-q', requestId: 'c', response: { behavior: 'allow', updatedInput: { command: 'ls' }, updatedPermissions: sug } },
+      { id: 'proc-q', requestId: 'd', response: { behavior: 'deny', message: 'Пользователь запретил' } },
     ])
   })
+
+  it('⌃C при ждущем вопросе — вопрос отменён', async () => {
+    await askClaude('q', '/w', 'спроси')
+    onLine!.onmessage(line('AskUserQuestion', input))
+    expect(interruptClaude('q')).toBe(true)
+    expect(items('q').find((i) => i.type === 'question')).toMatchObject({ cancelled: 'stop' })
+  })
+
 
   it('вопрос ждёт; ответы по шагам уходят одним control_response', async () => {
     enterClaude('q', '/w')
@@ -217,7 +254,7 @@ describe('выход claude при ждущем вопросе', () => {
     ch!.onExit.onmessage({ code: 1, stderr: 'boom' })
     const st = useClaudeSessions.getState().sessions.x.state
     expect(pendingQuestion(st)).toBeNull()
-    expect(st.items.find((i) => i.type === 'question')).toMatchObject({ cancelled: true, done: false })
+    expect(st.items.find((i) => i.type === 'question')).toMatchObject({ cancelled: 'exit', done: false })
     expect(st.agents[0].status).toBe('error')
   })
 })
@@ -243,5 +280,27 @@ describe('по умолчанию с [1m]', () => {
     expect(calls('claude_save_defaults')[0][1]).toMatchObject({ model: 'opus[1m]' })
     await chooseModel('d', '/w', { alias: 'fable', effort: null, persist: true })
     expect(calls('claude_save_defaults')[1][1]).toMatchObject({ model: 'fable' })
+  })
+})
+
+describe('выход процесса и управляющие запросы', () => {
+  it('ждущий ответа запрос отклоняется сразу при выходе (без таймаута)', async () => {
+    stopClaude('e')
+    invoke.mockReset()
+    let onExit: { onmessage(e: unknown): void } | null = null
+    invoke.mockImplementation((cmd: string, a: Record<string, unknown>) => {
+      if (cmd === 'claude_start') onExit = a.onExit as typeof onExit
+      return Promise.resolve(cmd === 'claude_start' ? 'pe' : undefined)
+    })
+    enterClaude('e', '/w')
+    await flush()
+    const t0 = Date.now()
+    const p = chooseModel('e', '/w', { alias: 'opus', effort: null, persist: false })
+    await flush()
+    onExit!.onmessage({ code: 1, stderr: '' })
+    await p
+    expect(Date.now() - t0).toBeLessThan(2000)
+    const st = useClaudeSessions.getState().sessions.e.state
+    expect(st.items.some((i) => i.type === 'error' && i.text === 'Не удалось сменить модель: Claude завершился')).toBe(true)
   })
 })

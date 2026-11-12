@@ -15,8 +15,20 @@ export interface Question {
 
 export type PermissionRequest =
   | { kind: 'ask'; requestId: string; toolUseId: string | null; input: Record<string, unknown>; questions: Question[] }
-  /** Любой другой запрос разрешения: при bypassPermissions разрешаем без вопросов. */
-  | { kind: 'allow'; requestId: string; input: Record<string, unknown> }
+  /**
+   * Запрос разрешения (даже под bypassPermissions: правила ask, защищённые пути, инструменты,
+   * требующие пользователя) — спрашиваем. suggestions — `permission_suggestions` CLI для «всегда».
+   */
+  | {
+      kind: 'permission'
+      requestId: string
+      toolUseId: string | null
+      tool: string
+      input: Record<string, unknown>
+      suggestions: unknown[] | null
+    }
+  /** Ввод инструмента не объект — запрещаем сразу. */
+  | { kind: 'deny'; requestId: string }
 
 type Rec = Record<string, unknown>
 const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -47,10 +59,13 @@ export function parsePermissionRequest(line: string | object): PermissionRequest
   const r = ev.request
   const requestId = str(ev.request_id)
   if (r.subtype !== 'can_use_tool' || !requestId) return null
-  const input = isRec(r.input) ? r.input : {}
+  if (!isRec(r.input)) return { kind: 'deny', requestId }
+  const input = r.input
+  const toolUseId = str(r.tool_use_id) || null
   const questions = r.tool_name === 'AskUserQuestion' ? parseQuestions(input.questions) : null
-  if (!questions) return { kind: 'allow', requestId, input }
-  return { kind: 'ask', requestId, toolUseId: str(r.tool_use_id) || null, input, questions }
+  if (questions) return { kind: 'ask', requestId, toolUseId, input, questions }
+  const suggestions = Array.isArray(r.permission_suggestions) && r.permission_suggestions.length ? r.permission_suggestions : null
+  return { kind: 'permission', requestId, toolUseId, tool: str(r.tool_name) || 'инструмент', input, suggestions }
 }
 
 /** Ответ на вопросы: `answers` — текст вопроса → выбранный вариант (несколько — через запятую) или свой ответ. */
@@ -64,6 +79,49 @@ export function answerResponse(input: Record<string, unknown>, answers: string[]
 }
 
 export const allowResponse = (input: Record<string, unknown>) => ({ behavior: 'allow', updatedInput: input })
+/** «Разрешить всегда для этой сессии»: правила, которые предложил сам CLI. */
+export const alwaysResponse = (input: Record<string, unknown>, suggestions: unknown[]) => ({
+  behavior: 'allow',
+  updatedInput: input,
+  updatedPermissions: suggestions,
+})
+export const DENY_MESSAGE = 'Пользователь запретил'
+export const denyResponse = () => ({ behavior: 'deny', message: DENY_MESSAGE })
+
+const lines = (t: unknown) => (typeof t === 'string' && t ? t.split('\n').length : 0)
+const clip = (t: string, max = 160) => (t.length > max ? t.slice(0, max - 1) + '…' : t)
+
+/** Понятное описание запроса разрешения: команда, путь, размер правки. */
+export function permissionSummary(tool: string, input: Record<string, unknown>): { main: string; detail: string } {
+  const path = str(input.file_path) || str(input.path) || str(input.notebook_path)
+  switch (tool) {
+    case 'Bash':
+      return { main: clip(str(input.command)), detail: str(input.description) }
+    case 'Edit':
+      return { main: path, detail: `−${lines(input.old_string)} +${lines(input.new_string)} строк` }
+    case 'MultiEdit': {
+      const edits = Array.isArray(input.edits) ? input.edits.filter(isRec) : []
+      const del = edits.reduce((n, e) => n + lines(e.old_string), 0)
+      const add = edits.reduce((n, e) => n + lines(e.new_string), 0)
+      return { main: path, detail: `${edits.length} правок · −${del} +${add} строк` }
+    }
+    case 'Write':
+      return { main: path, detail: `${lines(input.content)} строк` }
+    case 'Read':
+    case 'NotebookEdit':
+      return { main: path, detail: '' }
+    case 'WebFetch':
+      return { main: str(input.url), detail: '' }
+  }
+  if (path) return { main: path, detail: '' }
+  let json = ''
+  try {
+    json = JSON.stringify(input)
+  } catch {
+    json = ''
+  }
+  return { main: clip(json), detail: '' }
+}
 
 /** Варианты, отмеченные в вопросе с несколькими ответами, — одной строкой. */
 export const joinLabels = (labels: string[]) => labels.join(', ')

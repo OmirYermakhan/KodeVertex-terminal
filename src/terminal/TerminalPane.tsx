@@ -19,9 +19,10 @@ import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
 import { applyShell, claudeIndex, commandBytes, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
-import { answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, enterClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
+import { answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, enterClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
 import { aliasOf } from '../claude/models'
-import { pendingQuestion } from '../claude/reducer'
+import { pendingPrompt, type PermissionDecision } from '../claude/reducer'
+import { PermissionPrompt } from '../claude/PermissionPrompt'
 import { QuestionPrompt } from '../claude/QuestionPrompt'
 import { InputBar, type InputBarHandle } from '../input/InputBar'
 import { AgentsPanel, type AgentsPanelHandle } from '../claude/AgentsPanel'
@@ -469,7 +470,10 @@ export function TerminalPane(p: TerminalPaneProps) {
   }, [agentsShown, p.focused, focusActive])
 
   // Вопрос агента ждёт ответа — блок над строкой ввода (как «needs your input» в Warp).
-  const question = claude ? pendingQuestion(claude.state) : null
+  // Ждущий запрос агента (вопрос или разрешение) — блок над строкой ввода.
+  const prompt = claude ? pendingPrompt(claude.state) : null
+  const question = prompt?.type === 'question' ? prompt : null
+  const permission = prompt?.type === 'permission' ? prompt : null
   const questionRef = useRef(question)
   useLayoutEffect(() => {
     questionRef.current = question
@@ -478,16 +482,35 @@ export function TerminalPane(p: TerminalPaneProps) {
   /** «Свой ответ…»: на какой вопрос строка ввода сейчас пишет ответ. */
   const [custom, setCustom] = useState<{ requestId: string; index: number } | null>(null)
   const focusPrompt = useCallback(() => promptRef.current?.focus(), [])
-  // Новый вопрос забирает фокус, если панель в фокусе и в строке ничего не набрано.
-  const questionId = question?.requestId ?? null
+  // Новый запрос забирает фокус, если панель в фокусе, в строке ничего не набрано и пользователь
+  // не занят другим (настройки, панель агентов, выбор модели). Запрос закрыт — ввод в строку.
+  const promptId = prompt?.requestId ?? null
   useEffect(() => {
-    if (!questionId) {
+    if (!promptId) {
       setCustom(null)
+      const active = document.activeElement
+      if (!active || active === document.body || (paneRef.current?.contains(active) && !inputRef.current?.hasFocus())) {
+        if (!active?.closest?.('.agents')) focusActive()
+      }
       return
     }
     if (!callbacks.current.focused || runningRef.current || altRef.current) return
+    if (useUi.getState().settingsOpen || inputRef.current?.pickerOpen()) return
+    const active = document.activeElement
+    if (active?.closest?.('.agents')) return
     if (inputRef.current?.isEmpty() ?? true) promptRef.current?.focus()
-  }, [questionId])
+  }, [promptId, focusActive])
+  const onDecideP = useCallback(
+    (d: PermissionDecision) => {
+      const pr = permissionRef.current
+      if (pr) void answerPermission(p.paneId, pr.requestId, d)
+    },
+    [p.paneId],
+  )
+  const permissionRef = useRef(permission)
+  useLayoutEffect(() => {
+    permissionRef.current = permission
+  })
   const onAnswerQ = useCallback(
     (index: number, text: string) => {
       const q = questionRef.current
@@ -642,7 +665,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           return
         }
         // ⌘↓ из строки ввода при ждущем вопросе агента — к вопросу.
-        if (a === 'blockNext' && questionRef.current && inputRef.current?.hasFocus()) {
+        if (a === 'blockNext' && promptRef.current && inputRef.current?.hasFocus()) {
           focusPrompt()
           return
         }
@@ -704,6 +727,16 @@ export function TerminalPane(p: TerminalPaneProps) {
             onStep={onStepQ}
             onSubmit={onSubmitQ}
             onCustom={onCustomQ}
+            onLeave={onLeaveQ}
+          />
+        )}
+        {permission && !alt && (
+          <PermissionPrompt
+            key={permission.requestId}
+            ref={promptRef}
+            item={permission}
+            agent={claude?.state.agents.find((a) => a.id === permission.agentId)}
+            onDecide={onDecideP}
             onLeave={onLeaveQ}
           />
         )}

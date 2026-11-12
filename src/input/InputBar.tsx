@@ -69,6 +69,8 @@ export interface InputBarHandle {
   hasFocus(): boolean
   /** В поле ничего не набрано. */
   isEmpty(): boolean
+  /** Открыта карточка выбора модели (`/model`). */
+  pickerOpen(): boolean
 }
 
 const onFirstLine = (v: string, pos: number) => !v.slice(0, pos).includes('\n')
@@ -106,6 +108,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     focus: () => taRef.current?.focus(),
     hasFocus: () => !!taRef.current && document.activeElement === taRef.current,
     isEmpty: () => (taRef.current?.value ?? '') === '',
+    pickerOpen: () => pickerRef.current !== null,
   }))
 
   useEffect(() => {

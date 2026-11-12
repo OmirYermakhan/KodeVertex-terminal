@@ -2,8 +2,9 @@
 // чтобы его читали лента панели, панель агентов и статус-бар.
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { create } from 'zustand'
-import { cancelQuestions, finishQuestion, gotoStep, initialClaude, questionSteps, recordAnswer, reduceClaude, userSent, type ClaudeState } from './reducer'
-import { allowResponse, answerResponse, parsePermissionRequest } from './questions'
+import { cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaude, questionSteps, recordAnswer, reduceClaude, userSent, type ClaudeState } from './reducer'
+import { allowResponse, alwaysResponse, answerResponse, denyResponse, parsePermissionRequest } from './questions'
+import type { PermissionDecision } from './reducer'
 import { GET_SETTINGS, effortRequest, modelNote, persistedModel, setModelRequest, type ModelChoice } from './models'
 
 export type { ModelChoice }
@@ -110,15 +111,17 @@ function start(paneId: string): Proc {
     if (!alive()) return
     if (line.includes('"control_response"')) settleControl(line)
     if (line.includes('"control_request"')) {
-      // Разрешения прочих инструментов (под bypassPermissions — редкость) даём сразу; вопросы ждут ответа.
+      // Вопросы и разрешения ждут пользователя (блок над строкой ввода); ввод не объект — запрещаем сразу.
       const r = parsePermissionRequest(line)
-      if (r?.kind === 'allow' && proc.id) {
-        invoke('claude_respond', { id: proc.id, requestId: r.requestId, response: allowResponse(r.input) }).catch(() => {})
+      if (r?.kind === 'deny' && proc.id) {
+        invoke('claude_respond', { id: proc.id, requestId: r.requestId, response: denyResponse() }).catch(() => {})
       }
     }
     patchState(paneId, (s) => reduceClaude(s, line, Date.now()))
   })
   const onExit = new Channel<ClaudeExit>((e) => {
+    // Ответов на управляющие запросы этого процесса уже не будет.
+    if (proc.id) rejectControls(proc.id)
     if (!alive()) return
     procs.delete(paneId)
     const ok = e.code === 0 || proc.interrupted
@@ -135,7 +138,7 @@ function start(paneId: string): Proc {
       // новую сессию, а не повторяем тот же resume на каждый ⌘↵.
       if (!ok && resume !== null && !gotLine) state = { ...state, sessionId: null }
       // Вопрос без процесса не ответить: отменяем (блок над строкой ввода исчезает).
-      state = cancelQuestions(state)
+      state = cancelPrompts(state, undefined, 'exit')
       return { ...p, procId: null, state }
     })
   })
@@ -164,7 +167,19 @@ function start(paneId: string): Proc {
 }
 
 /** Ожидающие ответа управляющие запросы: request_id → обработчики. */
-const pendingControls = new Map<string, { resolve(r: Record<string, unknown>): void; reject(e: Error): void }>()
+const pendingControls = new Map<
+  string,
+  { procId: string; resolve(r: Record<string, unknown>): void; reject(e: Error): void }
+>()
+
+/** Процесс завершился: его управляющие запросы — сразу ошибкой (не ждём таймаута). */
+function rejectControls(procId: string): void {
+  for (const [rid, p] of pendingControls) {
+    if (p.procId !== procId) continue
+    pendingControls.delete(rid)
+    p.reject(new Error('Claude завершился'))
+  }
+}
 let controlSeq = 0
 /** Сколько ждать control_response. */
 export const CONTROL_TIMEOUT_MS = 10000
@@ -194,6 +209,7 @@ function control(id: string, request: object): Promise<Record<string, unknown>> 
       reject(new Error('Claude не ответил на управляющий запрос'))
     }, CONTROL_TIMEOUT_MS)
     pendingControls.set(requestId, {
+      procId: id,
       resolve: (r) => {
         clearTimeout(timer)
         resolve(r)
@@ -219,7 +235,6 @@ const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
  * (с `--resume`, если сессия была). В ленте — заметка, статус-бар обновляется ответом set_model.
  */
 export async function chooseModel(paneId: string, paneCwd: string | undefined, c: ModelChoice): Promise<void> {
-  patch(paneId, (p) => ({ ...p, model: c.alias, effort: c.effort ?? p.effort }))
   const cwd = switchCwd(paneId, paneCwd)
   if (cwd === null) {
     patchState(paneId, (s) => failed(s, NO_CWD, Date.now()))
@@ -228,9 +243,16 @@ export async function chooseModel(paneId: string, paneCwd: string | undefined, c
   const proc = procs.get(paneId) ?? start(paneId)
   const id = await proc.ready
   if (id === null || procs.get(paneId) !== proc) return
+  // Тот же id, что пишется в настройки (с суффиксом контекста `[1m]` того же семейства).
+  const target = persistedModel(c.alias, get(paneId).state.defaultModel) ?? 'default'
   try {
-    const r = await control(id, setModelRequest(c.alias))
-    if (c.effort) await control(id, effortRequest(c.effort))
+    const r = await control(id, setModelRequest(target))
+    // Модель панели (для перезапуска) запоминаем, только когда CLI её принял.
+    patch(paneId, (p) => ({ ...p, model: target }))
+    if (c.effort) {
+      await control(id, effortRequest(c.effort))
+      patch(paneId, (p) => ({ ...p, effort: c.effort }))
+    }
     const modelId = typeof r.model === 'string' && r.model ? r.model : (get(paneId).state.model ?? c.alias)
     // Применённое усилие могло смениться вместе с моделью (у моделей свои настройки).
     const applied = await control(id, GET_SETTINGS).catch(() => null)
@@ -238,7 +260,7 @@ export async function chooseModel(paneId: string, paneCwd: string | undefined, c
     patchState(paneId, (s) => ({ ...s, items: [...s.items, { type: 'note', text: modelNote(modelId, effort ?? null) }] }))
     if (c.persist) {
       // Default — убрать модель из настроек: Claude Code возьмёт свою по умолчанию.
-      const model = persistedModel(c.alias, get(paneId).state.defaultModel)
+      const model = target === 'default' ? null : target
       await invoke('claude_save_defaults', { model, modelId, effort: c.effort }).catch((e: unknown) =>
         addError(paneId, `Модель не сохранена по умолчанию: ${errText(e)}`),
       )
@@ -366,11 +388,33 @@ export async function submitQuestion(paneId: string, requestId: string): Promise
   }
 }
 
+/** Решение по запросу разрешения: разрешить, разрешить всегда (правила CLI), запретить. */
+export async function answerPermission(paneId: string, requestId: string, decision: PermissionDecision): Promise<void> {
+  const it = get(paneId).state.items.find((x) => x.type === 'permission' && x.requestId === requestId)
+  if (!it || it.type !== 'permission' || it.done || it.cancelled) return
+  patchState(paneId, (s) => decidePermission(s, requestId, decision))
+  const response =
+    decision === 'deny'
+      ? denyResponse()
+      : decision === 'always' && it.suggestions
+        ? alwaysResponse(it.input, it.suggestions)
+        : allowResponse(it.input)
+  const id = procs.get(paneId)?.id
+  if (!id) return addError(paneId, 'Claude не запущен — ответ не отправлен')
+  try {
+    await invoke('claude_respond', { id, requestId, response })
+  } catch (e) {
+    addError(paneId, `Ответ не отправлен: ${errText(e)}`)
+  }
+}
+
 /** ⌃C: прервать текущий ход Claude. false — Claude не занят, прерывать нечего. */
 export function interruptClaude(paneId: string): boolean {
   const proc = procs.get(paneId)
   if (!get(paneId).state.busy || !proc) return false
   proc.interrupted = true
+  // Прерванный ход — его вопросы и разрешения больше не ждут.
+  patchState(paneId, (s) => cancelPrompts(s))
   // Процесс ещё запускается — отметки достаточно: askClaude не отправит вопрос.
   if (proc.id) invoke('claude_interrupt', { id: proc.id }).catch(() => {})
   return true

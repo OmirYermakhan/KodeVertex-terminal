@@ -237,6 +237,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 /* Вопрос агента в ленте: пока ждёт — строка .cl-note, после ответа — свёрнутая карточка с полосой --warn. */
 .cl-note.q-wait { color: var(--warn); }
 .cl-note.q-cancel { color: var(--muted); }
+.cl-note.p-ok { color: var(--add); }
 .card.qcard { border-left-color: var(--warn); }
 .card.qcard .who { color: var(--warn); }
 .qcard .q-ans { color: var(--text); }
@@ -267,6 +268,10 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .q-d { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 12.5px; }
 .q-d.q-given { color: var(--text); }
 .q-d.q-miss { color: var(--warn); }
+.p-tool { color: var(--warn); font-family: var(--font-code); font-size: 12px; margin-right: 10px; }
+.p-main { color: var(--strong); font-family: var(--font-code); font-size: 12.5px; white-space: pre-wrap; word-break: break-all; }
+.p-detail { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.q-row.p-deny .q-l { color: var(--del); }
 .cl-note { margin: 0 0 10px; max-width: 76ch; font-family: var(--font-code); font-size: 11px; line-height: normal; color: var(--muted); }
 .cerr-text { margin: 0; font-size: calc(var(--size-text) - 1.5px); line-height: var(--lh-text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .act { box-sizing: border-box; border: 1px dashed var(--rule); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-family: var(--font-code); font-size: calc(var(--size-code) - 0.5px); line-height: normal; color: var(--muted); max-width: 76ch; overflow-wrap: anywhere; }

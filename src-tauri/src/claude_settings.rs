@@ -48,23 +48,24 @@ pub fn merge(current: Option<&str>, d: &Defaults) -> Result<String, String> {
       return Err(format!("неизвестный уровень усилия: {effort}"));
     }
     let id = d.model_id.as_deref().filter(|s| !s.is_empty()).ok_or("неизвестна модель для уровня усилия")?;
+    const NOT_OBJECT: &str = "modelSettings в настройках Claude Code — не объект, файл не изменён";
     let ms = root.entry("modelSettings").or_insert_with(|| Value::Object(Map::new()));
-    if !ms.is_object() {
-      *ms = Value::Object(Map::new());
-    }
-    let per = ms.as_object_mut().unwrap().entry(id.to_string()).or_insert_with(|| Value::Object(Map::new()));
-    if !per.is_object() {
-      *per = Value::Object(Map::new());
-    }
-    per.as_object_mut().unwrap().insert("effortLevel".into(), Value::String(effort.into()));
+    let ms = ms.as_object_mut().ok_or(NOT_OBJECT)?;
+    let per = ms.entry(id.to_string()).or_insert_with(|| Value::Object(Map::new()));
+    let per = per.as_object_mut().ok_or(NOT_OBJECT)?;
+    per.insert("effortLevel".into(), Value::String(effort.into()));
   }
   let mut out = serde_json::to_string_pretty(&Value::Object(root)).map_err(|e| e.to_string())?;
   out.push('\n');
   Ok(out)
 }
 
-/// Читает, сливает и атомарно (временный файл в том же каталоге + rename) пишет настройки.
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Читает, сливает и атомарно пишет настройки: временный файл (уникальное имя, create_new) в каталоге
+/// настоящего файла + rename на него. Символическая ссылка остаётся ссылкой — пишется её цель.
 pub fn save_to(path: &Path, d: &Defaults) -> Result<(), String> {
+  let path = &std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
   let current = match std::fs::read_to_string(path) {
     Ok(s) => Some(s),
     Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -73,9 +74,11 @@ pub fn save_to(path: &Path, d: &Defaults) -> Result<(), String> {
   let text = merge(current.as_deref(), d)?;
   let dir = path.parent().ok_or("нет каталога настроек")?;
   std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-  let tmp = dir.join(format!(".settings.json.kv-{}", std::process::id()));
+  let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+  let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+  let tmp = dir.join(format!(".settings.json.kv-{}-{seq}-{nanos}", std::process::id()));
   let write = || -> std::io::Result<()> {
-    let mut f = std::fs::File::create(&tmp)?;
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
     // Права исходного файла сохраняем.
     if let Ok(meta) = std::fs::metadata(path) {
       f.set_permissions(meta.permissions())?;
@@ -152,6 +155,53 @@ mod tests {
     assert!(merge(Some("[1,2]"), &d(Some("opus"), None, None)).is_err());
     assert!(merge(Some("{}"), &d(Some("opus"), Some("m"), Some("huge"))).is_err());
     assert!(merge(Some("{}"), &d(Some("opus"), None, Some("high"))).is_err());
+  }
+
+  #[test]
+  fn non_object_model_settings_is_error() {
+    assert!(merge(Some(r#"{"modelSettings":[1]}"#), &d(Some("opus"), Some("m"), Some("high"))).is_err());
+    assert!(merge(Some(r#"{"modelSettings":{"m":"x"}}"#), &d(Some("opus"), Some("m"), Some("high"))).is_err());
+    // Без усилия modelSettings не трогаем — и не проверяем.
+    assert!(merge(Some(r#"{"modelSettings":[1]}"#), &d(Some("opus"), None, None)).is_ok());
+  }
+
+  #[test]
+  fn symlink_stays_link_and_target_is_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let real_dir = dir.path().join("dotfiles");
+    std::fs::create_dir(&real_dir).unwrap();
+    let target = real_dir.join("settings.json");
+    std::fs::write(&target, r#"{"theme":"dark"}"#).unwrap();
+    let link = dir.path().join("settings.json");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    save_to(&link, &d(Some("fable"), None, None)).unwrap();
+    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    let v = parse(&std::fs::read_to_string(&target).unwrap());
+    assert_eq!(v["model"], "fable");
+    assert_eq!(v["theme"], "dark");
+    // Временных файлов нет ни рядом со ссылкой, ни у цели.
+    assert_eq!(std::fs::read_dir(&real_dir).unwrap().count(), 1);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+  }
+
+  #[test]
+  fn concurrent_saves_both_succeed_and_leave_valid_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("settings.json");
+    std::fs::write(&p, "{}").unwrap();
+    let hs: Vec<_> = ["opus", "haiku", "sonnet", "fable"]
+      .into_iter()
+      .map(|m| {
+        let p = p.clone();
+        std::thread::spawn(move || save_to(&p, &d(Some(m), None, None)))
+      })
+      .collect();
+    for h in hs {
+      h.join().unwrap().unwrap();
+    }
+    let v = parse(&std::fs::read_to_string(&p).unwrap());
+    assert!(["opus", "haiku", "sonnet", "fable"].contains(&v["model"].as_str().unwrap()));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
   }
 
   #[test]

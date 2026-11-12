@@ -20,7 +20,8 @@ export const MODEL_ROWS: ModelRow[] = [
 /** Уровни `claude --effort`. */
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 export type Effort = (typeof EFFORTS)[number]
-const DEFAULT_EFFORT = 'medium'
+/** Усилие Claude Code по умолчанию (get_settings без настроек усилия отдаёт medium). */
+export const DEFAULT_EFFORT = 'medium'
 
 const FAMILIES = ['opus', 'fable', 'sonnet', 'haiku']
 

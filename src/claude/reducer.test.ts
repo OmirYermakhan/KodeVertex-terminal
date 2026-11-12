@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import raw from './fixtures/bash-ls.jsonl?raw'
-import { actionTitle, finishQuestion, gotoStep, initialClaude, pendingQuestion, recordAnswer, modelLabel, nowLabel, reduceClaude, userSent } from './reducer'
+import { actionTitle, cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaude, pendingPrompt, pendingQuestion, recordAnswer, modelLabel, nowLabel, reduceClaude, userSent } from './reducer'
 import type { ClaudeState } from './reducer'
 
 const lines = raw
@@ -275,8 +275,21 @@ describe('вопросы агента (can_use_tool AskUserQuestion)', () => {
     expect(recordAnswer(s, 'нет', 0, 'x')).toBe(s)
   })
 
-  it('прочие control_request ленту не меняют', () => {
-    const s = initialClaude()
-    expect(reduceClaude(s, { type: 'control_request', request_id: 'r', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: {} } }, 0)).toBe(s)
+  it('прочий инструмент — запрос разрешения; решение, отмена CLI и конец хода', () => {
+    const perm = (id: string) => ({ type: 'control_request', request_id: id, request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'git push' } } })
+    let s = run(userSent(initialClaude(), 'x', 0), [perm('p1')])
+    expect(pendingPrompt(s)).toMatchObject({ type: 'permission', tool: 'Bash', requestId: 'p1', done: false })
+    expect(s.agents[0]).toMatchObject({ status: 'waiting', now: 'Ждёт разрешения' })
+    s = decidePermission(s, 'p1', 'deny')
+    expect(pendingPrompt(s)).toBeNull()
+    expect(s.items.at(-1)).toMatchObject({ done: true, decision: 'deny' })
+    // control_cancel_request — только свой запрос.
+    s = run(s, [perm('p2'), perm('p3'), { type: 'control_cancel_request', request_id: 'p2' }])
+    expect(pendingPrompt(s)!.requestId).toBe('p3')
+    expect(s.items.find((i) => i.type === 'permission' && i.requestId === 'p2')).toMatchObject({ cancelled: 'stop' })
+    // Конец хода — ждущие отменены.
+    s = reduceClaude(s, { type: 'result', result: 'ok', session_id: 's' }, 0)
+    expect(pendingPrompt(s)).toBeNull()
+    expect(cancelPrompts(s)).toBe(s)
   })
 })

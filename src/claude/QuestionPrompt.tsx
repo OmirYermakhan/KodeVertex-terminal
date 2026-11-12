@@ -119,7 +119,7 @@ export const QuestionPrompt = forwardRef<HTMLDivElement, QuestionPromptProps>(fu
     <AgentPrompt
       ref={ref}
       title={`? Вопрос · ${agentSignature(p.agent)}`}
-      aside={steps > 1 ? `${Math.min(item.step + 1, steps)} из ${steps}` : undefined}
+      aside={steps > 1 ? (sendStep ? 'Отправка' : `${Math.min(item.step + 1, total)} из ${total}`) : undefined}
       keys={promptKeys(steps > 1, !sendStep && q.multiSelect, sendStep)}
       label={sendStep ? SEND_ANSWERS : q.question}
       onKeyDown={onKeyDown}

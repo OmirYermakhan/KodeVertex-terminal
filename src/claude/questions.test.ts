@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allowResponse, answerResponse, parsePermissionRequest, questionKey } from './questions'
+import { allowResponse, alwaysResponse, answerResponse, denyResponse, parsePermissionRequest, permissionSummary, questionKey } from './questions'
 
 const input = {
   questions: [
@@ -24,10 +24,24 @@ describe('parsePermissionRequest', () => {
     expect(r.questions[1]).toEqual({ question: 'Что добавить?', header: 'Опции', multiSelect: true, options: [{ label: 'A', description: '' }, { label: 'B', description: 'бэ' }] })
   })
 
-  it('другой инструмент или вопрос без вариантов — разрешить как есть', () => {
-    expect(parsePermissionRequest(req('Bash', { command: 'ls' }))).toEqual({ kind: 'allow', requestId: 'r1', input: { command: 'ls' } })
-    expect(parsePermissionRequest(req('AskUserQuestion', { questions: [] }))!.kind).toBe('allow')
-    expect(parsePermissionRequest(req('AskUserQuestion', { questions: 'x' }))!.kind).toBe('allow')
+  it('другой инструмент или вопрос без вариантов — запрос разрешения; ввод не объект — запретить', () => {
+    expect(parsePermissionRequest(req('Bash', { command: 'ls' }))).toEqual({
+      kind: 'permission', requestId: 'r1', toolUseId: 'tu1', tool: 'Bash', input: { command: 'ls' }, suggestions: null,
+    })
+    expect(parsePermissionRequest(req('AskUserQuestion', { questions: [] }))!.kind).toBe('permission')
+    expect(parsePermissionRequest(req('Bash', 'rm -rf /'))).toEqual({ kind: 'deny', requestId: 'r1' })
+    const sug = [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'ls' }], behavior: 'allow', destination: 'session' }]
+    const withSug = { type: 'control_request', request_id: 'r2', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' }, permission_suggestions: sug } }
+    expect(parsePermissionRequest(withSug)).toMatchObject({ kind: 'permission', suggestions: sug })
+  })
+
+  it('ответы на разрешение и описание запроса', () => {
+    expect(alwaysResponse({ command: 'ls' }, [1])).toEqual({ behavior: 'allow', updatedInput: { command: 'ls' }, updatedPermissions: [1] })
+    expect(denyResponse()).toEqual({ behavior: 'deny', message: 'Пользователь запретил' })
+    expect(permissionSummary('Bash', { command: 'git push', description: 'Отправить' })).toEqual({ main: 'git push', detail: 'Отправить' })
+    expect(permissionSummary('Edit', { file_path: '/p/a.ts', old_string: 'a\nb', new_string: 'c' })).toEqual({ main: '/p/a.ts', detail: '−2 +1 строк' })
+    expect(permissionSummary('Write', { file_path: '.claude/x.json', content: '{}' })).toEqual({ main: '.claude/x.json', detail: '1 строк' })
+    expect(permissionSummary('Mcp', { a: 1 })).toEqual({ main: '{"a":1}', detail: '' })
   })
 
   it('чужие строки — null', () => {

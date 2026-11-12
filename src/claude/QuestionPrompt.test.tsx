@@ -14,10 +14,10 @@ function setup(item = questionItem()) {
 }
 
 describe('QuestionPrompt', () => {
-  it('заголовок, «1 из 3», вкладки, вопрос; варианты с описанием и меткой «рекомендуется»', () => {
+  it('заголовок, «1 из 2», вкладки, вопрос; варианты с описанием и меткой «рекомендуется»', () => {
     const { box } = setup()
     expect(box.querySelector('.ap-who')!.textContent).toBe('? Вопрос · Главный · Opus 5.5')
-    expect(box.querySelector('.ap-aside')!.textContent).toBe('1 из 3')
+    expect(box.querySelector('.ap-aside')!.textContent).toBe('1 из 2')
     expect([...box.querySelectorAll('.q-tab')].map((t) => t.textContent)).toEqual(['1 Цвет', '2 Опции', SEND_ANSWERS])
     expect(box.querySelector('.q-text')!.textContent).toBe('Какой цвет?')
     const rows = screen.getAllByRole('option')
@@ -55,6 +55,7 @@ describe('QuestionPrompt', () => {
   it('шаг «Отправить ответы»: сводка; без всех ответов ↵ ведёт к пропущенному, со всеми — отправка', () => {
     const miss = setup(questionItem({ step: 2, answers: ['Red', ''] }))
     expect(screen.getAllByRole('option').map((r) => r.textContent)).toEqual(['1.ЦветRed', '2.Опциинет ответа', `↵${SEND_ANSWERS}сначала ответьте на вопрос 2`])
+    expect(miss.box.querySelector('.ap-aside')!.textContent).toBe('Отправка')
     miss.key('Enter')
     expect(miss.h.onStep).toHaveBeenCalledWith(1)
     expect(miss.h.onSubmit).not.toHaveBeenCalled()

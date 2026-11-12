@@ -32,6 +32,9 @@ describe('ModelPicker', () => {
     expect(container.querySelector('.mp-effort')!.textContent).toBe('◐ Усилие: medium (по умолчанию) ←/→')
     rerender(<ModelPicker state={{ ...s, effort: 3, effortTouched: true }} current="default" onSelect={vi.fn()} />)
     expect(container.querySelector('.mp-effort')!.textContent).toBe('◐ Усилие: xhigh ←/→')
+    // Применённое усилие не по умолчанию — без пометки.
+    rerender(<ModelPicker state={initialPicker(null, 'high')} current="default" onSelect={vi.fn()} />)
+    expect(container.querySelector('.mp-effort')!.textContent).toBe('◐ Усилие: high ←/→')
   })
 
   it('клик выбирает строку', () => {

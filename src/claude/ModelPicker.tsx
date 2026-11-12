@@ -1,6 +1,6 @@
 // Карточка выбора модели (`/model` в режиме Claude) над строкой ввода: рамка и строки — как у выборки
 // `claude …` / `/…` (.cp.hp), номера 1–5, ✓ у текущей модели, ниже — усилие ←/→.
-import { EFFORTS, MODEL_ROWS, type PickerState } from './models'
+import { DEFAULT_EFFORT, EFFORTS, MODEL_ROWS, type PickerState } from './models'
 
 export const PICKER_TITLE = 'Выбор модели'
 export const PICKER_DESC = 'Модель для новых сессий; s — только для этой сессии'
@@ -40,7 +40,8 @@ export function ModelPicker({ state, current, onSelect }: ModelPickerProps) {
       </div>
       <div className="mp-effort">
         ◐ Усилие: <b>{EFFORTS[state.effort]}</b>
-        {state.effortTouched ? '' : ' (по умолчанию)'} ←/→
+        {/* «(по умолчанию)» — только когда применённое усилие и есть уровень по умолчанию. */}
+        {!state.effortTouched && EFFORTS[state.effort] === DEFAULT_EFFORT ? ' (по умолчанию)' : ''} ←/→
       </div>
       <div className="hp-keys">{PICKER_KEYS}</div>
     </div>

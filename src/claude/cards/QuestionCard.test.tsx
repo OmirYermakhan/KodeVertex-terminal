@@ -15,7 +15,7 @@ describe('QuestionCard (лента)', () => {
   })
 
   it('отменён — строка «✕ Вопрос отменён»', () => {
-    const { container } = render(<QuestionCard item={questionItem({ cancelled: true })} />)
+    const { container } = render(<QuestionCard item={questionItem({ cancelled: 'exit' })} />)
     expect(container.textContent).toBe(CANCELLED)
     expect(CANCELLED).toBe('✕ Вопрос отменён — Claude завершился')
   })

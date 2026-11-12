@@ -489,6 +489,53 @@ describe('TerminalPane', () => {
         expect(textarea().getAttribute('aria-label')).not.toBe('Ваш ответ на вопрос…')
       })
 
+      it('ответ ↵ на варианте — фокус в строку ввода; разрешение — в том же блоке; при открытом /model фокус не забирается', async () => {
+        claudeOk()
+        await mounted()
+        type('claude')
+        keyIn('Enter')
+        await act(async () => await flush())
+        const ask = (rid: string, tool: string, inp: object) =>
+          act(() =>
+            startArgs().onLine.onmessage(
+              JSON.stringify({ type: 'control_request', request_id: rid, request: { subtype: 'can_use_tool', tool_name: tool, input: inp } }),
+            ),
+          )
+        ask('q1', 'AskUserQuestion', { questions: [{ question: 'Да?', header: '', multiSelect: false, options: [{ label: 'Да', description: '' }] }] })
+        const prompt = document.querySelector('.aprompt') as HTMLElement
+        expect(document.activeElement).toBe(prompt)
+        await act(async () => {
+          fireEvent.keyDown(prompt, { key: 'Enter' })
+          await flush()
+        })
+        expect(document.querySelector('.aprompt')).toBeNull()
+        expect(document.activeElement).toBe(textarea())
+
+        ask('p1', 'Bash', { command: 'git push' })
+        const perm = document.querySelector('.aprompt') as HTMLElement
+        expect(perm.querySelector('.ap-who')!.textContent).toContain('! Разрешение')
+        expect(document.activeElement).toBe(perm)
+        act(() => void fireEvent.keyDown(perm, { key: '2' }))
+        await act(async () => {
+          fireEvent.keyDown(perm, { key: 'Enter' })
+          await flush()
+        })
+        expect(calls().filter((c) => c[0] === 'claude_respond').map((c) => (c[1] as { response: object }).response).at(-1)).toEqual({
+          behavior: 'deny',
+          message: 'Пользователь запретил',
+        })
+        expect(document.querySelector('.feed')!.textContent).toContain('✕ Запрещено: Bash · git push')
+        expect(document.activeElement).toBe(textarea())
+
+        // Открыта карточка /model — новый запрос фокус не забирает.
+        type('/model')
+        keyIn('Enter')
+        expect(document.querySelector('.mp')).not.toBeNull()
+        ask('p2', 'Bash', { command: 'ls' })
+        expect(document.querySelector('.aprompt')).not.toBeNull()
+        expect(document.activeElement).toBe(textarea())
+      })
+
       it('ответы Claude — в той же ленте, по времени: блок, вопрос, ответ, следующий блок', async () => {
         claudeOk()
         const { term } = await mounted()
