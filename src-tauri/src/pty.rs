@@ -434,8 +434,16 @@ mod tests {
     }
   }
 
+  /// Сериализует спавн и тесты, меняющие окружение процесса.
+  static ENV_LOCK: Mutex<()> = Mutex::new(());
+
   /// Запускает zsh и ждёт первого приглашения (OSC 7 из precmd).
   fn start(m: &PtyManager, o: SpawnOpts) -> (String, Output, mpsc::Receiver<Option<u32>>) {
+    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    start_unlocked(m, o)
+  }
+
+  fn start_unlocked(m: &PtyManager, o: SpawnOpts) -> (String, Output, mpsc::Receiver<Option<u32>>) {
     let out = Output::default();
     let (tx, rx) = mpsc::channel();
     let id = m
@@ -589,6 +597,79 @@ mod tests {
     m.kill(&id).unwrap();
   }
 
+  /// Убирает управляющие последовательности: OSC (до BEL или ESC \\), CSI, прочие двухбайтовые ESC.
+  fn strip_escapes(s: &str) -> String {
+    let mut out = String::new();
+    let mut it = s.chars().peekable();
+    while let Some(ch) = it.next() {
+      if ch != '\x1b' {
+        out.push(ch);
+        continue;
+      }
+      match it.next() {
+        Some(']') => {
+          while let Some(c) = it.next() {
+            if c == '\x07' || (c == '\x1b' && it.peek() == Some(&'\\')) {
+              if c == '\x1b' {
+                it.next();
+              }
+              break;
+            }
+          }
+        }
+        Some('[') => {
+          for c in it.by_ref() {
+            if ('\x40'..='\x7e').contains(&c) {
+              break;
+            }
+          }
+        }
+        _ => {}
+      }
+    }
+    out
+  }
+
+  #[test]
+  fn strip_escapes_handles_csi_osc_and_two_byte() {
+    assert_eq!(strip_escapes("a\x1b[?2004hb\x1b]7;x\x07c\x1b]7;y\x1b\\d\x1bMe\x1b[1m\x1b[7m%"), "abcde%");
+  }
+
+  /// Минимальный декодер base64 для проверки полезной нагрузки 133;C.
+  fn b64_decode(s: &str) -> Vec<u8> {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let (mut out, mut acc, mut bits) = (Vec::new(), 0u32, 0);
+    for c in s.bytes().filter(|&c| c != b'=') {
+      acc = (acc << 6) | T.iter().position(|&t| t == c).expect("не base64") as u32;
+      bits += 6;
+      if bits >= 8 {
+        bits -= 8;
+        out.push((acc >> bits) as u8);
+        acc &= (1 << bits) - 1;
+      }
+    }
+    out
+  }
+
+  #[test]
+  fn blocks_mode_long_multiline_command_roundtrips() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    let l1 = format!("echo \"{}", "a".repeat(40));
+    let l2 = format!("{}\"", "б".repeat(30));
+    let from = out.len();
+    m.write(&id, format!("{l1}\n{l2}\n").as_bytes()).unwrap();
+    assert!(out.wait_for(b"\x1b]133;A\x07", from + 1));
+    let text = out.text();
+    let start_i = text[from..].find("\x1b]133;C;").expect("нет 133;C") + from + "\x1b]133;C;".len();
+    let end_i = text[start_i..].find('\x07').expect("нет BEL") + start_i;
+    let payload = &text[start_i..end_i];
+    assert!(!payload.contains(['\n', '\r']), "перевод строки в нагрузке: {payload:?}");
+    assert_eq!(String::from_utf8(b64_decode(payload)).unwrap(), format!("{l1}\n{l2}"));
+    m.kill(&id).unwrap();
+  }
+
   #[test]
   fn blocks_mode_hides_prompt() {
     let home = temp_home();
@@ -601,30 +682,24 @@ mod tests {
     std::thread::sleep(Duration::from_millis(500));
     let text = out.text();
     let tail = &text[text.rfind("\x1b]133;A\x07").expect("нет 133;A")..];
-    // Убираем OSC-последовательности (…\x07) и проверяем, что приглашения не осталось.
-    let mut visible = String::new();
-    let mut in_osc = false;
-    for ch in tail.chars() {
-      match (in_osc, ch) {
-        (false, '\x1b') => in_osc = true,
-        (true, '\x07') => in_osc = false,
-        (false, c) => visible.push(c),
-        _ => {}
-      }
-    }
+    let visible = strip_escapes(tail);
     assert!(!visible.contains(['%', '$', '❯']), "виден prompt: {visible:?}");
     m.kill(&id).unwrap();
   }
 
   #[test]
   fn session_env_scrubs_claude_vars() {
-    unsafe { std::env::set_var("CLAUDE_CODE_CHILD_SESSION", "1") };
-    unsafe { std::env::set_var("CLAUDECODE", "1") };
     let home = temp_home();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[]));
-    unsafe { std::env::remove_var("CLAUDE_CODE_CHILD_SESSION") };
-    unsafe { std::env::remove_var("CLAUDECODE") };
+    let (id, out, _rx) = {
+      let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+      unsafe { std::env::set_var("CLAUDE_CODE_CHILD_SESSION", "1") };
+      unsafe { std::env::set_var("CLAUDECODE", "1") };
+      let r = start_unlocked(&m, opts(home.path(), &[]));
+      unsafe { std::env::remove_var("CLAUDE_CODE_CHILD_SESSION") };
+      unsafe { std::env::remove_var("CLAUDECODE") };
+      r
+    };
     run(&m, &id, &out, "echo \"V=${CLAUDE_CODE_CHILD_SESSION:-none}${CLAUDECODE:-none};\"\n", "V=nonenone;");
     m.kill(&id).unwrap();
   }
