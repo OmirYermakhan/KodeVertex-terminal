@@ -2,7 +2,8 @@
 // чтобы его читали лента панели, панель агентов и статус-бар.
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { create } from 'zustand'
-import { initialClaude, reduceClaude, userSent, type ClaudeState } from './reducer'
+import { finishQuestion, gotoStep, initialClaude, questionSteps, recordAnswer, reduceClaude, userSent, type ClaudeState } from './reducer'
+import { allowResponse, answerResponse, parsePermissionRequest } from './questions'
 import { GET_SETTINGS, effortRequest, modelNote, setModelRequest, type ModelChoice } from './models'
 
 export type { ModelChoice }
@@ -104,6 +105,13 @@ function start(paneId: string): Proc {
     gotLine = true
     if (!alive()) return
     if (line.includes('"control_response"')) settleControl(line)
+    if (line.includes('"control_request"')) {
+      // Разрешения прочих инструментов (под bypassPermissions — редкость) даём сразу; вопросы ждут ответа.
+      const r = parsePermissionRequest(line)
+      if (r?.kind === 'allow' && proc.id) {
+        invoke('claude_respond', { id: proc.id, requestId: r.requestId, response: allowResponse(r.input) }).catch(() => {})
+      }
+    }
     patchState(paneId, (s) => reduceClaude(s, line, Date.now()))
   })
   const onExit = new Channel<ClaudeExit>((e) => {
@@ -313,6 +321,43 @@ export async function askClaude(paneId: string, paneCwd: string | undefined, tex
     }
   })
   return proc.chain
+}
+
+const questionOf = (paneId: string, requestId: string) => {
+  const q = get(paneId).state.items.find((it) => it.type === 'question' && it.requestId === requestId)
+  return q?.type === 'question' ? q : null
+}
+
+/**
+ * Ответ на вопрос index (вариант, несколько — через запятую, или свой текст). Один вопрос — ответ
+ * уходит сразу; у нескольких — переход к следующему, отправка — submitQuestion.
+ */
+export async function answerQuestion(paneId: string, requestId: string, index: number, answer: string): Promise<void> {
+  patchState(paneId, (s) => recordAnswer(s, requestId, index, answer))
+  const q = questionOf(paneId, requestId)
+  if (q && questionSteps(q) === 1) await submitQuestion(paneId, requestId)
+}
+
+/** Вкладка (шаг) вопроса: ←/→. */
+export function questionStep(paneId: string, requestId: string, step: number): void {
+  patchState(paneId, (s) => gotoStep(s, requestId, step))
+}
+
+/** «Отправить ответы»: все ответы — процессу одним control_response, агент продолжает. */
+export async function submitQuestion(paneId: string, requestId: string): Promise<void> {
+  patchState(paneId, (s) => finishQuestion(s, requestId))
+  const q = questionOf(paneId, requestId)
+  if (!q || !q.done) return
+  const id = procs.get(paneId)?.id
+  if (!id) {
+    addError(paneId, 'Claude не запущен — ответ не отправлен')
+    return
+  }
+  try {
+    await invoke('claude_respond', { id, requestId, response: answerResponse(q.input, q.answers) })
+  } catch (e) {
+    addError(paneId, `Ответ не отправлен: ${errText(e)}`)
+  }
 }
 
 /** ⌃C: прервать текущий ход Claude. false — Claude не занят, прерывать нечего. */

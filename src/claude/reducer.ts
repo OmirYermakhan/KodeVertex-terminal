@@ -1,6 +1,7 @@
 // Редьюсер событий `claude -p --output-format stream-json`: строки stdout → лента, агенты, метаданные.
 // Чистая логика: входное состояние не мутируется, любой мусор игнорируется.
 import { actionTitle, modelLabel, nowLabel } from './labels'
+import { parsePermissionRequest, type Question } from './questions'
 
 export { actionTitle, modelLabel, nowLabel }
 
@@ -22,6 +23,19 @@ export type FeedClaudeItem =
   | { type: 'error'; text: string }
   /** Тихая моноширинная строка ленты (например, «Модель: Fable 5.2 · усилие high»). */
   | { type: 'note'; text: string }
+  /** Вопрос агента с вариантами (AskUserQuestion): ответы по шагам, всё отвечено — done. */
+  | {
+      type: 'question'
+      requestId: string
+      toolUseId: string | null
+      agentId: string
+      questions: Question[]
+      /** Исходный ввод инструмента: в ответ уходит он же с `answers`. */
+      input: Record<string, unknown>
+      step: number
+      answers: string[]
+      done: boolean
+    }
   /** Начало новой сессии Claude: каталог, в котором она работает. */
   | { type: 'session'; cwd: string; /** Вход в режим Claude из строки ввода (`claude`): с подсказкой. */ mode?: boolean }
 
@@ -358,6 +372,73 @@ function onControl(s: ClaudeState, ev: Rec): ClaudeState {
   return next.model && next.model !== s.model ? patchAgent(next, MAIN, { model: next.model }) : next
 }
 
+function onControlRequest(s: ClaudeState, ev: Rec, now: number): ClaudeState {
+  const r = parsePermissionRequest(ev)
+  if (!r || r.kind !== 'ask') return s
+  if (s.items.some((it) => it.type === 'question' && it.requestId === r.requestId)) return s
+  const action = s.items.find((it) => it.type === 'action' && it.toolUseId === r.toolUseId)
+  const agentId = action?.type === 'action' ? action.agentId : MAIN
+  const next = ensureAgent(s, agentId, now)
+  return patchAgent(
+    {
+      ...next,
+      items: [
+        ...next.items,
+        { type: 'question', requestId: r.requestId, toolUseId: r.toolUseId, agentId, questions: r.questions, input: r.input, step: 0, answers: [], done: false },
+      ],
+    },
+    agentId,
+    { status: 'waiting', now: 'Ждёт ответа' },
+  )
+}
+
+function patchQuestion(
+  s: ClaudeState,
+  requestId: string,
+  f: (q: Extract<FeedClaudeItem, { type: 'question' }>) => Extract<FeedClaudeItem, { type: 'question' }> | null,
+): ClaudeState {
+  const i = s.items.findIndex((it) => it.type === 'question' && it.requestId === requestId)
+  const q = s.items[i]
+  if (!q || q.type !== 'question' || q.done) return s
+  const next = f(q)
+  if (!next) return s
+  const items = s.items.slice()
+  items[i] = next
+  return { ...s, items }
+}
+
+/** Шагов у вопроса: по вопросу на шаг, у нескольких — ещё шаг «Отправить ответы». */
+export const questionSteps = (q: { questions: unknown[] }) => (q.questions.length > 1 ? q.questions.length + 1 : 1)
+
+/** Ответ на вопрос index; курсор шага — на следующий (у нескольких вопросов — до шага отправки). */
+export function recordAnswer(s: ClaudeState, requestId: string, index: number, answer: string): ClaudeState {
+  return patchQuestion(s, requestId, (q) => {
+    if (index < 0 || index >= q.questions.length) return null
+    const answers = q.questions.map((_, i) => (i === index ? answer : (q.answers[i] ?? '')))
+    return { ...q, answers, step: Math.min(index + 1, questionSteps(q) - 1) }
+  })
+}
+
+/** Перейти к шагу (вкладке) вопроса. */
+export function gotoStep(s: ClaudeState, requestId: string, step: number): ClaudeState {
+  return patchQuestion(s, requestId, (q) =>
+    step < 0 || step >= questionSteps(q) || step === q.step ? null : { ...q, step },
+  )
+}
+
+/** Все ответы есть — вопрос закрыт (ответ уходит процессу). */
+export function finishQuestion(s: ClaudeState, requestId: string): ClaudeState {
+  return patchQuestion(s, requestId, (q) =>
+    q.questions.every((_, i) => (q.answers[i] ?? '') !== '') ? { ...q, done: true } : null,
+  )
+}
+
+/** Первый ещё не отвеченный вопрос панели (для блока над строкой ввода). */
+export function pendingQuestion(s: ClaudeState): Extract<FeedClaudeItem, { type: 'question' }> | null {
+  for (const it of s.items) if (it.type === 'question' && !it.done) return it
+  return null
+}
+
 export function reduceClaude(s: ClaudeState, line: string | object, now: number): ClaudeState {
   const ev = parse(line)
   if (!ev) return s
@@ -391,6 +472,8 @@ export function reduceClaude(s: ClaudeState, line: string | object, now: number)
         return onResult(s, ev, now)
       case 'control_response':
         return onControl(s, ev)
+      case 'control_request':
+        return onControlRequest(s, ev, now)
       default:
         return s
     }

@@ -448,6 +448,47 @@ describe('TerminalPane', () => {
         expect(document.querySelector('.feed .you')?.textContent).toContain('что тут?')
       })
 
+      it('вопрос агента: блок над строкой ввода с фокусом, в ленте — «ждёт ответа»; ответ уходит, блок исчезает', async () => {
+        claudeOk()
+        await mounted()
+        type('claude')
+        keyIn('Enter')
+        await act(async () => await flush())
+        const input = {
+          questions: [{ question: 'Какую базу?', header: 'База', multiSelect: false, options: [{ label: 'Postgres (Recommended)', description: 'надёжно' }, { label: 'SQLite', description: 'просто' }] }],
+        }
+        act(() =>
+          startArgs().onLine.onmessage(
+            JSON.stringify({ type: 'control_request', request_id: 'rq', request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input, tool_use_id: 't' } }),
+          ),
+        )
+        const dock = document.querySelector('.dock')!
+        const prompt = dock.querySelector('.aprompt') as HTMLElement
+        expect(prompt).not.toBeNull()
+        // Порядок в доке: панель агентов, вопрос, строка ввода.
+        expect([...dock.children].map((c) => c.className.split(' ')[0])).toEqual(['agents', 'aprompt', 'input-wrap'])
+        expect(document.activeElement).toBe(prompt)
+        expect(document.querySelector('.feed .q-wait')?.textContent).toContain('Какую базу?')
+        // esc — к вводу, ⌘↓ — обратно к вопросу.
+        fireEvent.keyDown(prompt, { key: 'Escape' })
+        expect(document.activeElement).toBe(textarea())
+        // «Свой ответ…» — ответ пишется в строке ввода.
+        prompt.focus()
+        fireEvent.keyDown(prompt, { key: '3' })
+        fireEvent.keyDown(prompt, { key: 'Enter' })
+        expect(document.activeElement).toBe(textarea())
+        expect(textarea().getAttribute('aria-label')).toBe('Ваш ответ на вопрос…')
+        type('MySQL')
+        keyIn('Enter')
+        await act(async () => await flush())
+        expect(calls().filter((c) => c[0] === 'claude_respond').map((c) => c[1])).toEqual([
+          { id: 'c1', requestId: 'rq', response: { behavior: 'allow', updatedInput: { ...input, answers: { 'Какую базу?': 'MySQL' } } } },
+        ])
+        expect(document.querySelector('.aprompt')).toBeNull()
+        expect(document.querySelector('.feed .qcard .q-ans')?.textContent).toBe('✓ Ответ: MySQL')
+        expect(textarea().getAttribute('aria-label')).not.toBe('Ваш ответ на вопрос…')
+      })
+
       it('ответы Claude — в той же ленте, по времени: блок, вопрос, ответ, следующий блок', async () => {
         claudeOk()
         const { term } = await mounted()

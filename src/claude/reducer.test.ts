@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import raw from './fixtures/bash-ls.jsonl?raw'
-import { actionTitle, initialClaude, modelLabel, nowLabel, reduceClaude, userSent } from './reducer'
+import { actionTitle, finishQuestion, gotoStep, initialClaude, pendingQuestion, recordAnswer, modelLabel, nowLabel, reduceClaude, userSent } from './reducer'
 import type { ClaudeState } from './reducer'
 
 const lines = raw
@@ -233,5 +233,50 @@ describe('control_response (выбор модели)', () => {
     expect(reduceClaude(s, resp({ model: 'claude-fable-5-2' }, 'error'), 0)).toBe(s)
     expect(reduceClaude(s, { type: 'control_response', response: null }, 0)).toBe(s)
     expect(reduceClaude(s, resp({}), 0)).toBe(s)
+  })
+})
+
+describe('вопросы агента (can_use_tool AskUserQuestion)', () => {
+  const qInput = {
+    questions: [
+      { question: 'Цвет?', header: 'Цвет', multiSelect: false, options: [{ label: 'Red', description: '' }] },
+      { question: 'Размер?', header: 'Размер', multiSelect: true, options: [{ label: 'S', description: '' }, { label: 'M', description: '' }] },
+    ],
+  }
+  const ask = (parent: string | null = null) => [
+    assistant([toolUse('tuQ', 'AskUserQuestion', qInput)], parent),
+    { type: 'control_request', request_id: 'rq', request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input: qInput, tool_use_id: 'tuQ' } },
+  ]
+
+  it('карточка вопроса у агента инструмента, агент ждёт', () => {
+    const s = run(userSent(initialClaude(), 'x', 0), ask())
+    const q = s.items.find((i) => i.type === 'question')!
+    expect(q).toMatchObject({ type: 'question', requestId: 'rq', agentId: 'main', step: 0, answers: [], done: false })
+    expect(s.agents[0].status).toBe('waiting')
+    // Повтор того же запроса не дублирует карточку.
+    expect(reduceClaude(s, ask()[1], 0).items.filter((i) => i.type === 'question')).toHaveLength(1)
+  })
+
+  it('ответы по вкладкам, шаг отправки, закрытие только когда всё отвечено', () => {
+    let s = run(userSent(initialClaude(), 'x', 0), ask())
+    s = recordAnswer(s, 'rq', 0, 'Red')
+    expect(pendingQuestion(s)).toMatchObject({ step: 1, answers: ['Red', ''], done: false })
+    expect(finishQuestion(s, 'rq')).toBe(s)
+    s = recordAnswer(s, 'rq', 1, 'S, M')
+    // Два вопроса — третий шаг «Отправить ответы».
+    expect(pendingQuestion(s)).toMatchObject({ step: 2, answers: ['Red', 'S, M'] })
+    s = gotoStep(s, 'rq', 0)
+    expect(pendingQuestion(s)!.step).toBe(0)
+    expect(gotoStep(s, 'rq', 3)).toBe(s)
+    s = finishQuestion(s, 'rq')
+    expect(pendingQuestion(s)).toBeNull()
+    expect(s.items.find((i) => i.type === 'question')).toMatchObject({ done: true })
+    expect(recordAnswer(s, 'rq', 0, 'x')).toBe(s)
+    expect(recordAnswer(s, 'нет', 0, 'x')).toBe(s)
+  })
+
+  it('прочие control_request ленту не меняют', () => {
+    const s = initialClaude()
+    expect(reduceClaude(s, { type: 'control_request', request_id: 'r', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: {} } }, 0)).toBe(s)
   })
 })

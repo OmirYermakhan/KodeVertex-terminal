@@ -90,6 +90,17 @@ pub fn control_line(request_id: &str, request: &serde_json::Value) -> String {
   line
 }
 
+/// Ответ на управляющий запрос `claude` (например, `can_use_tool`) одной строкой (с `\n`).
+pub fn control_response_line(request_id: &str, response: &serde_json::Value) -> String {
+  let mut line = serde_json::json!({
+    "type": "control_response",
+    "response": { "subtype": "success", "request_id": request_id, "response": response }
+  })
+  .to_string();
+  line.push('\n');
+  line
+}
+
 impl ClaudeManager {
   pub fn start(
     &self,
@@ -110,6 +121,9 @@ impl ClaudeManager {
       "--include-partial-messages",
       "--permission-mode",
       "bypassPermissions",
+      // Запросы разрешений (вопросы AskUserQuestion) — управляющими запросами в stdout.
+      "--permission-prompt-tool",
+      "stdio",
     ]);
     cmd.args(launch_args(&launch));
     // Служебные переменные Claude Code из окружения приложения процессу не нужны.
@@ -234,6 +248,14 @@ impl ClaudeManager {
       return Err("управляющий запрос без subtype".into());
     }
     self.write_line(id, &control_line(request_id, request))
+  }
+
+  /// Ответ на управляющий запрос процесса (`can_use_tool`: разрешение, ответы на вопросы).
+  pub fn respond(&self, id: &str, request_id: &str, response: &serde_json::Value) -> Result<(), String> {
+    if request_id.is_empty() {
+      return Err("пустой request_id".into());
+    }
+    self.write_line(id, &control_response_line(request_id, response))
   }
 
   fn write_line(&self, id: &str, line: &str) -> Result<(), String> {
@@ -408,6 +430,17 @@ pub async fn claude_control(
 }
 
 #[tauri::command]
+pub async fn claude_respond(
+  manager: State<'_, ClaudeManager>,
+  id: String,
+  request_id: String,
+  response: serde_json::Value,
+) -> Result<(), String> {
+  let m = manager.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || m.respond(&id, &request_id, &response)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn claude_interrupt(manager: State<'_, ClaudeManager>, id: String) -> Result<(), String> {
   manager.interrupt(&id)
 }
@@ -540,7 +573,7 @@ mod tests {
     let a = v["args"].as_str().unwrap();
     assert_eq!(
       a,
-      "-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-mode bypassPermissions --model fable --effort high --resume abc-123"
+      "-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-mode bypassPermissions --permission-prompt-tool stdio --model fable --effort high --resume abc-123"
     );
   }
 
@@ -560,6 +593,22 @@ mod tests {
     assert!(line.ends_with('\n') && !line[..line.len() - 1].contains('\n'));
     let v: serde_json::Value = serde_json::from_str(&line).unwrap();
     assert_eq!(v, serde_json::json!({ "type": "control_request", "request_id": "kv-1", "request": req }));
+  }
+
+  #[test]
+  fn respond_writes_control_response() {
+    let m = ClaudeManager::default();
+    let (id, lrx, _erx) = start(&m, &fake()).unwrap();
+    take(&lrx, 38);
+    let resp = serde_json::json!({ "behavior": "allow", "updatedInput": { "answers": { "Цвет?": "Синий" } } });
+    m.respond(&id, "req-1", &resp).unwrap();
+    let echo: serde_json::Value = serde_json::from_str(&lrx.recv_timeout(WAIT).unwrap()).unwrap();
+    assert_eq!(
+      echo["line"],
+      serde_json::json!({ "type": "control_response", "response": { "subtype": "success", "request_id": "req-1", "response": resp } })
+    );
+    assert!(m.respond(&id, "", &resp).is_err());
+    m.stop(&id).unwrap();
   }
 
   #[test]

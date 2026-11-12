@@ -6,7 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type ITerminalOptions } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { terminalLineHeight, type Settings } from '../settings/settings'
 import { useSettings } from '../settings/store'
 import { useUi } from '../ui/uiStore'
@@ -19,8 +19,10 @@ import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
 import { applyShell, claudeIndex, commandBytes, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
-import { askClaude, chooseModel, claudeCwdKnown, enterClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
+import { answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, enterClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
 import { aliasOf } from '../claude/models'
+import { pendingQuestion } from '../claude/reducer'
+import { QuestionPrompt } from '../claude/QuestionPrompt'
 import { InputBar, type InputBarHandle } from '../input/InputBar'
 import { AgentsPanel, type AgentsPanelHandle } from '../claude/AgentsPanel'
 import { blockText, cleanSerializedHtml } from '../feed/blockHtml'
@@ -466,6 +468,70 @@ export function TerminalPane(p: TerminalPaneProps) {
     if (!active || active === document.body) focusActive()
   }, [agentsShown, p.focused, focusActive])
 
+  // Вопрос агента ждёт ответа — блок над строкой ввода (как «needs your input» в Warp).
+  const question = claude ? pendingQuestion(claude.state) : null
+  const questionRef = useRef(question)
+  useLayoutEffect(() => {
+    questionRef.current = question
+  })
+  const promptRef = useRef<HTMLDivElement>(null)
+  /** «Свой ответ…»: на какой вопрос строка ввода сейчас пишет ответ. */
+  const [custom, setCustom] = useState<{ requestId: string; index: number } | null>(null)
+  const focusPrompt = useCallback(() => promptRef.current?.focus(), [])
+  // Новый вопрос забирает фокус, если панель в фокусе и в строке ничего не набрано.
+  const questionId = question?.requestId ?? null
+  useEffect(() => {
+    if (!questionId) {
+      setCustom(null)
+      return
+    }
+    if (!callbacks.current.focused || runningRef.current || altRef.current) return
+    if (inputRef.current?.isEmpty() ?? true) promptRef.current?.focus()
+  }, [questionId])
+  const onAnswerQ = useCallback(
+    (index: number, text: string) => {
+      const q = questionRef.current
+      if (q) void answerQuestion(p.paneId, q.requestId, index, text)
+    },
+    [p.paneId],
+  )
+  const onStepQ = useCallback(
+    (step: number) => {
+      const q = questionRef.current
+      if (q) questionStep(p.paneId, q.requestId, step)
+    },
+    [p.paneId],
+  )
+  const onSubmitQ = useCallback(() => {
+    const q = questionRef.current
+    if (q) void submitQuestion(p.paneId, q.requestId)
+  }, [p.paneId])
+  const onCustomQ = useCallback((index: number) => {
+    const q = questionRef.current
+    if (!q) return
+    setCustom({ requestId: q.requestId, index })
+    inputRef.current?.focus()
+  }, [])
+  const onLeaveQ = useCallback(() => inputRef.current?.focus(), [])
+  const answerMode = useMemo(
+    () =>
+      custom
+        ? {
+            onSubmit: (text: string) => {
+              setCustom(null)
+              if (text) void answerQuestion(p.paneId, custom.requestId, custom.index, text)
+              // Следующий шаг (или следующий вопрос) — снова в блоке вопроса.
+              setTimeout(() => promptRef.current?.focus())
+            },
+            onCancel: () => {
+              setCustom(null)
+              promptRef.current?.focus()
+            },
+          }
+        : null,
+    [custom, p.paneId],
+  )
+
   // host перенесён в слот (блок/оверлей): размер, перерисовка, фокус.
   const onAttach = useCallback(() => {
     const term = termRef.current
@@ -575,12 +641,17 @@ export function TerminalPane(p: TerminalPaneProps) {
           if (b?.html) navigator.clipboard?.writeText(blockText(b.html)).catch(() => {})
           return
         }
+        // ⌘↓ из строки ввода при ждущем вопросе агента — к вопросу.
+        if (a === 'blockNext' && questionRef.current && inputRef.current?.hasFocus()) {
+          focusPrompt()
+          return
+        }
         const m = moveSelection(itemsRef.current, selectedRef.current, a === 'blockPrev' ? 'up' : 'down')
         setSelected(m.id)
         // ⌘↓ с последнего блока или из строки ввода — фокус в панель агентов (если она показана).
         if (m.leave) agentsRef.current?.focus()
       }),
-    [p.paneId],
+    [p.paneId, focusPrompt],
   )
 
   const liveHeight = Math.min(hostHeight, livePx)
@@ -598,7 +669,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       // Клик по ленте возвращает ввод туда, где он идёт: в строку ввода, а пока идёт команда — в xterm.
       onMouseUp={(e) => {
         // Кнопки ленты («Показать всё» и т. п.), само поле и выделение текста не трогаем.
-        if ((e.target as Element).closest?.('button, a, input, textarea, select, .input, .agents')) return
+        if ((e.target as Element).closest?.('button, a, input, textarea, select, .input, .agents, .aprompt')) return
         if (window.getSelection()?.isCollapsed ?? true) {
           if (runningRef.current || altRef.current) termRef.current?.focus()
           else inputRef.current?.focus()
@@ -624,8 +695,21 @@ export function TerminalPane(p: TerminalPaneProps) {
         {claude && !agentsHidden && (
           <AgentsPanel ref={agentsRef} state={claude.state} onExit={() => inputRef.current?.focus()} />
         )}
+        {question && !alt && (
+          <QuestionPrompt
+            ref={promptRef}
+            item={question}
+            agent={claude?.state.agents.find((a) => a.id === question.agentId)}
+            onAnswer={onAnswerQ}
+            onStep={onStepQ}
+            onSubmit={onSubmitQ}
+            onCustom={onCustomQ}
+            onLeave={onLeaveQ}
+          />
+        )}
         <InputBar
           ref={inputRef}
+          answer={answerMode}
           disabled={running || alt || awaiting}
           continuation={cont}
           completions={p.focused && !settingsOpen && settings.pathCompletions}

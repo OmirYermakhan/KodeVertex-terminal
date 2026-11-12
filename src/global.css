@@ -234,6 +234,38 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .card.fable .who { color: #e8c46a; }
 .card.cerr { border-color: var(--del); }
 .card.cerr .who { color: var(--del); }
+/* Вопрос агента в ленте: пока ждёт — строка .cl-note, после ответа — свёрнутая карточка с полосой --warn. */
+.cl-note.q-wait { color: var(--warn); }
+.card.qcard { border-left-color: var(--warn); }
+.card.qcard .who { color: var(--warn); }
+.qcard .q-ans { color: var(--text); }
+.qcard .q-ans b { color: var(--strong); font-weight: 600; }
+/* «Агент ждёт вас» над строкой ввода (.dock): --panel, полоса --warn, заголовок и клавиши как .dh. */
+.aprompt { position: relative; background: var(--panel); border-top: 1px solid var(--rule); border-left: 2px solid var(--warn); outline: none; font-family: var(--font-text); color: var(--text); }
+.aprompt:focus-within .ap-who::before { content: '▸ '; }
+.ap-h { display: flex; justify-content: space-between; gap: 12px; padding: 8px 16px 4px 14px; font-family: var(--font-code); font-size: 10.5px; line-height: normal; letter-spacing: 0.06em; text-transform: uppercase; color: var(--warn); white-space: nowrap; }
+.ap-aside { color: var(--muted); letter-spacing: 0; text-transform: none; }
+.ap-body { max-height: min(40vh, 340px); overflow-y: auto; }
+.ap-keys { padding: 6px 16px 7px 14px; border-top: 1px solid var(--rule); font-family: var(--font-code); font-size: 10.5px; line-height: normal; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.q-tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 14px 6px; font-family: var(--font-code); font-size: 11px; }
+.q-tab { padding: 1px 8px; border: 1px solid var(--rule); border-radius: 4px; color: var(--muted); cursor: pointer; }
+.q-tab.ok { color: var(--add); }
+.q-tab.on { color: var(--strong); border-color: var(--warn); }
+.q-text { padding: 0 16px 6px 14px; color: var(--strong); font-size: 13.5px; line-height: 1.5; max-width: 76ch; }
+.q-opts { display: grid; grid-template-columns: 1.8em max-content minmax(0, 1fr); column-gap: 14px; padding-bottom: 4px; }
+/* subgrid: описания вариантов — одной колонкой. */
+.q-row { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: baseline; padding: 4px 16px 4px 10px; border-left: 2px solid transparent; cursor: pointer; white-space: nowrap; }
+.q-row.sel { background: color-mix(in srgb, var(--acc) 12%, var(--bg)); border-left-color: var(--acc); }
+.q-n { color: var(--muted); font-family: var(--font-code); font-size: 12px; text-align: right; }
+.q-row.sel .q-n { color: var(--accText); }
+.q-l { color: var(--strong); font-size: 13px; }
+.q-box { color: var(--accText); font-family: var(--font-code); }
+.q-rec { margin-left: 8px; padding: 0 6px; border: 1px solid color-mix(in srgb, var(--add) 50%, transparent); border-radius: 4px; color: var(--add); font-family: var(--font-code); font-size: 10px; letter-spacing: 0.04em; vertical-align: 1px; }
+.q-l.q-own { color: var(--muted); font-style: italic; }
+.q-l.q-send { color: var(--accText); font-weight: 600; }
+.q-d { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 12.5px; }
+.q-d.q-given { color: var(--text); }
+.q-d.q-miss { color: var(--warn); }
 .cl-note { margin: 0 0 10px; max-width: 76ch; font-family: var(--font-code); font-size: 11px; line-height: normal; color: var(--muted); }
 .cerr-text { margin: 0; font-size: calc(var(--size-text) - 1.5px); line-height: var(--lh-text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .act { box-sizing: border-box; border: 1px dashed var(--rule); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-family: var(--font-code); font-size: calc(var(--size-code) - 0.5px); line-height: normal; color: var(--muted); max-width: 76ch; overflow-wrap: anywhere; }

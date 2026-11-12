@@ -4,6 +4,7 @@ import type { Agent } from '../reducer'
 import { ActionCard } from './ActionCard'
 import { AssistantCard } from './AssistantCard'
 import { ErrorCard } from './ErrorCard'
+import { QuestionCard } from './QuestionCard'
 import { SessionNote } from './SessionNote'
 import { SummaryCard } from './SummaryCard'
 import { UserBubble } from './UserBubble'
@@ -20,7 +21,11 @@ export const ClaudeCard = memo(function ClaudeCard({ item, agent }: { item: Clau
     case 'assistant':
       return <AssistantCard id={item.id} agent={agent} text={it.text} streaming={it.streaming} />
     case 'action':
+      // Вопрос агента показывает своя карточка (question), действие «AskUserQuestion» не дублируем.
+      if (it.tool === 'AskUserQuestion') return null
       return <ActionCard id={item.id} item={it} agent={agent} />
+    case 'question':
+      return <QuestionCard id={item.id} item={it} agent={agent} />
     case 'summary':
       return <SummaryCard id={item.id} text={it.text} durationMs={it.durationMs} costUsd={it.costUsd} isError={it.isError} />
     case 'error':

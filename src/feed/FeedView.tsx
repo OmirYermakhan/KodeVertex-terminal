@@ -9,7 +9,7 @@ const NO_AGENTS: readonly Agent[] = []
 
 function agentOf(agents: readonly Agent[], it: ClaudeItem): Agent | undefined {
   const x = it.item
-  return x.type === 'assistant' || x.type === 'action' ? agents.find((a) => a.id === x.agentId) : undefined
+  return x.type === 'assistant' || x.type === 'action' || x.type === 'question' ? agents.find((a) => a.id === x.agentId) : undefined
 }
 
 export interface FeedProps {

@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
 }))
 
-const { askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
+const { answerQuestion, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
 
 const items = (pane: string) => useClaudeSessions.getState().sessions[pane]?.state.items ?? []
 const calls = (cmd: string) => invoke.mock.calls.filter((c) => c[0] === cmd)
@@ -126,5 +126,76 @@ describe('chooseModel (/model)', () => {
   it('после выбора процесс перезапускается с --model/--effort', async () => {
     await chooseModel('m', '/w', { alias: 'sonnet', effort: 'low', persist: false })
     expect(calls('claude_start')[0][1]).toMatchObject({ model: 'sonnet', effort: 'low' })
+  })
+})
+
+describe('вопросы агента', () => {
+  let onLine: { onmessage(m: string): void } | null
+  beforeEach(() => {
+    stopClaude('q')
+    invoke.mockReset()
+    onLine = null
+    invoke.mockImplementation((cmd: string, a: Record<string, unknown>) => {
+      if (cmd === 'claude_start') onLine = a.onLine as typeof onLine
+      return Promise.resolve(cmd === 'claude_start' ? 'proc-q' : undefined)
+    })
+  })
+  const input = {
+    questions: [
+      { question: 'Цвет?', header: 'Цвет', multiSelect: false, options: [{ label: 'Red', description: '' }] },
+      { question: 'Размер?', header: 'Размер', multiSelect: true, options: [{ label: 'S', description: '' }, { label: 'M', description: '' }] },
+    ],
+  }
+  const line = (tool: string, inp: object) =>
+    JSON.stringify({ type: 'control_request', request_id: 'rq', request: { subtype: 'can_use_tool', tool_name: tool, input: inp, tool_use_id: 't' } })
+
+  it('прочий инструмент — разрешается сразу с исходным вводом', async () => {
+    enterClaude('q', '/w')
+    await flush()
+    onLine!.onmessage(line('Bash', { command: 'ls' }))
+    expect(calls('claude_respond')).toEqual([
+      ['claude_respond', { id: 'proc-q', requestId: 'rq', response: { behavior: 'allow', updatedInput: { command: 'ls' } } }],
+    ])
+  })
+
+  it('вопрос ждёт; ответы по шагам уходят одним control_response', async () => {
+    enterClaude('q', '/w')
+    await flush()
+    onLine!.onmessage(line('AskUserQuestion', input))
+    expect(calls('claude_respond')).toHaveLength(0)
+    expect(items('q').some((i) => i.type === 'question')).toBe(true)
+    await answerQuestion('q', 'rq', 0, 'Red')
+    await answerQuestion('q', 'rq', 1, 'S, M')
+    // Несколько вопросов — ждём «Отправить ответы».
+    expect(calls('claude_respond')).toHaveLength(0)
+    await submitQuestion('q', 'rq')
+    expect(calls('claude_respond')).toEqual([
+      [
+        'claude_respond',
+        {
+          id: 'proc-q',
+          requestId: 'rq',
+          response: { behavior: 'allow', updatedInput: { ...input, answers: { 'Цвет?': 'Red', 'Размер?': 'S, M' } } },
+        },
+      ],
+    ])
+  })
+})
+
+describe('один вопрос', () => {
+  it('ответ уходит сразу', async () => {
+    stopClaude('q1')
+    invoke.mockReset()
+    let onLine: { onmessage(m: string): void } | null = null
+    invoke.mockImplementation((cmd: string, a: Record<string, unknown>) => {
+      if (cmd === 'claude_start') onLine = a.onLine as typeof onLine
+      return Promise.resolve(cmd === 'claude_start' ? 'p1' : undefined)
+    })
+    enterClaude('q1', '/w')
+    await flush()
+    const input = { questions: [{ question: 'Да?', header: '', multiSelect: false, options: [{ label: 'Да', description: '' }] }] }
+    onLine!.onmessage(JSON.stringify({ type: 'control_request', request_id: 'r', request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input } }))
+    await answerQuestion('q1', 'r', 0, 'Да')
+    expect(calls('claude_respond')[0][1]).toEqual({ id: 'p1', requestId: 'r', response: { behavior: 'allow', updatedInput: { ...input, answers: { 'Да?': 'Да' } } } })
   })
 })

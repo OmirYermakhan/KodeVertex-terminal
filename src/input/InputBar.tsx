@@ -22,6 +22,8 @@ export const CLAUDE_PLACEHOLDER = 'Вопрос Claude…'
 export const CLAUDE_HINT = '↵ отправить агенту · /exit выйти'
 /** Метка режима Claude слева в поле. */
 export const CLAUDE_MARK = '◆'
+export const ANSWER_PLACEHOLDER = 'Ваш ответ на вопрос…'
+export const ANSWER_HINT = '↵ ответить · esc к вопросу'
 export const CONTINUATION_NOTE = 'Команда не закончена — допишите или ⌃C'
 
 export interface InputBarProps {
@@ -57,12 +59,16 @@ export interface InputBarProps {
   onChooseModel?(choice: ModelChoice): void
   /** Текущие модель (псевдоним, null — по умолчанию) и усилие панели — для карточки выбора. */
   modelInfo?(): { current: string | null; effort: string | null }
+  /** «Свой ответ…» на вопрос агента: ↵ отдаёт текст сюда, esc — назад к вопросу. */
+  answer?: { onSubmit(text: string): void; onCancel(): void } | null
 }
 
 export interface InputBarHandle {
   focus(): void
   /** Фокус сейчас в поле. */
   hasFocus(): boolean
+  /** В поле ничего не набрано. */
+  isEmpty(): boolean
 }
 
 const onFirstLine = (v: string, pos: number) => !v.slice(0, pos).includes('\n')
@@ -99,6 +105,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   useImperativeHandle(ref, () => ({
     focus: () => taRef.current?.focus(),
     hasFocus: () => !!taRef.current && document.activeElement === taRef.current,
+    isEmpty: () => (taRef.current?.value ?? '') === '',
   }))
 
   useEffect(() => {
@@ -112,7 +119,9 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
   const submit = useCallback((text: string, ask: boolean) => {
     const q = props.current
-    if ((ask || claudeRef.current) && isModelCommand(text) && q.onChooseModel) {
+    if (q.answer) {
+      q.answer.onSubmit(text.trim())
+    } else if ((ask || claudeRef.current) && isModelCommand(text) && q.onChooseModel) {
       const info = q.modelInfo?.() ?? { current: null, effort: null }
       completionRef.current.close()
       hintsRef.current.close()
@@ -196,6 +205,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const report = (ta: HTMLTextAreaElement) => {
     const cursor = ta.selectionStart ?? ta.value.length
     const q = props.current
+    if (q.answer) return
     if (q.hints && !q.disabled && !q.continuation) hintsRef.current.update(ta.value, cursor)
     if (!q.completions || claudeRef.current) return
     completionRef.current.update(ta.value, cursor)
@@ -233,6 +243,12 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     }
     if (ne.isComposing || ne.keyCode === 229) return
     const v = ta.value
+    // Свой ответ на вопрос агента: esc — назад к вопросу (набранное остаётся).
+    if (e.key === 'Escape' && props.current.answer && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+      e.preventDefault()
+      props.current.answer.onCancel()
+      return
+    }
     // esc на пустой строке — выход из режима Claude (сессия продолжает жить).
     if (e.key === 'Escape' && claudeRef.current && v === '' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
       e.preventDefault()
@@ -309,7 +325,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [open, ctx, buffer, lineStart])
 
   const empty = value === ''
-  const placeholder = claudeMode ? CLAUDE_PLACEHOLDER : PLACEHOLDER
+  const placeholder = p.answer ? ANSWER_PLACEHOLDER : claudeMode ? CLAUDE_PLACEHOLDER : PLACEHOLDER
   return (
     <div className="input-wrap" ref={wrapRef}>
       {open && ctx && p.completions && !p.disabled && !claudeMode && (
@@ -381,7 +397,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           )}
           <span className="in-measure" ref={measureRef} aria-hidden="true" />
         </div>
-        <span className="in-hint">{claudeMode ? CLAUDE_HINT : ASK_HINT}</span>
+        <span className="in-hint">{p.answer ? ANSWER_HINT : claudeMode ? CLAUDE_HINT : ASK_HINT}</span>
       </div>
     </div>
   )

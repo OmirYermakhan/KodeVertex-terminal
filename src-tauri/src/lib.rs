@@ -71,6 +71,7 @@ pub fn run() {
       claude::claude_interrupt,
       claude::claude_stop,
       claude::claude_control,
+      claude::claude_respond,
       claude_settings::claude_save_defaults,
       slash_commands::claude_slash_commands
     ])

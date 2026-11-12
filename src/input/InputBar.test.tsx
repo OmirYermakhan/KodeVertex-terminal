@@ -428,3 +428,27 @@ describe('InputBar: /model', () => {
     expect(s.p.onAsk).toHaveBeenCalledWith('/model')
   })
 })
+
+describe('InputBar: свой ответ на вопрос агента', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    invoke.mockResolvedValue([])
+    resetHistory()
+  })
+
+  it('плейсхолдер и подсказка; ↵ отдаёт текст в answer, а не в оболочку; esc — назад к вопросу', async () => {
+    const { ANSWER_PLACEHOLDER, ANSWER_HINT } = await import('./InputBar')
+    const answer = { onSubmit: vi.fn(), onCancel: vi.fn() }
+    const s = setup({ answer })
+    expect(s.container.querySelector('.ph')!.textContent).toBe(ANSWER_PLACEHOLDER)
+    expect(ANSWER_PLACEHOLDER).toBe('Ваш ответ на вопрос…')
+    expect(s.container.querySelector('.in-hint')!.textContent).toBe(ANSWER_HINT)
+    s.set('  синий ')
+    s.key('Enter')
+    expect(answer.onSubmit).toHaveBeenCalledWith('синий')
+    expect(s.p.onRun).not.toHaveBeenCalled()
+    expect(s.ta.value).toBe('')
+    s.key('Escape')
+    expect(answer.onCancel).toHaveBeenCalled()
+  })
+})
