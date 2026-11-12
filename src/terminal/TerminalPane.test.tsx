@@ -239,6 +239,62 @@ describe('TerminalPane', () => {
       expect(write).toHaveBeenCalledWith('\x03')
     })
 
+    it('⌃D на пустой строке — EOF в оболочку; на непустой — нет', async () => {
+      const { write } = await mounted()
+      keyIn('d', { ctrlKey: true })
+      expect(write).toHaveBeenCalledWith('\x04')
+      write.mockClear()
+      type('ls')
+      keyIn('d', { ctrlKey: true })
+      expect(write).not.toHaveBeenCalled()
+    })
+
+    it('Tab и ⇧Tab не уводят фокус из строки ввода; спрятанный xterm — inert', async () => {
+      await mounted()
+      type('echo')
+      expect(keyIn('Tab')).toBe(false)
+      expect(keyIn('Tab', { shiftKey: true })).toBe(false)
+      expect(document.querySelector('.feed-park')!.hasAttribute('inert')).toBe(true)
+    })
+
+    it('после ↵ строка неактивна до C или A (второй ↵ не уйдёт в stdin команды)', async () => {
+      const { term, write } = await mounted()
+      type('ls')
+      keyIn('Enter')
+      expect(textarea()).toBeDisabled()
+      act(() => void oscHandler(term, 133)('A'))
+      expect(textarea()).not.toBeDisabled()
+      expect(document.activeElement).toBe(textarea())
+      // Оболочка молчит — через 2 с строка снова активна.
+      type('pwd')
+      keyIn('Enter')
+      expect(textarea()).toBeDisabled()
+      await act(async () => await flush(2100))
+      expect(textarea()).not.toBeDisabled()
+      expect(write).toHaveBeenCalledTimes(2)
+    })
+
+    it('cwd из OSC 7 — только в простое и только от этого компьютера', async () => {
+      const onCwd = vi.fn()
+      render(<TerminalPane {...props()} onCwd={onCwd} focused initialCwd="/w" />)
+      spawns[0].resolve()
+      await flush()
+      const term = terms[0]
+      const osc7 = (d: string) => act(() => void oscHandler(term, 7)(d))
+      // Первый OSC 7 — от нашей оболочки: его хост — этот компьютер.
+      osc7('file://mac/a')
+      // Во время команды (cat файла, ssh) — не принимается.
+      act(() => void oscHandler(term, 133)('C;' + btoa('ssh srv')))
+      osc7('file://mac/remote')
+      act(() => void oscHandler(term, 133)('D;0'))
+      // Чужой хост — не принимается; пустой, localhost и свой — да.
+      osc7('file://srv/x')
+      osc7('file://localhost/b')
+      osc7('file:///c')
+      osc7('file://MAC/d')
+      expect(onCwd.mock.calls.map((c) => c[0])).toEqual(['/a', '/b', '/c', '/d'])
+    })
+
     it('пустая строка не отправляется', async () => {
       const { write } = await mounted()
       type('   ')
@@ -430,28 +486,108 @@ describe('TerminalPane', () => {
         expect(useClaudeSessions.getState().sessions.p.state.busy).toBe(false)
       })
 
-      it('перезапуск — в каталоге первого запуска; упавший молча --resume сбрасывает sessionId', async () => {
+      const result = () => JSON.stringify({ type: 'result', result: 'ok', duration_ms: 1, total_cost_usd: 0 })
+
+      it('в том же каталоге — --resume; из другого — новая сессия там (старая остановлена); упавший молча --resume сбрасывает sessionId', async () => {
         claudeOk()
         const { term } = await mounted()
         type('a')
         keyIn('Enter', { metaKey: true })
         await act(async () => await flush())
+        // Новая сессия — строка с её каталогом перед вопросом.
+        expect(document.querySelector('.cl-note')?.textContent).toBe('Claude · /w')
         act(() => startArgs().onLine.onmessage(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'S1' })))
+        act(() => startArgs().onLine.onmessage(result()))
         act(() => startArgs().onExit.onmessage({ code: 0, stderr: '' }))
-        act(() => void oscHandler(term, 7)('file://host/other'))
+        expect(document.querySelector('.cerr')).toBeNull()
         invoke.mockClear()
         type('b')
         keyIn('Enter', { metaKey: true })
         await act(async () => await flush())
         expect(startArgs()).toMatchObject({ cwd: '/w', resume: 'S1' })
-        // resume не удался: ни одной строки, код 1.
-        act(() => startArgs().onExit.onmessage({ code: 1, stderr: 'No conversation found' }))
-        expect(useClaudeSessions.getState().sessions.p.state.sessionId).toBeNull()
+        expect(document.querySelectorAll('.cl-note')).toHaveLength(1)
+        // Панель перешла в другой каталог, процесс ещё жив: он останавливается, новая сессия — там.
+        act(() => void oscHandler(term, 7)('file://host/other'))
         invoke.mockClear()
         type('c')
         keyIn('Enter', { metaKey: true })
         await act(async () => await flush())
-        expect(startArgs()).toMatchObject({ cwd: '/w', resume: null })
+        expect(invoke).toHaveBeenCalledWith('claude_stop', { id: 'c1' })
+        expect(startArgs()).toMatchObject({ cwd: '/other', resume: null })
+        expect(Array.from(document.querySelectorAll('.cl-note')).map((e) => e.textContent)).toEqual(['Claude · /w', 'Claude · /other'])
+        act(() => startArgs().onLine.onmessage(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'S2' })))
+        act(() => startArgs().onLine.onmessage(result()))
+        act(() => startArgs().onExit.onmessage({ code: 0, stderr: '' }))
+        invoke.mockClear()
+        type('d')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        expect(startArgs()).toMatchObject({ cwd: '/other', resume: 'S2' })
+        // resume не удался: ни одной строки, код 1.
+        act(() => startArgs().onExit.onmessage({ code: 1, stderr: 'No conversation found' }))
+        expect(useClaudeSessions.getState().sessions.p.state.sessionId).toBeNull()
+        invoke.mockClear()
+        type('e')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        expect(startArgs()).toMatchObject({ cwd: '/other', resume: null })
+      })
+
+      it('два ⌘↵ подряд: первый result не снимает «занят», ⌃C прерывает второй ход', async () => {
+        claudeOk()
+        await mounted()
+        type('a')
+        keyIn('Enter', { metaKey: true })
+        type('b')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        act(() => startArgs().onLine.onmessage(result()))
+        const st = () => useClaudeSessions.getState().sessions.p.state
+        expect(st().busy).toBe(true)
+        expect(st().agents.find((x) => x.id === 'main')!.status).toBe('running')
+        keyIn('c', { ctrlKey: true })
+        expect(invoke).toHaveBeenCalledWith('claude_interrupt', { id: 'c1' })
+        expect(spawns[0].handle.write).not.toHaveBeenCalledWith('\x03')
+        act(() => startArgs().onLine.onmessage(result()))
+        expect(st().busy).toBe(false)
+      })
+
+      it('claude вышел с кодом 0 посреди хода без ⌃C — карточка ошибки', async () => {
+        claudeOk()
+        await mounted()
+        type('a')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        act(() => startArgs().onExit.onmessage({ code: 0, stderr: '' }))
+        expect(document.querySelector('.cerr')?.textContent).toContain('Claude завершился, не закончив ответ')
+        expect(useClaudeSessions.getState().sessions.p.state.busy).toBe(false)
+      })
+
+      it('каталог панели ещё неизвестен — понятная ошибка по-русски, claude не запускается', async () => {
+        claudeOk()
+        render(<TerminalPane {...props()} focused />)
+        spawns[0].resolve()
+        await flush()
+        type('a')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        expect(document.querySelector('.cerr')?.textContent).toContain('Каталог панели ещё неизвестен')
+        expect(calls().some((c) => c[0] === 'claude_start')).toBe(false)
+      })
+
+      it('⌃L посреди ответа: продолжение ответа появляется', async () => {
+        claudeOk()
+        await mounted()
+        type('a')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        const delta = (text: string) =>
+          JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text } } })
+        act(() => startArgs().onLine.onmessage(delta('нач')))
+        keyIn('l', { ctrlKey: true })
+        expect(document.querySelector('.you')).toBeNull()
+        act(() => startArgs().onLine.onmessage(delta('ало')))
+        expect(document.querySelector('.card')?.textContent).toContain('начало')
       })
 
       it('⌃C, пока процесс запускается: вопрос не отправляется, строка не очищается', async () => {
@@ -712,6 +848,38 @@ describe('TerminalPane', () => {
       const slot = document.querySelector<HTMLElement>('[data-testid="live-block"]')!
       const cell = DEFAULTS.codeSize * terminalLineHeight(DEFAULTS)
       expect(slot.style.height).toBe(`${Math.ceil(3 * cell)}px`)
+    })
+
+    it('новое приглашение посреди команды (exec zsh) завершает блок без кода', async () => {
+      const { term } = await mounted()
+      osc133(term, 'C;' + b64('exec zsh'))
+      expect(textarea()).toBeDisabled()
+      term.lines = ['']
+      osc133(term, 'A')
+      const blk = document.querySelector('.blk:not(.feed-park .blk)')!
+      expect(blk).not.toHaveClass('run')
+      expect(blk).not.toHaveClass('err')
+      expect(textarea()).not.toBeDisabled()
+    })
+
+    it('вывод вне C…D (ошибка разбора) — отдельный блок с отправленной строкой; обычное приглашение блоков не добавляет', async () => {
+      const { term } = await mounted()
+      const blocks = () => Array.from(document.querySelectorAll('.blk:not(.feed-park .blk)'))
+      osc133(term, 'C;' + b64('ls'))
+      term.lines = ['out1']
+      osc133(term, 'D;0')
+      osc133(term, 'A')
+      expect(blocks()).toHaveLength(1)
+      term.lines = []
+      type('ls )')
+      keyIn('Enter')
+      osc133(term, 'I')
+      term.lines = ["zsh: parse error near `)'"]
+      osc133(term, 'A')
+      expect(blocks()).toHaveLength(2)
+      expect(blocks()[1].querySelector('.cmd')!.textContent).toBe('ls )')
+      expect(blocks()[1].querySelector('.out')).not.toBeNull()
+      expect(textarea()).not.toBeDisabled()
     })
 
     it('конец команды при активном alt screen — содержимое alt не замораживается', async () => {

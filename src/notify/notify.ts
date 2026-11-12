@@ -160,19 +160,25 @@ function beep(kind: NotifyKind): void {
   }
 }
 
-async function systemNotice(text: string): Promise<void> {
+export const FOCUS_NAV_MS = 30_000
+let pending: { toast: Omit<Toast, 'id'>; at: number } | null = null
+
+/**
+ * Системное уведомление. Переход по фокусу окна запоминается, только если уведомление
+ * действительно показано (есть разрешение) и окно всё ещё не в фокусе.
+ */
+async function systemNotice(toast: Omit<Toast, 'id'>): Promise<void> {
   try {
     const n = await import('@tauri-apps/plugin-notification')
     let ok = await n.isPermissionGranted()
     if (!ok) ok = (await n.requestPermission()) === 'granted'
-    if (ok) n.sendNotification({ title: 'KodeVertex', body: text })
+    if (!ok) return
+    n.sendNotification({ title: 'KodeVertex', body: toast.text })
+    if (!document.hasFocus()) pending = { toast, at: Date.now() }
   } catch {
     // Вне Tauri или без разрешения — только тост.
   }
 }
-
-export const FOCUS_NAV_MS = 30_000
-let pending: { toast: Omit<Toast, 'id'>; at: number } | null = null
 
 /** Окно получило фокус: если недавно было системное уведомление — перейти к его вкладке/агенту. */
 export function handleWindowFocus(): void {
@@ -183,16 +189,16 @@ export function handleWindowFocus(): void {
   if (p.toast.agentId) useUi.getState().requestAgent(p.toast.paneId, p.toast.agentId)
 }
 
-/** Показать событие: тост всегда; система и звук — по настройкам и правилам. */
-export function emit(kind: NotifyKind, text: string, paneId: string, agentId: string | null): void {
+/** Показать событие: тост всегда; система и звук — по настройкам и правилам. Promise — для тестов. */
+export function emit(kind: NotifyKind, text: string, paneId: string, agentId: string | null): Promise<void> {
   const s = useSettings.getState().settings
   const inActive = isInActiveTab(paneId)
   useToasts.getState().push({ kind, text, paneId, agentId })
   if (s.notifySound && soundFor(kind)) beep(kind)
   if (s.notifySystem && needsSystemNotice(document.hasFocus(), inActive)) {
-    pending = { toast: { kind, text, paneId, agentId }, at: Date.now() }
-    void systemNotice(text)
+    return systemNotice({ kind, text, paneId, agentId })
   }
+  return Promise.resolve()
 }
 
 function isInActiveTab(paneId: string): boolean {
@@ -206,7 +212,7 @@ export function notifyCommandEnd(paneId: string, command: string, durationMs: nu
   // vim, less, ssh на весь экран — не «долгая команда».
   if (usedAlt) return
   if (!shouldNotifyCommand(durationMs, useSettings.getState().settings)) return
-  emit(exitCode === 0 ? 'done' : 'error', commandText(command, durationMs, exitCode), paneId, null)
+  void emit(exitCode === 0 ? 'done' : 'error', commandText(command, durationMs, exitCode), paneId, null)
 }
 
 /** Подписка на сессии Claude: тосты по переходам статусов и счётчик в Dock. */
@@ -222,7 +228,7 @@ export function installNotifications(): () => void {
       const before = prev.sessions[paneId]?.state.agents
       if (before === s.state.agents) continue
       for (const ev of agentEvents(before ?? [], s.state.agents)) {
-        if (shouldNotifyAgent(ev, settings)) emit(ev.kind, agentText(ev, lastQuestion(s.state.items)), paneId, ev.agent.id)
+        if (shouldNotifyAgent(ev, settings)) void emit(ev.kind, agentText(ev, lastQuestion(s.state.items)), paneId, ev.agent.id)
       }
     }
     const n = waitingCount(st.sessions)

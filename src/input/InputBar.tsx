@@ -31,6 +31,8 @@ export interface InputBarProps {
   onInterrupt(empty: boolean): boolean
   /** ⌃L: очистить ленту. */
   onClearFeed(): void
+  /** ⌃D на пустой строке: EOF в оболочку. */
+  onEof?(): void
 }
 
 export interface InputBarHandle {
@@ -131,6 +133,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       e.preventDefault()
       return
     }
+    // Tab/⇧Tab не уводят фокус из строки ввода (в спрятанный xterm или по кнопкам окна).
+    if (e.key === 'Tab') {
+      e.preventDefault()
+      return
+    }
     if (ne.isComposing || ne.keyCode === 229) return
     const v = ta.value
     const mods = { meta: e.metaKey, ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey }
@@ -169,6 +176,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       nav.current = NAV_START
       completionRef.current.close()
       setLine('', 0)
+      return
+    }
+    if (only('ctrl') && e.key.toLowerCase() === 'd' && v === '') {
+      e.preventDefault()
+      props.current.onEof?.()
       return
     }
     if (only('ctrl') && e.key.toLowerCase() === 'l') {

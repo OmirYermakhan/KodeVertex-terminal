@@ -18,7 +18,10 @@ export type FeedItem = ShellBlock | ClaudeItem
 export type ShellEvent =
   | { t: 'prompt' }
   | { t: 'start'; command: string; cwd: string; at: number }
-  | { t: 'end'; exitCode: number; at: number; html: string; lines: number }
+  /** exitCode null — конец без 133;D (например, `exec zsh`: новое приглашение посреди команды). */
+  | { t: 'end'; exitCode: number | null; at: number; html: string; lines: number }
+  /** Вывод вне пары C…D (ошибка разбора, сообщения о фоновых заданиях): готовый блок. */
+  | { t: 'stray'; command: string; cwd: string; at: number; html: string; lines: number }
 
 /** Результат разбора OSC 133 — без времени, cwd и HTML. */
 export type ParsedOsc133 =
@@ -27,13 +30,16 @@ export type ParsedOsc133 =
   | { t: 'continue' }
   | { t: 'start'; command: string }
   | { t: 'end'; exitCode: number }
+  /** `I`: ZLE приняла строку (эхо набранного уже выведено). */
+  | { t: 'accepted' }
 
 /** Замороженный блок длиннее этого числа строк сворачивается. */
 export const COLLAPSE_LINES = 2000
 
-/** Полезная нагрузка OSC 133 (после "133;"): 'A' | 'A;k=s' | 'C;<base64>' | 'D;<код>'. */
+/** Полезная нагрузка OSC 133 (после "133;"): 'A' | 'A;k=s' | 'I' | 'C;<base64>' | 'D;<код>'. */
 export function parseOsc133(data: string): ParsedOsc133 | null {
   if (data === 'A') return { t: 'prompt' }
+  if (data === 'I') return { t: 'accepted' }
   if (data.startsWith('A;')) {
     const params = data.slice(2).split(';')
     if (!params.every((x) => /^[\w-]+=/.test(x))) return null
@@ -69,6 +75,23 @@ function runningIndex(items: FeedItem[]): number {
 
 export function applyShell(items: FeedItem[], ev: ShellEvent): FeedItem[] {
   if (ev.t === 'prompt') return items
+  if (ev.t === 'stray') {
+    return [
+      ...items,
+      {
+        kind: 'shell',
+        id: `sh-${++blockSeq}`,
+        command: ev.command,
+        cwd: ev.cwd,
+        startedAt: ev.at,
+        durationMs: null,
+        exitCode: null,
+        html: ev.html,
+        lines: ev.lines,
+        running: false,
+      },
+    ]
+  }
   const idx = runningIndex(items)
   if (ev.t === 'end') {
     if (idx < 0) return items
@@ -117,6 +140,14 @@ export function commandBytes(cmd: string): string {
 
 /** id Claude-элемента ленты по его индексу в ClaudeState.items панели (индексы только растут). */
 export const claudeItemId = (i: number) => `cl-${i}`
+/** Индекс первого незаконченного Claude-элемента (ответ ещё идёт, действие выполняется); иначе длина. */
+export function firstUnfinished(items: readonly FeedClaudeItem[]): number {
+  const i = items.findIndex((x) => (x.type === 'assistant' && x.streaming) || (x.type === 'action' && x.status === 'running'))
+  return i < 0 ? items.length : i
+}
+
+/** Обратно: индекс Claude-элемента по id ленты (-1 — не Claude-элемент). */
+export const claudeIndex = (id: string) => (id.startsWith('cl-') ? Number(id.slice(3)) : -1)
 
 /**
  * Перенос изменений ClaudeState.items в ленту: изменённые элементы заменяются на месте,

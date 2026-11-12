@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Agent } from '../claude/reducer'
+
+const perm = { granted: true }
+const sendNotification = vi.fn()
+vi.mock('@tauri-apps/plugin-notification', () => ({
+  isPermissionGranted: async () => perm.granted,
+  requestPermission: async () => (perm.granted ? 'granted' : 'denied'),
+  sendNotification: (...a: unknown[]) => sendNotification(...a),
+}))
 import { useTabs } from '../layout/tabsStore'
 import { useUi } from '../ui/uiStore'
 import {
@@ -98,12 +106,38 @@ describe('фокус окна после системного уведомлен
   })
   afterEach(() => vi.useRealTimers())
 
-  async function notifyFrom(paneId: string) {
+  async function notifyFrom(paneId: string, focused = false) {
     const { useSettings } = await import('../settings/store')
     useSettings.setState({ settings: { ...useSettings.getState().settings, notifySystem: true, notifySound: false } })
-    vi.spyOn(document, 'hasFocus').mockReturnValue(false)
-    emit('waiting', '! Главный ждёт ответа', paneId, 'main')
+    vi.spyOn(document, 'hasFocus').mockReturnValue(focused)
+    await emit('waiting', '! Главный ждёт ответа', paneId, 'main')
   }
+
+  it('нет разрешения на системные уведомления — переход по фокусу не запоминается', async () => {
+    perm.granted = false
+    try {
+      useTabs.getState().newTab()
+      const first = useTabs.getState().tabs[0]
+      useTabs.getState().newTab()
+      await notifyFrom(first.focused)
+      expect(sendNotification).not.toHaveBeenCalled()
+      handleWindowFocus()
+      expect(useUi.getState().agentRequest).toBeNull()
+    } finally {
+      perm.granted = true
+    }
+  })
+
+  it('окно в фокусе (событие в другой вкладке) — уведомление есть, перехода по фокусу нет', async () => {
+    useTabs.getState().newTab()
+    const first = useTabs.getState().tabs[0]
+    useTabs.getState().newTab()
+    sendNotification.mockClear()
+    await notifyFrom(first.focused, true)
+    expect(sendNotification).toHaveBeenCalled()
+    handleWindowFocus()
+    expect(useUi.getState().agentRequest).toBeNull()
+  })
 
   it('в пределах 30 с — переход к вкладке и агенту, затем забывается', async () => {
     useTabs.getState().newTab()

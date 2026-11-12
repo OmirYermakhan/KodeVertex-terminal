@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseOsc7 } from './osc'
+import { isLocalHost, parseOsc7, parseOsc7Url } from './osc'
 
 describe('parseOsc7', () => {
   it('decodes host-qualified file URL', () => {
@@ -16,5 +16,19 @@ describe('parseOsc7', () => {
   })
   it('rejects empty string', () => {
     expect(parseOsc7('')).toBeNull()
+  })
+})
+
+describe('parseOsc7Url / isLocalHost', () => {
+  it('возвращает хост', () => {
+    expect(parseOsc7Url('file://mac.local/a%20b')).toEqual({ host: 'mac.local', path: '/a b' })
+    expect(parseOsc7Url('file:///x')).toEqual({ host: '', path: '/x' })
+  })
+  it('пустой, localhost и свой хост — локальные; чужой — нет', () => {
+    expect(isLocalHost('', 'mac')).toBe(true)
+    expect(isLocalHost('localhost', 'mac')).toBe(true)
+    expect(isLocalHost('MAC', 'mac')).toBe(true)
+    expect(isLocalHost('server', 'mac')).toBe(false)
+    expect(isLocalHost('mac', null)).toBe(true)
   })
 })

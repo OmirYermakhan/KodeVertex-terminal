@@ -2,7 +2,7 @@
 
 # KodeVertex Terminal
 
-*A reading-friendly terminal for macOS with Claude Code integration (Tauri 2 + React + TypeScript). Early foundation stage.*
+*A reading-friendly terminal for macOS with Claude Code integration (Tauri 2 + React + TypeScript): command blocks, Claude Code sessions as cards, agents panel and notifications.*
 
 Терминал, удобный для чтения: крупный аккуратный текст, встроенные шрифты с кириллицей, темы и интеграция с Claude Code.
 
@@ -65,6 +65,7 @@ xattr -dr com.apple.quarantine "/Applications/KodeVertex Terminal.app"
 | Перейти в панель агентов | ⌘↓ (из строки ввода) |
 | Скрыть / показать панель агентов | ⌘J |
 | Прервать команду или ход агента | ⌃C |
+| Конец ввода (EOF) в оболочку, на пустой строке | ⌃D |
 | Очистить ленту | ⌃L |
 | Настройки | ⌘, |
 

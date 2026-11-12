@@ -13,11 +13,11 @@ import { useUi } from '../ui/uiStore'
 import { codeFontStack } from '../theme/fontFamily'
 import { ansiFromTokens, THEMES } from '../theme/themes'
 import { matchKey } from '../keys/keymap'
-import { parseOsc7 } from './osc'
+import { isLocalHost, parseOsc7Url } from './osc'
 import { useHome } from '../status/useGitInfo'
 import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
-import { applyShell, commandBytes, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
+import { applyShell, claudeIndex, commandBytes, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
 import { askClaude, interruptClaude, stopClaude, useClaudeSessions } from '../claude/sessionStore'
 import { InputBar, type InputBarHandle } from '../input/InputBar'
@@ -33,6 +33,8 @@ const LIVE_MAX_SHARE = 0.6
 const LIVE_MIN_HEIGHT = 80
 /** «У низа» ленты: автопрокрутка продолжается. */
 const STICK_PX = 24
+/** После ↵ строка ввода ждёт ответа оболочки (133;C или 133;A) не дольше этого. */
+const AWAIT_SHELL_MS = 2000
 
 export interface TerminalPaneProps {
   paneId: string
@@ -122,6 +124,7 @@ export function TerminalPane(p: TerminalPaneProps) {
   })
 
   const handleRef = useRef<PtyHandle | null>(null)
+
   const inputRef = useRef<InputBarHandle>(null)
   const agentsRef = useRef<AgentsPanelHandle>(null)
   // cwd панели (подсказки путей, Claude-сессия): initialCwd, затем OSC 7.
@@ -174,6 +177,20 @@ export function TerminalPane(p: TerminalPaneProps) {
     contRef.current = v
     setCont(v)
   }
+  // ↵ отправлен, оболочка ещё не начала команду (нет C) и не вернула приглашение (нет A):
+  // второй ↵ ушёл бы в stdin первой команды — строка ввода пока неактивна.
+  const [awaiting, setAwaiting] = useState(false)
+  const awaitTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const setAwaitingShell = useCallback((v: boolean) => {
+    clearTimeout(awaitTimer.current)
+    if (v) awaitTimer.current = setTimeout(() => setAwaiting(false), AWAIT_SHELL_MS)
+    setAwaiting(v)
+  }, [])
+  useEffect(() => () => clearTimeout(awaitTimer.current), [])
+  /** Последняя отправленная строка — ждёт 133;I (ZLE приняла строку). */
+  const sentRef = useRef<string | null>(null)
+  /** Строка принята ZLE (133;I), но команда не запустилась (ещё нет C): её вывод — отдельный блок. */
+  const acceptedRef = useRef<string | null>(null)
 
   // Claude-сессия панели (стор по paneId): её элементы — в той же ленте, по времени появления.
   const claude = useClaudeSessions((st) => st.sessions[p.paneId])
@@ -233,26 +250,68 @@ export function TerminalPane(p: TerminalPaneProps) {
     // Оболочка уже завершилась сама: сессии на стороне Rust больше нет, kill не нужен.
     let exited = false
 
+    // Хост первого OSC 7 нашей оболочки (precmd до любой команды) — этот компьютер.
+    let localHost: string | null = null
     term.parser.registerOscHandler(7, (data) => {
-      const cwd = parseOsc7(data)
-      if (cwd) {
-        cwdRef.current = cwd
-        callbacks.current.onCwd(cwd)
-      }
+      const url = parseOsc7Url(data)
+      // Каталог — только от нашей оболочки в простое: не от `cat` файла, ssh или программы во время команды.
+      if (!url || runningRef.current || !isLocalHost(url.host, localHost)) return true
+      if (localHost === null && url.host && url.host.toLowerCase() !== 'localhost') localHost = url.host
+      cwdRef.current = url.path
+      callbacks.current.onCwd(url.path)
       return true
     })
+
+    const frozen = () => (term.buffer.active.type === 'alternate' ? { html: '', lines: 0 } : freeze(term, serializer))
+    /** Вывод вне пары C…D (ошибка разбора и т. п.) — отдельным блоком. */
+    const flushStray = (command: string) => {
+      const { html, lines } = frozen()
+      if (lines > 0) setItems((it) => applyShell(it, { t: 'stray', command, cwd: cwdRef.current ?? '', at: Date.now(), html, lines }))
+    }
+    const endBlock = (exitCode: number | null) => {
+      const at = Date.now()
+      runningRef.current = false
+      setRunning(false)
+      // Конец пришёл при активном alt screen (программа не вышла из него) — его содержимое не замораживаем.
+      const { html, lines } = frozen()
+      const cur = itemsRef.current.find((x): x is ShellBlock => x.kind === 'shell' && x.running)
+      if (cur && exitCode !== null) {
+        notifyCommandEnd(callbacks.current.paneId, cur.command, Math.max(0, at - cur.startedAt), exitCode, altUsedRef.current)
+      }
+      setItems((it) => applyShell(it, { t: 'end', exitCode, at, html, lines }))
+    }
 
     // Блоки: zsh сообщает начало (C) и конец (D) команды.
     term.parser.registerOscHandler(133, (data) => {
       const ev = parseOsc133(data)
       if (!ev) return true
-      if (ev.t === 'prompt' || ev.t === 'continue') {
-        setContinuation(ev.t === 'continue')
+      if (ev.t === 'accepted') {
+        // Во время команды (vared и т. п.) — это не наша строка ввода.
+        if (runningRef.current) return true
+        // Эхо принятой строки стираем: дальше в xterm только то, что напечатает оболочка.
+        term.reset()
+        acceptedRef.current = sentRef.current
+        sentRef.current = null
+        return true
+      }
+      if (ev.t === 'continue') {
+        setContinuation(true)
+        setAwaitingShell(false)
         return true
       }
       setContinuation(false)
+      setAwaitingShell(false)
+      if (ev.t === 'prompt') {
+        // Новое приглашение посреди команды (`exec zsh`, `omz reload`): команда закончилась без D.
+        if (runningRef.current) endBlock(null)
+        // Строка принята, но команда не запустилась (ошибка разбора): её вывод — блоком.
+        else if (acceptedRef.current !== null) flushStray(acceptedRef.current)
+        acceptedRef.current = null
+        return true
+      }
       const at = Date.now()
       if (ev.t === 'start') {
+        acceptedRef.current = null
         // Стираем эхо набранной строки ZLE — в живом терминале только вывод команды.
         term.reset()
         // Синхронно: вывод из того же куска данных (onWriteParsed) уже должен считаться живым.
@@ -262,13 +321,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         setLivePx(liveContentHeight(term))
         setItems((it) => applyShell(it, { t: 'start', command: ev.command, cwd: cwdRef.current ?? '', at }))
       } else {
-        runningRef.current = false
-        setRunning(false)
-        // Конец пришёл при активном alt screen (программа не вышла из него) — его содержимое не замораживаем.
-        const { html, lines } = term.buffer.active.type === 'alternate' ? { html: '', lines: 0 } : freeze(term, serializer)
-        const cur = itemsRef.current.find((x): x is ShellBlock => x.kind === 'shell' && x.running)
-        if (cur) notifyCommandEnd(callbacks.current.paneId, cur.command, Math.max(0, at - cur.startedAt), ev.exitCode, altUsedRef.current)
-        setItems((it) => applyShell(it, { t: 'end', exitCode: ev.exitCode, at, html, lines }))
+        endBlock(ev.exitCode)
       }
       return true
     })
@@ -363,7 +416,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       termRef.current = null
       fitRef.current = null
     }
-  }, [host])
+  }, [host, setAwaitingShell])
 
   // Theme / font changes apply to the live terminal.
   useEffect(() => {
@@ -398,11 +451,11 @@ export function TerminalPane(p: TerminalPaneProps) {
   // Команда закончилась (строка ввода снова активна) — фокус в неё, если он был в панели или нигде.
   const paneRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (running || alt) return
+    if (running || alt || awaiting) return
     const active = document.activeElement
     const nothingFocused = !active || active === document.body
     if (nothingFocused || paneRef.current?.contains(active)) focusActive()
-  }, [running, alt, focusActive])
+  }, [running, alt, awaiting, focusActive])
 
   // Панель агентов исчезла (⌘J или сессии больше нет), пока фокус был в ней (элемент уже удалён) — вернуть ввод.
   const agentsShown = !!claude && !agentsHidden
@@ -432,12 +485,19 @@ export function TerminalPane(p: TerminalPaneProps) {
   )
 
   // Оболочка ещё не запущена — команду не теряем: строка ввода её сохранит.
-  const onRun = useCallback((cmd: string) => {
-    const h = handleRef.current
-    if (!h) return false
-    h.write(commandBytes(cmd))
-    return true
-  }, [])
+  const onRun = useCallback(
+    (cmd: string) => {
+      const h = handleRef.current
+      if (!h) return false
+      sentRef.current = cmd
+      setAwaitingShell(true)
+      h.write(commandBytes(cmd))
+      return true
+    },
+    [setAwaitingShell],
+  )
+  // ⌃D на пустой строке — EOF в оболочку, как в обычном терминале (zsh с ignoreeof его проигнорирует).
+  const onEof = useCallback(() => handleRef.current?.write('\x04'), [])
   const onAsk = useCallback((text: string) => void askClaude(p.paneId, cwdRef.current, text), [p.paneId])
   const onInterrupt = useCallback(
     (empty: boolean) => {
@@ -454,9 +514,11 @@ export function TerminalPane(p: TerminalPaneProps) {
     [p.paneId],
   )
   const onClearFeed = useCallback(() => {
-    // Идущий блок не трогаем (строка ввода в это время и так неактивна).
-    setItems((it) => it.filter((x) => x.kind === 'shell' && x.running))
-    claudeFrom.current = claudePrev.current.length
+    // Идущий блок и незаконченный ответ Claude (с ним — всё после него) не трогаем:
+    // иначе продолжение ответа после ⌃L не появилось бы.
+    const from = firstUnfinished(claudePrev.current)
+    claudeFrom.current = from
+    setItems((it) => it.filter((x) => (x.kind === 'shell' ? x.running : claudeIndex(x.id) >= from)))
     setSelected(null)
   }, [])
 
@@ -527,7 +589,8 @@ export function TerminalPane(p: TerminalPaneProps) {
         onScroll={onFeedScroll}
         park={
           // Пока xterm не показан, он стоит здесь: невидим, но сохраняет ширину текста блока (cols).
-          <div className="feed-park">
+          // inert: спрятанный xterm не получает фокус по Tab/⇧Tab (ввод вслепую в ZLE).
+          <div className="feed-park" inert>
             <div className="blk" ref={parkRef} />
           </div>
         }
@@ -538,7 +601,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         )}
         <InputBar
           ref={inputRef}
-          disabled={running || alt}
+          disabled={running || alt || awaiting}
           continuation={cont}
           completions={p.focused && !settingsOpen && settings.pathCompletions}
           cwd={() => cwdRef.current}
@@ -546,6 +609,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           onRun={onRun}
           onAsk={onAsk}
           onInterrupt={onInterrupt}
+          onEof={onEof}
           onClearFeed={onClearFeed}
         />
       </div>
