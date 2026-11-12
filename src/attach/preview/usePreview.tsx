@@ -3,7 +3,7 @@
 // мыши закрывают. Клавиши сюда передаёт строка ввода (только активная: выключенная клавиш не берёт).
 import { createContext, useContext, useEffect, useState } from 'react'
 import type { Attachment } from '../types'
-import { keyAction, type KeyLikePv, type PreviewAction, type PreviewFrom } from './actions'
+import { enterAction, keyAction, type KeyLikePv, type PreviewAction, type PreviewFrom } from './actions'
 import { loadPreview, type PreviewData } from './api'
 
 /** Задержка наведения до показа. */
@@ -19,7 +19,7 @@ export interface PreviewTarget {
   root: HTMLElement | null
   /** hover — наведением; key — ␣ в строке ввода. */
   via: 'hover' | 'key'
-  /** Просмотр забирает ↵/⌫/esc. Наведённый отдаёт их, как только пользователь начал печатать. */
+  /** Просмотр забирает ↵/⌘↵/⌫/esc/←→ — только открытый ␣; наведённый клавиш не берёт. */
   keys: boolean
 }
 
@@ -47,6 +47,8 @@ export interface PreviewApi {
   isOpen(id?: string): boolean
   /** Действие из карточки (клик по подсказке). */
   act(a: PreviewAction): void
+  /** Клик по карточке — её ↵ (наведённая карточка клавиш не берёт). */
+  activate(): void
 }
 
 export interface PreviewHandlers {
@@ -83,7 +85,7 @@ export function createPreview(publish: (s: PreviewState) => void, handlers: () =
   const open = (token: Attachment, el: HTMLElement, from: PreviewFrom, via: 'hover' | 'key') => {
     stopTimers()
     const root = el.closest<HTMLElement>('.in-ta, .feed')
-    set({ ...cur, target: { token, el, root, from, via, keys: true }, data: null, page: 1 })
+    set({ ...cur, target: { token, el, root, from, via, keys: via === 'key' }, data: null, page: 1 })
     load(token, 1)
   }
   const close = () => {
@@ -136,7 +138,7 @@ export function createPreview(publish: (s: PreviewState) => void, handlers: () =
     enterCard: () => clearTimeout(closeTimer),
     leaveCard: scheduleClose,
     toggle(token, el, from) {
-      if (cur.target?.token.id === token.id) return close()
+      if (cur.target?.token.id === token.id && cur.target.via === 'key') return close()
       open(token, el, from, 'key')
     },
     key(e) {
@@ -148,9 +150,8 @@ export function createPreview(publish: (s: PreviewState) => void, handlers: () =
         return true
       }
       if (['Shift', 'Meta', 'Control', 'Alt', 'CapsLock'].includes(e.key)) return false
-      // Открытый ␣ просмотр закрывается любой другой клавишей; наведённый — перестаёт брать клавиши.
-      if (t.via === 'key') close()
-      else set({ ...cur, target: { ...t, keys: false } })
+      // Открытый ␣ просмотр закрывается любой другой клавишей.
+      close()
       return false
     },
     close,
@@ -162,6 +163,10 @@ export function createPreview(publish: (s: PreviewState) => void, handlers: () =
     },
     isOpen: (id) => !!cur.target && (id === undefined || cur.target.token.id === id),
     act: run,
+    activate() {
+      const a = cur.target && enterAction(cur.target.token)
+      if (a) run(a)
+    },
   }
 }
 

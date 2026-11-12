@@ -128,7 +128,7 @@ describe('мини-просмотр: открытие и закрытие', () =
     expect(p.state.target).toBeNull()
   })
 
-  it('↵ и ⌫ уходят панели; наведённый просмотр отдаёт клавиши, как только начали печатать', () => {
+  it('↵ и ⌫ уходят панели; наведённый просмотр клавиш не берёт, клик — его ↵', () => {
     const p = make()
     p.api.toggle(file(), p.el, 'input')
     expect(p.api.key(key('Enter'))).toBe(true)
@@ -137,11 +137,21 @@ describe('мини-просмотр: открытие и закрытие', () =
     p.api.toggle(file(), p.el, 'input')
     expect(p.api.key(key('Backspace'))).toBe(true)
     expect(p.onAction).toHaveBeenLastCalledWith({ type: 'remove', id: 'f' }, expect.anything())
+    // Наведённая карточка клавиш не берёт: ↵, ⌫, esc — тому, кто печатает; клик по ней — её ↵.
+    p.api.hover(block(1), p.el, 'input')
+    vi.advanceTimersByTime(HOVER_MS)
+    for (const k of ['Enter', 'Backspace', 'Escape', 'a']) expect(p.api.key(key(k))).toBe(false)
+    expect(p.state.target).not.toBeNull()
+    // ␣ на наведённом значке открывает его с клавишами, а не закрывает.
+    p.api.toggle(block(1), p.el, 'input')
+    expect(p.state.target).toMatchObject({ via: 'key', keys: true })
+    p.api.close()
     p.api.hover(block(1), p.el, 'bubble')
     vi.advanceTimersByTime(HOVER_MS)
-    expect(p.api.key(key('a'))).toBe(false)
-    expect(p.state.target).not.toBeNull()
-    expect(p.api.key(key('Enter'))).toBe(false)
+    p.api.activate()
+    expect(p.onAction).toHaveBeenLastCalledWith({ type: 'jump', id: 'blk-1', kind: 'block' }, expect.anything())
+    p.api.hover(block(1), p.el, 'bubble')
+    vi.advanceTimersByTime(HOVER_MS)
     // Строка ввода выключилась — её просмотр закрыт, пузыря — нет.
     p.api.closeFrom('input')
     expect(p.state.target).not.toBeNull()

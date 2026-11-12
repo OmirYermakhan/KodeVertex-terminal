@@ -205,7 +205,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
   const hasFocus = () => !!edRef.current && document.activeElement === edRef.current
 
-  /** Значок у курсора: выделенный, иначе слева или справа от курсора (без выделения текста). */
+  /**
+   * Значок для ␣: выделенный (первое ⌫) или стоящий сразу ПОСЛЕ курсора. Курсор после значка — там,
+   * где он оказывается после вставки, — ␣ печатает обычный пробел.
+   */
   const nearToken = useCallback((): Attachment | null => {
     const d = docRef.current
     if (selTok.current) {
@@ -215,7 +218,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     const el = edRef.current
     const s = el && document.activeElement === el ? getSelection(el) : null
     if (!s || s.start !== s.end) return null
-    return tokenAt(d, s.start - 1) ?? tokenAt(d, s.start)
+    return tokenAt(d, s.start)
   }, [])
   const syncNear = () => setNearTok(!!props.current.preview && claudeRef.current && !props.current.disabled && nearToken() !== null)
   /** Выделение модели: из DOM, если фокус в поле, иначе — сохранённый курсор (или конец). */

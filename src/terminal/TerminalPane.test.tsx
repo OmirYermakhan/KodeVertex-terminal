@@ -1022,7 +1022,7 @@ describe('TerminalPane', () => {
       expect(document.querySelector('.you .tk')!.textContent).toBe('npm test · 1')
     })
 
-    it('мини-просмотр: ␣ у значка блока — карточка, ⌫ убирает значок; наведение на значок в пузыре «Вы» — карточка, ↵ выбирает блок', async () => {
+    it('мини-просмотр: ␣ перед значком блока — карточка, ⌫ убирает значок; наведение на значок в пузыре «Вы» — карточка, клик выбирает блок', async () => {
       invoke.mockImplementation((cmd: string) => Promise.resolve(cmd === 'claude_start' ? 'c1' : undefined))
       const { term } = await mounted()
       osc133(term, 'C;' + b64('npm test'))
@@ -1032,6 +1032,9 @@ describe('TerminalPane', () => {
       act(() => runPaneCommand('p', 'blockPrev'))
       act(() => runPaneCommand('p', 'blockAttach'))
       act(() => runPaneCommand('p', 'blockNext'))
+      // Курсор после значка — ␣ печатает пробел; перед значком — просмотр.
+      expect(document.querySelector('.input .in-hint')!.textContent).not.toBe('␣ просмотр')
+      keyIn('ArrowLeft')
       expect(document.querySelector('.input .in-hint')!.textContent).toBe('␣ просмотр')
       keyIn(' ')
       const card = document.querySelector('.pv-float .pv')!
@@ -1057,7 +1060,8 @@ describe('TerminalPane', () => {
         await new Promise((r) => setTimeout(r, 300))
       })
       expect(document.querySelector('.pv-float .pv .ph .pn')!.textContent).toBe('npm test')
-      keyIn('Enter')
+      // Наведённая карточка клавиш не берёт; клик по ней — «↵ к блоку».
+      fireEvent.click(document.querySelector('.pv-float')!)
       expect(document.querySelector('.pv-float')).toBeNull()
       expect(document.querySelector('.blk.sel .cmd')!.textContent).toBe('npm test')
     })

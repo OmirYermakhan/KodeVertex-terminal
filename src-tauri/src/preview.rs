@@ -124,6 +124,17 @@ pub fn read_text(path: &Path, line: Option<u32>, scan_max: u64) -> TextPreview {
       Err(e) => TextPreview::Error { message: io_message(&e) },
     };
   }
+  if r.lines.is_empty() && from > 1 && r.count > 0 {
+    // Строка за концом файла: показываем его конец.
+    let tail = r.count.saturating_sub(WINDOW as u32 - 1).max(1);
+    return match fs::File::open(path) {
+      Ok(f) => {
+        let t = scan(Vec::new(), f, tail, scan_max);
+        TextPreview::Text { start: tail, lines: t.lines, total: Some(r.count), size }
+      }
+      Err(e) => TextPreview::Error { message: io_message(&e) },
+    };
+  }
   let start = if r.lines.is_empty() { 1 } else { from };
   TextPreview::Text { start, lines: r.lines, total: r.complete.then_some(r.count), size }
 }
@@ -429,16 +440,75 @@ mod cg {
 /// Редакторы, которые живут в терминале: без него их запускать бесполезно.
 const TERMINAL_EDITORS: [&str; 12] = ["vi", "vim", "nvim", "nano", "pico", "emacs", "micro", "hx", "helix", "kak", "joe", "ed"];
 
-/// Чем открыть файл «в редакторе»: $VISUAL (если это не терминальный редактор и он найден),
-/// иначе `code`. visual — значение $VISUAL, visual_path — путь к его программе, code — путь к `code`.
-pub fn pick_editor(visual: &str, visual_path: &str, code: &str) -> Option<(PathBuf, Vec<String>)> {
-  let mut words = visual.split_whitespace();
-  if let Some(prog) = words.next() {
+/// Слова строки как в sh: пробелы делят, '…' и "…" (с \-экранами) склеивают, \ экранирует символ.
+/// Ничего не подставляется и не исполняется. Незакрытая кавычка — до конца строки.
+pub fn shell_words(s: &str) -> Vec<String> {
+  let mut out = Vec::new();
+  let mut cur = String::new();
+  let mut has = false;
+  let mut it = s.chars();
+  while let Some(c) = it.next() {
+    match c {
+      '\'' => {
+        has = true;
+        for d in it.by_ref() {
+          if d == '\'' {
+            break;
+          }
+          cur.push(d);
+        }
+      }
+      '"' => {
+        has = true;
+        while let Some(d) = it.next() {
+          match d {
+            '"' => break,
+            '\\' => {
+              if let Some(e) = it.next() {
+                cur.push(e);
+              }
+            }
+            _ => cur.push(d),
+          }
+        }
+      }
+      '\\' => {
+        has = true;
+        if let Some(e) = it.next() {
+          cur.push(e);
+        }
+      }
+      c if c.is_whitespace() => {
+        if has {
+          out.push(std::mem::take(&mut cur));
+          has = false;
+        }
+      }
+      c => {
+        has = true;
+        cur.push(c);
+      }
+    }
+  }
+  if has {
+    out.push(cur);
+  }
+  out
+}
+
+/// Чем открыть файл «в редакторе»: $VISUAL (если это не терминальный редактор и программа нашлась),
+/// иначе `code`. resolve — путь к программе по имени (PATH login-оболочки), code — путь к `code`.
+pub fn pick_editor(visual: &str, resolve: impl Fn(&str) -> Option<String>, code: &str) -> Option<(PathBuf, Vec<String>)> {
+  let words = shell_words(visual);
+  if let Some((prog, rest)) = words.split_first() {
     let name = Path::new(prog).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     // `--wait` держит процесс до закрытия файла: нам ждать нечего.
-    let args: Vec<String> = words.filter(|w| *w != "--wait" && *w != "-w").map(String::from).collect();
-    if !TERMINAL_EDITORS.contains(&name.as_str()) && !visual_path.is_empty() {
-      return Some((PathBuf::from(visual_path), args));
+    let args: Vec<String> = rest.iter().filter(|w| *w != "--wait" && *w != "-w").cloned().collect();
+    if !TERMINAL_EDITORS.contains(&name.as_str()) {
+      let found = if prog.contains('/') { Path::new(prog).is_file().then(|| prog.clone()) } else { resolve(prog) };
+      if let Some(p) = found {
+        return Some((PathBuf::from(p), args));
+      }
     }
   }
   (!code.is_empty()).then(|| (PathBuf::from(code), Vec::new()))
@@ -455,21 +525,36 @@ pub fn editor_args(prog: &Path, mut args: Vec<String>, path: &str, line: Option<
   args
 }
 
-static EDITOR: OnceLock<(String, String, String)> = OnceLock::new();
+static EDITOR: OnceLock<(String, String)> = OnceLock::new();
 
-/// $VISUAL, путь к его программе и путь к `code` — из login-оболочки (из Dock их не видно).
-fn editor_env() -> &'static (String, String, String) {
+fn login_shell() -> String {
+  std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/zsh".into())
+}
+
+/// Последние n строк вывода login-оболочки (rc-файлы могут печатать лишнее выше).
+fn shell_tail(args: &[&str], n: usize) -> Vec<String> {
+  let out = run_with_timeout(Command::new(login_shell()).args(args), Duration::from_secs(5)).unwrap_or_default();
+  let text = String::from_utf8_lossy(&out);
+  let lines: Vec<&str> = text.lines().collect();
+  if lines.len() < n {
+    return vec![String::new(); n];
+  }
+  lines[lines.len() - n..].iter().map(|l| l.trim().to_string()).collect()
+}
+
+/// $VISUAL и путь к `code` — из login-оболочки (из Dock их не видно). Кэш на сеанс.
+fn editor_env() -> &'static (String, String) {
   EDITOR.get_or_init(|| {
-    let sh = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/zsh".into());
-    let script = r#"v="$VISUAL"; set -- $v; p=""; [ -n "$1" ] && p=$(command -v "$1" 2>/dev/null); c=$(command -v code 2>/dev/null); printf '\n%s\n%s\n%s\n' "$v" "$p" "$c""#;
-    let out = run_with_timeout(Command::new(sh).args(["-lic", script]), Duration::from_secs(5)).unwrap_or_default();
-    let text = String::from_utf8_lossy(&out);
-    let lines: Vec<&str> = text.lines().collect();
-    let n = lines.len();
-    let get = |i: usize| if n >= 3 { lines[n - 3 + i].trim().to_string() } else { String::new() };
-    let abs = |s: String| if s.starts_with('/') { s } else { String::new() };
-    (get(0), abs(get(1)), abs(get(2)))
+    let t = shell_tail(&["-lic", r#"printf '\n%s\n%s\n' "$VISUAL" "$(command -v code 2>/dev/null)""#], 2);
+    let code = if t[1].starts_with('/') { t[1].clone() } else { String::new() };
+    (t[0].clone(), code)
   })
+}
+
+/// Программа по имени из PATH login-оболочки; имя — позиционным аргументом, без подстановки в скрипт.
+fn resolve_in_shell(name: &str) -> Option<String> {
+  let t = shell_tail(&["-lic", r#"command -v -- "$1""#, "_", name], 1);
+  t[0].starts_with('/').then(|| t[0].clone())
 }
 
 fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<Vec<u8>> {
@@ -540,20 +625,24 @@ pub fn preview_open(path: String, how: String, line: Option<u32>) -> Result<(), 
     return Err("Файл не найден".to_string());
   }
   let editor = if how == "editor" {
-    let (v, vp, c) = editor_env();
-    pick_editor(v, vp, c)
+    let (v, c) = editor_env();
+    pick_editor(v, resolve_in_shell, c)
   } else {
     None
   };
   let (prog, args) = open_command(&how, &path, line, editor)?;
-  Command::new(prog)
+  let mut child = Command::new(prog)
     .args(args)
     .stdin(Stdio::null())
     .stdout(Stdio::null())
     .stderr(Stdio::null())
     .spawn()
-    .map(|_| ())
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+  // Дождаться в фоне: иначе процесс остаётся зомби до выхода из приложения.
+  std::thread::spawn(move || {
+    let _ = child.wait();
+  });
+  Ok(())
 }
 
 #[cfg(test)]
@@ -600,6 +689,9 @@ mod tests {
     assert_eq!(text(&read_text(&f, Some(2), SCAN_MAX)).0, 1);
     let (s, l, _) = text(&read_text(&f, Some(50), SCAN_MAX));
     assert_eq!((s, l.len()), (46, 5));
+    // Строка за концом файла — его конец.
+    let (s, l, t) = text(&read_text(&f, Some(500), SCAN_MAX));
+    assert_eq!((s, l.len(), l[6].as_str(), t), (44, 7, "line 50", Some(50)));
   }
 
   #[test]
@@ -751,19 +843,38 @@ mod tests {
   }
 
   #[test]
+  fn shell_words_like_sh() {
+    assert_eq!(shell_words("subl -w"), vec!["subl", "-w"]);
+    assert_eq!(shell_words(r#""/Applications/My Editor.app/bin/ed" --wait -n"#), vec!["/Applications/My Editor.app/bin/ed", "--wait", "-n"]);
+    assert_eq!(shell_words(r#"'a b' c\ d "e\"f" $(rm -rf x)"#), vec!["a b", "c d", "e\"f", "$(rm", "-rf", "x)"]);
+    assert!(shell_words("   ").is_empty());
+    assert_eq!(shell_words("''"), vec![""]);
+  }
+
+  #[test]
   fn editor_choice() {
-    // GUI-редактор из $VISUAL (без --wait), строка — по правилам редактора.
-    let (p, a) = pick_editor("code --wait", "/usr/local/bin/code", "").unwrap();
+    let none = |_: &str| None::<String>;
+    let found = |n: &str| Some(format!("/opt/bin/{n}"));
+    // GUI-редактор из $VISUAL (без --wait/-w), строка — по правилам редактора.
+    let (p, a) = pick_editor("code --wait", found, "").unwrap();
+    assert_eq!(p, PathBuf::from("/opt/bin/code"));
     assert_eq!(editor_args(&p, a, "/w/Form.tsx", Some(42)), vec!["-g", "/w/Form.tsx:42"]);
-    let (p, a) = pick_editor("subl -n", "/opt/bin/subl", "/usr/local/bin/code").unwrap();
+    let (p, a) = pick_editor("subl -w -n", found, "/usr/local/bin/code").unwrap();
     assert_eq!(p, PathBuf::from("/opt/bin/subl"));
     assert_eq!(editor_args(&p, a, "/w/a.rs", Some(3)), vec!["-n", "/w/a.rs:3"]);
-    // Терминальный редактор пропускаем — `code`.
-    let (p, a) = pick_editor("nvim", "/usr/bin/nvim", "/usr/local/bin/code").unwrap();
+    // Абсолютный путь с пробелами в кавычках — без поиска в PATH.
+    let d = tempfile::tempdir().unwrap();
+    let ed = d.path().join("My Editor");
+    fs::write(&ed, "").unwrap();
+    let (p, a) = pick_editor(&format!("\"{}\" --wait", ed.display()), none, "").unwrap();
+    assert_eq!((p, a), (ed.clone(), Vec::<String>::new()));
+    // Терминальный редактор и ненайденный — `code`.
+    let (p, _) = pick_editor("nvim", found, "/usr/local/bin/code").unwrap();
     assert_eq!(p, PathBuf::from("/usr/local/bin/code"));
-    assert_eq!(editor_args(&p, a, "/w/a.rs", None), vec!["/w/a.rs"]);
-    assert!(pick_editor("", "", "").is_none());
-    assert!(pick_editor("vim", "/usr/bin/vim", "").is_none());
+    let (p, _) = pick_editor("nope", none, "/usr/local/bin/code").unwrap();
+    assert_eq!(p, PathBuf::from("/usr/local/bin/code"));
+    assert!(pick_editor("", found, "").is_none());
+    assert!(pick_editor("vim", found, "").is_none());
     // Не найден — `open -t`.
     assert_eq!(open_command("editor", "/w/a", None, None).unwrap(), (PathBuf::from("/usr/bin/open"), vec!["-t".into(), "/w/a".into()]));
     assert_eq!(open_command("reveal", "/w/d", None, None).unwrap().1, vec!["-R", "/w/d"]);

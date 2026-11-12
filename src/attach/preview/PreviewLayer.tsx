@@ -71,6 +71,7 @@ export function PreviewLayer({ state, api, container, cwd, home }: PreviewLayerP
           onMouseLeave={api.leaveCard}
           // Клик по карточке не уводит фокус из строки ввода.
           onMouseDown={(e) => e.preventDefault()}
+          onClick={api.activate}
           role="dialog"
           aria-label={`Просмотр: ${target.token.label}`}
         >
@@ -84,13 +85,13 @@ export function PreviewLayer({ state, api, container, cwd, home }: PreviewLayerP
           />
         </div>
       )}
-      {state.overlay && <FullImage path={state.overlay.path} label={state.overlay.label} onClose={api.closeOverlay} />}
+      {state.overlay && <FullImage path={state.overlay.path} label={state.overlay.label} onClose={api.closeOverlay} container={container} />}
     </>
   )
 }
 
 /** Картинка целиком (уменьшенная копия из Rust) поверх панели; esc, ↵, ␣ или клик — закрыть. */
-function FullImage({ path, label, onClose }: { path: string; label: string; onClose(): void }) {
+function FullImage({ path, label, onClose, container }: { path: string; label: string; onClose(): void; container: RefObject<HTMLElement | null> }) {
   const [img, setImg] = useState<ImageData | null>(null)
   const [err, setErr] = useState<string | null>(null)
   useEffect(() => {
@@ -104,6 +105,9 @@ function FullImage({ path, label, onClose }: { path: string; label: string; onCl
   }, [path])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Только пока фокус в этой панели и не в терминале: клавиши идущей команды не трогаем.
+      const a = document.activeElement
+      if (!a || !container.current?.contains(a) || a.closest('.xterm, .live-host')) return
       if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') {
         e.preventDefault()
         e.stopPropagation()
@@ -112,7 +116,7 @@ function FullImage({ path, label, onClose }: { path: string; label: string; onCl
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  }, [onClose, container])
   return (
     <div className="pv-full" role="dialog" aria-label={label} onMouseDown={(e) => e.preventDefault()} onClick={onClose}>
       {img && <img src={img.src} alt={label} draggable={false} />}
