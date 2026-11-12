@@ -77,6 +77,18 @@ const components: Components = {
     </a>
   ),
   pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+  // Картинки не загружаются: запрос по URL из ответа — канал утечки данных. Вместо картинки — ссылка.
+  img: ({ src, alt }) => {
+    const href = typeof src === 'string' ? src : undefined
+    const label = alt ? `Изображение: ${alt}` : 'Изображение'
+    return href && SAFE_URL.test(href) ? (
+      <a href={href} className="md-img" onClick={(e) => onLinkClick(e, href)} onAuxClick={(e) => e.preventDefault()}>
+        {label}
+      </a>
+    ) : (
+      <span className="md-img">{label}</span>
+    )
+  },
 }
 
 const REMARK = [remarkGfm]
