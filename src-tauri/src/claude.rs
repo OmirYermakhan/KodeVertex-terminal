@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
@@ -22,6 +23,10 @@ const DRAIN_GRACE: Duration = Duration::from_millis(500);
 const WAIT_POLL: Duration = Duration::from_millis(20);
 
 const NOT_FOUND: &str = "Claude Code не найден. Установите: npm i -g @anthropic-ai/claude-code";
+/// Сколько ждать login-оболочку, которая ищет `claude` в PATH пользователя.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Сколько при выходе из приложения ждать, пока процессы `claude` завершатся по SIGTERM.
+const SHUTDOWN_GRACE: Duration = Duration::from_millis(1000);
 
 struct Session {
   child: Arc<Mutex<Child>>,
@@ -30,7 +35,7 @@ struct Session {
   stop_at: Arc<Mutex<Option<Instant>>>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ClaudeManager {
   sessions: Arc<Mutex<HashMap<String, Session>>>,
 }
@@ -80,9 +85,13 @@ impl ClaudeManager {
         cmd.env_remove(k);
       }
     }
-    if cwd.is_dir() {
-      cmd.current_dir(cwd);
+    // С bypassPermissions запуск «где-то ещё» (например, в `/` у приложения из Dock) недопустим.
+    if !cwd.is_dir() {
+      return Err(format!("Каталог {} не существует", cwd.display()));
     }
+    cmd.current_dir(cwd);
+    // Своя группа процессов: сигналы остановки и прерывания доходят и до инструментов claude.
+    cmd.process_group(0);
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = cmd.spawn().map_err(|e| format!("не удалось запустить {}: {e}", program.display()))?;
@@ -144,11 +153,17 @@ impl ClaudeManager {
         {
           let mut c = lock(&child);
           match c.try_wait() {
-            Ok(Some(status)) => break status.code(),
+            Ok(Some(status)) => {
+              // Остановленная сессия: потомки (инструменты) не должны пережить claude.
+              if lock(&stop_at).is_some() {
+                kill_group(c.id(), libc::SIGKILL);
+              }
+              break status.code();
+            }
             Ok(None) => {
               let overdue = lock(&stop_at).is_some_and(|t| t.elapsed() >= KILL_GRACE);
               if overdue {
-                let _ = c.kill();
+                kill_group(c.id(), libc::SIGKILL);
               }
             }
             Err(_) => break None,
@@ -181,7 +196,7 @@ impl ClaudeManager {
     w.write_all(line.as_bytes()).and_then(|_| w.flush()).map_err(|e| e.to_string())
   }
 
-  /// SIGINT процессу `claude` (прерывает текущий ход).
+  /// SIGINT группе процесса `claude` (прерывает текущий ход и запущенные им команды).
   pub fn interrupt(&self, id: &str) -> Result<(), String> {
     let child = lock(&self.sessions).get(id).map(|s| s.child.clone()).ok_or_else(|| no_session(id))?;
     let c = lock(&child);
@@ -199,14 +214,39 @@ impl ClaudeManager {
     *lock(&stop_at) = Some(Instant::now());
     signal(&c, libc::SIGTERM).or(Ok(()))
   }
+
+  /// Выход из приложения: всем сессиям SIGTERM, через `SHUTDOWN_GRACE` оставшимся — SIGKILL (вместе с потомками).
+  pub fn stop_all(&self) {
+    let ids: Vec<String> = lock(&self.sessions).keys().cloned().collect();
+    for id in &ids {
+      let _ = self.stop(id);
+    }
+    // Поток ожидания убирает сессию из таблицы, когда процесс завершился.
+    let deadline = Instant::now() + SHUTDOWN_GRACE;
+    while !lock(&self.sessions).is_empty() && Instant::now() < deadline {
+      std::thread::sleep(WAIT_POLL);
+    }
+    let left: Vec<_> = lock(&self.sessions).values().map(|s| s.child.clone()).collect();
+    for child in left {
+      let mut c = lock(&child);
+      // Под замком `child`: процесс ещё не подобран потоком ожидания, id группы не переиспользован.
+      kill_group(c.id(), libc::SIGKILL);
+      let _ = c.try_wait();
+    }
+  }
 }
 
+/// Сигнал группе процесса `claude` (группу он возглавляет: `process_group(0)`).
 fn signal(child: &Child, sig: libc::c_int) -> Result<(), String> {
-  if unsafe { libc::kill(child.id() as libc::pid_t, sig) } == 0 {
+  if unsafe { libc::killpg(child.id() as libc::pid_t, sig) } == 0 {
     Ok(())
   } else {
     Err(std::io::Error::last_os_error().to_string())
   }
+}
+
+fn kill_group(pid: u32, sig: libc::c_int) {
+  unsafe { libc::killpg(pid as libc::pid_t, sig) };
 }
 
 fn spawn_thread(name: String, f: impl FnOnce() + Send + 'static) -> Result<(), String> {
@@ -222,22 +262,55 @@ pub fn resolve_claude() -> Result<PathBuf, String> {
     return Ok(p.clone());
   }
   let sh = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/zsh".into());
-  let out = Command::new(sh)
-    .args(["-lic", "whence -p claude"])
+  let path = find_in_login_shell(Path::new(&sh), RESOLVE_TIMEOUT)?;
+  Ok(CLAUDE_PATH.get_or_init(|| path).clone())
+}
+
+/// `command -v claude` в login-оболочке `sh` (POSIX: работает и не в zsh). Алиас снимаем:
+/// нужен путь к файлу. Оболочка, не ответившая за `timeout`, убивается вместе с потомками.
+fn find_in_login_shell(sh: &Path, timeout: Duration) -> Result<PathBuf, String> {
+  let mut child = Command::new(sh)
+    .args(["-lic", "unalias claude 2>/dev/null; command -v claude"])
     .stdin(Stdio::null())
+    .stdout(Stdio::piped())
     .stderr(Stdio::null())
-    .output()
+    .process_group(0)
+    .spawn()
     .map_err(|_| NOT_FOUND.to_string())?;
-  let stdout = String::from_utf8_lossy(&out.stdout);
+  let mut stdout = child.stdout.take().ok_or_else(|| NOT_FOUND.to_string())?;
+  let (tx, rx) = mpsc::channel();
+  spawn_thread("claude-resolve".into(), move || {
+    let mut buf = Vec::new();
+    let _ = stdout.read_to_end(&mut buf);
+    let _ = tx.send(buf);
+  })?;
+  let deadline = Instant::now() + timeout;
+  loop {
+    match child.try_wait() {
+      Ok(Some(_)) => break,
+      Ok(None) if Instant::now() < deadline => std::thread::sleep(WAIT_POLL),
+      _ => {
+        kill_group(child.id(), libc::SIGKILL);
+        let _ = child.wait();
+        return Err(format!(
+          "Не удалось найти Claude Code: оболочка {} не ответила за {} с (проверьте ~/.zshrc)",
+          sh.display(),
+          timeout.as_secs()
+        ));
+      }
+    }
+  }
+  // Потомок оболочки мог унаследовать stdout — не ждём его дольше короткого окна.
+  let out = rx.recv_timeout(DRAIN_GRACE).unwrap_or_default();
+  let stdout = String::from_utf8_lossy(&out);
   // rc-файлы могут печатать лишнее: берём последнюю строку, которая — существующий абсолютный путь.
-  let path = stdout
+  stdout
     .lines()
     .rev()
     .map(str::trim)
     .find(|l| l.starts_with('/') && Path::new(l).is_file())
     .map(PathBuf::from)
-    .ok_or_else(|| NOT_FOUND.to_string())?;
-  Ok(CLAUDE_PATH.get_or_init(|| path).clone())
+    .ok_or_else(|| NOT_FOUND.to_string())
 }
 
 #[derive(Serialize, Clone)]
@@ -270,7 +343,9 @@ pub async fn claude_start(
 
 #[tauri::command]
 pub async fn claude_send(manager: State<'_, ClaudeManager>, id: String, text: String) -> Result<(), String> {
-  manager.send(&id, &text)
+  // Запись в пайп может блокироваться (claude не читает stdin) — не держим async-поток.
+  let m = manager.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || m.send(&id, &text)).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -419,6 +494,121 @@ mod tests {
     m.interrupt(&id).unwrap();
     assert!(lrx.recv_timeout(WAIT).unwrap().contains("int"));
     assert_eq!(erx.recv_timeout(WAIT).unwrap().0, Some(0));
+  }
+
+  #[test]
+  fn missing_cwd_is_error_not_fallback() {
+    let m = ClaudeManager::default();
+    let err = m.start(&fake(), Path::new("/nonexistent/kv-dir"), None, |_| {}, |_, _| {}).unwrap_err();
+    assert!(err.contains("не существует"), "{err}");
+    assert!(lock(&m.sessions).is_empty());
+  }
+
+  #[test]
+  fn starts_in_given_cwd() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_d, p) = script("printf '{\"cwd\":\"%s\"}\\n' \"$PWD\"");
+    let m = ClaudeManager::default();
+    let (ltx, lrx) = mpsc::channel();
+    m.start(&p, dir.path(), None, move |l| {
+      let _ = ltx.send(l);
+    }, |_, _| {})
+    .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&lrx.recv_timeout(WAIT).unwrap()).unwrap();
+    let want = dir.path().canonicalize().unwrap();
+    assert_eq!(Path::new(v["cwd"].as_str().unwrap()).canonicalize().unwrap(), want);
+  }
+
+  fn alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+  }
+
+  fn wait_dead(pid: u32) -> bool {
+    let deadline = std::time::Instant::now() + WAIT;
+    while alive(pid) && std::time::Instant::now() < deadline {
+      std::thread::sleep(Duration::from_millis(20));
+    }
+    !alive(pid)
+  }
+
+  struct KillOnDrop(u32);
+  impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+      unsafe { libc::kill(self.0 as libc::pid_t, libc::SIGKILL) };
+    }
+  }
+
+  /// Скрипт запускает «инструмент» (sleep) в фоне и сообщает его pid.
+  const WITH_TOOL: &str = "sleep 300 &\necho \"{\\\"tool\\\":$!}\"\nwhile true; do sleep 0.05; done";
+
+  fn tool_pid(lrx: &mpsc::Receiver<String>) -> u32 {
+    let v: serde_json::Value = serde_json::from_str(&lrx.recv_timeout(WAIT).unwrap()).unwrap();
+    v["tool"].as_u64().unwrap() as u32
+  }
+
+  #[test]
+  fn stop_kills_tool_children() {
+    let (_d, p) = script(WITH_TOOL);
+    let m = ClaudeManager::default();
+    let (id, lrx, erx) = start(&m, &p).unwrap();
+    let tool = tool_pid(&lrx);
+    let _g = KillOnDrop(tool);
+    assert!(alive(tool));
+    m.stop(&id).unwrap();
+    erx.recv_timeout(WAIT).expect("on_exit");
+    assert!(wait_dead(tool), "инструмент {tool} пережил остановку claude");
+  }
+
+  #[test]
+  fn interrupt_reaches_tool_children() {
+    // Инструмент на переднем плане ловит SIGINT и сообщает об этом.
+    let (_d, p) = script(
+      "echo '{\"ready\":1}'\nsh -c 'trap \"echo {\\\"tool\\\":\\\"int\\\"}; exit 0\" INT; while :; do sleep 0.05; done'\nexit 0",
+    );
+    let m = ClaudeManager::default();
+    let (id, lrx, _erx) = start(&m, &p).unwrap();
+    take(&lrx, 1);
+    std::thread::sleep(Duration::from_millis(200));
+    m.interrupt(&id).unwrap();
+    let line = lrx.recv_timeout(WAIT).expect("инструмент не получил SIGINT");
+    assert!(line.contains("int"), "{line}");
+  }
+
+  #[test]
+  fn stop_all_kills_sessions_and_children() {
+    // claude, игнорирующий SIGTERM: stop_all добивает его SIGKILL вместе с инструментом.
+    let (_d, p) = script(&format!("trap '' TERM\n{WITH_TOOL}"));
+    let m = ClaudeManager::default();
+    let (_id, lrx, erx) = start(&m, &p).unwrap();
+    let tool = tool_pid(&lrx);
+    let _g = KillOnDrop(tool);
+    let t = std::time::Instant::now();
+    m.stop_all();
+    assert!(t.elapsed() < Duration::from_secs(2), "stop_all ждал слишком долго");
+    erx.recv_timeout(WAIT).expect("on_exit");
+    assert!(wait_dead(tool), "инструмент {tool} пережил выход приложения");
+  }
+
+  #[test]
+  fn resolve_finds_claude_via_command_v() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let (_d, claude) = script("true");
+    std::fs::copy(&claude, bin.join("claude")).unwrap();
+    // Login-оболочка — sh: подменяем её скриптом, который выставляет PATH и исполняет переданную команду.
+    let (_s, sh) = script(&format!("export PATH='{}':\"$PATH\"\necho мусор из rc\nalias claude=echo 2>/dev/null\nexec /bin/sh -c \"$2\"", bin.display()));
+    let found = find_in_login_shell(&sh, Duration::from_secs(5)).unwrap();
+    assert_eq!(found, bin.join("claude"));
+  }
+
+  #[test]
+  fn resolve_times_out_on_hanging_shell() {
+    let (_s, sh) = script("sleep 300");
+    let t = std::time::Instant::now();
+    let err = find_in_login_shell(&sh, Duration::from_millis(300)).unwrap_err();
+    assert!(t.elapsed() < Duration::from_secs(3));
+    assert!(err.contains("не ответила"), "{err}");
   }
 
   #[test]

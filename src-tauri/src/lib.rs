@@ -8,7 +8,7 @@ mod settings;
 mod shell;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Emitter, Wry};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, Wry};
 
 const SETTINGS_MENU_ID: &str = "settings";
 const SETTINGS_EVENT: &str = "menu://settings";
@@ -87,8 +87,14 @@ pub fn run() {
       }
       Ok(())
     })
-    .run(tauri::generate_context!())
-    .expect("error while building tauri application");
+    .build(tauri::generate_context!())
+    .expect("error while building tauri application")
+    .run(|app, event| {
+      // ⌘Q: процессы claude (и их инструменты) не должны доигрывать ход без окна.
+      if let RunEvent::Exit = event {
+        app.state::<claude::ClaudeManager>().stop_all();
+      }
+    });
 }
 
 #[cfg(test)]
