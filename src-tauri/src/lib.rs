@@ -1,3 +1,4 @@
+mod claude;
 mod fonts;
 mod fs_complete;
 mod git;
@@ -59,9 +60,14 @@ pub fn run() {
       pty::pty_spawn,
       pty::pty_write,
       pty::pty_resize,
-      pty::pty_kill
+      pty::pty_kill,
+      claude::claude_start,
+      claude::claude_send,
+      claude::claude_interrupt,
+      claude::claude_stop
     ])
     .manage(pty::PtyManager::default())
+    .manage(claude::ClaudeManager::default())
     .menu(build_menu)
     .on_menu_event(|app, event| {
       if event.id().as_ref() == SETTINGS_MENU_ID {

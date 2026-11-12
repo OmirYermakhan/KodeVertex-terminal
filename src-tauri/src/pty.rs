@@ -331,7 +331,7 @@ pub fn pty_kill(manager: State<'_, PtyManager>, id: String) -> Result<(), String
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
   use super::*;
   use std::sync::mpsc;
   use std::sync::Condvar;
@@ -435,7 +435,7 @@ mod tests {
   }
 
   /// Сериализует спавн и тесты, меняющие окружение процесса.
-  static ENV_LOCK: Mutex<()> = Mutex::new(());
+  pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
 
   /// Запускает zsh и ждёт первого приглашения (OSC 7 из precmd).
   fn start(m: &PtyManager, o: SpawnOpts) -> (String, Output, mpsc::Receiver<Option<u32>>) {
