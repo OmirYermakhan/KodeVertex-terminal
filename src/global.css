@@ -211,6 +211,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .card.fable .who { color: #e8c46a; }
 .card.cerr { border-color: var(--del); }
 .card.cerr .who { color: var(--del); }
+.cl-note { margin: 0 0 10px; max-width: 76ch; font-family: var(--font-code); font-size: 11px; line-height: normal; color: var(--muted); }
 .cerr-text { margin: 0; font-size: calc(var(--size-text) - 1.5px); line-height: var(--lh-text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .act { box-sizing: border-box; border: 1px dashed var(--rule); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-family: var(--font-code); font-size: calc(var(--size-code) - 0.5px); line-height: normal; color: var(--muted); max-width: 76ch; overflow-wrap: anywhere; }
 .act .who { color: var(--info); }

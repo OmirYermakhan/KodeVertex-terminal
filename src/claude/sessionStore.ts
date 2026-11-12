@@ -14,8 +14,8 @@ export interface PaneClaude {
   /** id процесса на стороне Rust; null — процесс не запущен (ещё или уже). */
   procId: string | null
   /**
-   * Каталог первого запуска: сессии Claude привязаны к каталогу проекта, поэтому перезапуск
-   * (с --resume) — там же, даже если панель с тех пор сделала cd.
+   * Каталог сессии: сессии Claude привязаны к каталогу проекта. ⌘↵ из другого каталога панели
+   * начинает новую сессию там (старый процесс останавливается, без --resume).
    */
   cwd: string | null
 }
@@ -56,6 +56,7 @@ function failed(s: ClaudeState, text: string, now: number): ClaudeState {
   return {
     ...s,
     busy: false,
+    pending: 0,
     currentAgentId: null,
     items: [...s.items, { type: 'error', text }],
     agents: s.agents.map((a) =>
@@ -69,6 +70,7 @@ function stopped(s: ClaudeState, now: number): ClaudeState {
   return {
     ...s,
     busy: false,
+    pending: 0,
     currentAgentId: null,
     agents: s.agents.map((a) => (a.status === 'running' ? { ...a, status: 'done', now: 'Остановлено', endedAt: now } : a)),
   }
@@ -80,13 +82,17 @@ export function exitMessage(e: ClaudeExit): string {
   return tail ? `${head}:\n${tail}` : head
 }
 
-function start(paneId: string, paneCwd: string | undefined): Proc {
+/** Процесс claude вышел сам с кодом 0 посреди хода (без ⌃C). */
+export const EXITED_MID_TURN = 'Claude завершился, не закончив ответ'
+/** ⌘↵ раньше, чем панель узнала свой каталог (OSC 7). */
+export const NO_CWD = 'Каталог панели ещё неизвестен — повторите через секунду'
+
+function start(paneId: string): Proc {
   const proc: Proc = { ready: Promise.resolve(null), id: null, interrupted: false, chain: Promise.resolve() }
   const alive = () => procs.get(paneId) === proc
   const prev = get(paneId)
   const resume = prev.state.sessionId
-  const cwd = prev.cwd ?? paneCwd ?? null
-  if (prev.cwd === null && cwd !== null) patch(paneId, (p) => ({ ...p, cwd }))
+  const cwd = prev.cwd
   let gotLine = false
   const onLine = new Channel<string>((line) => {
     gotLine = true
@@ -97,7 +103,14 @@ function start(paneId: string, paneCwd: string | undefined): Proc {
     procs.delete(paneId)
     const ok = e.code === 0 || proc.interrupted
     patch(paneId, (p) => {
-      let state = ok ? stopped(p.state, Date.now()) : failed(p.state, exitMessage(e), Date.now())
+      const now = Date.now()
+      let state = proc.interrupted
+        ? stopped(p.state, now)
+        : e.code === 0
+          ? p.state.busy
+            ? failed(p.state, EXITED_MID_TURN, now)
+            : p.state
+          : failed(p.state, exitMessage(e), now)
       // --resume упал, не сказав ни строки (сессии нет или она из другого каталога) — дальше начинаем
       // новую сессию, а не повторяем тот же resume на каждый ⌘↵.
       if (!ok && resume !== null && !gotLine) state = { ...state, sessionId: null }
@@ -126,13 +139,36 @@ function start(paneId: string, paneCwd: string | undefined): Proc {
   return proc
 }
 
+/** Остановить процесс панели (его события дальше игнорируются). */
+function dropProc(paneId: string): void {
+  const proc = procs.get(paneId)
+  procs.delete(paneId)
+  if (proc?.id) invoke('claude_stop', { id: proc.id }).catch(() => {})
+}
+
 /**
  * ⌘↵: вопрос в Claude-сессию панели. Карточка «Вы» — сразу; процесс запускается при первом
- * сообщении (и заново после выхода — с `--resume`, если id сессии известен).
+ * сообщении (и заново после выхода — с `--resume`, если id сессии известен). Если панель
+ * с тех пор перешла в другой каталог — новая сессия там; начало новой сессии отмечается в ленте.
  */
-export async function askClaude(paneId: string, cwd: string | undefined, text: string): Promise<void> {
+export async function askClaude(paneId: string, paneCwd: string | undefined, text: string): Promise<void> {
+  const cur = get(paneId)
+  const cwd = paneCwd ?? cur.cwd
+  if (cwd === null) {
+    patchState(paneId, (s) => failed(userSent(s, text, Date.now()), NO_CWD, Date.now()))
+    return
+  }
+  if (cur.cwd !== null && cwd !== cur.cwd) {
+    dropProc(paneId)
+    patchState(paneId, (s) => ({ ...stopped(s, Date.now()), sessionId: null, contextUsed: 0 }))
+  }
+  if (cur.cwd !== cwd) patch(paneId, (p) => ({ ...p, cwd }))
+  // Новая сессия (не продолжение): в ленте — строка с её каталогом.
+  if (!procs.has(paneId) && get(paneId).state.sessionId === null) {
+    patchState(paneId, (s) => ({ ...s, items: [...s.items, { type: 'session', cwd }] }))
+  }
   patchState(paneId, (s) => userSent(s, text, Date.now()))
-  const proc = procs.get(paneId) ?? start(paneId, cwd)
+  const proc = procs.get(paneId) ?? start(paneId)
   proc.interrupted = false
   proc.chain = proc.chain.then(async () => {
     const id = await proc.ready
@@ -163,9 +199,7 @@ export function interruptClaude(paneId: string): boolean {
 
 /** Панель закрыта: процесс остановить, состояние забыть. */
 export function stopClaude(paneId: string): void {
-  const proc = procs.get(paneId)
-  procs.delete(paneId)
-  if (proc?.id) invoke('claude_stop', { id: proc.id }).catch(() => {})
+  dropProc(paneId)
   useClaudeSessions.setState((st) => {
     if (!(paneId in st.sessions)) return st
     const sessions = { ...st.sessions }

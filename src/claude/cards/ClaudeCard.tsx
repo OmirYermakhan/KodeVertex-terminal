@@ -4,6 +4,7 @@ import type { Agent } from '../reducer'
 import { ActionCard } from './ActionCard'
 import { AssistantCard } from './AssistantCard'
 import { ErrorCard } from './ErrorCard'
+import { SessionNote } from './SessionNote'
 import { SummaryCard } from './SummaryCard'
 import { UserBubble } from './UserBubble'
 
@@ -24,5 +25,7 @@ export const ClaudeCard = memo(function ClaudeCard({ item, agent }: { item: Clau
       return <SummaryCard id={item.id} text={it.text} durationMs={it.durationMs} costUsd={it.costUsd} isError={it.isError} />
     case 'error':
       return <ErrorCard id={item.id} text={it.text} />
+    case 'session':
+      return <SessionNote id={item.id} cwd={it.cwd} />
   }
 })

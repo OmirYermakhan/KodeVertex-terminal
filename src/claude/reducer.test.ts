@@ -172,3 +172,32 @@ describe('actionTitle / nowLabel', () => {
     expect(nowLabel('Grep', { pattern: 'foo' })).toBe('Ищет foo')
   })
 })
+
+describe('очередь сообщений', () => {
+  const result = (o: object = {}) => ({ type: 'result', result: 'ok', duration_ms: 1, total_cost_usd: 0, ...o })
+
+  it('два сообщения подряд: первый result не снимает busy и не завершает главного', () => {
+    let s = userSent(userSent(initialClaude(), 'a', 0), 'b', 0)
+    expect(s.pending).toBe(2)
+    s = reduceClaude(s, result(), 1)
+    expect(s.busy).toBe(true)
+    expect(s.agents.find((a) => a.id === 'main')!.status).toBe('running')
+    s = reduceClaude(s, result(), 2)
+    expect(s.busy).toBe(false)
+    expect(s.pending).toBe(0)
+    expect(s.agents.find((a) => a.id === 'main')!.status).toBe('done')
+    // Лишний result не уводит счётчик в минус.
+    expect(reduceClaude(s, result(), 3).pending).toBe(0)
+  })
+
+  it('result закрывает незавершённые действия и субагентов хода', () => {
+    let s = userSent(initialClaude(), 'a', 0)
+    s = run(s, [assistant([toolUse('t1', 'Task', { description: 'Поиск' })]), assistant([toolUse('r1', 'Read', { file_path: '/x' })], 't1')])
+    s = reduceClaude(s, result({ is_error: true }), 5)
+    expect(s.items.filter((i) => i.type === 'action').map((i) => (i as { status: string }).status)).toEqual(['error', 'error'])
+    expect(s.agents.find((a) => a.id === 't1')).toMatchObject({ status: 'error', endedAt: 5 })
+    s = run(userSent(s, 'b', 6), [assistant([toolUse('t2', 'Task', { description: 'Ещё' })]), result()])
+    expect(s.agents.find((a) => a.id === 't2')!.status).toBe('done')
+    expect(s.items.filter((i) => i.type === 'action').every((i) => (i as { status: string }).status !== 'running')).toBe(true)
+  })
+})

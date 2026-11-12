@@ -20,6 +20,8 @@ export type FeedClaudeItem =
     }
   | { type: 'summary'; text: string; durationMs: number; costUsd: number; isError: boolean }
   | { type: 'error'; text: string }
+  /** Начало новой сессии Claude: каталог, в котором она работает. */
+  | { type: 'session'; cwd: string }
 
 export interface Agent {
   id: string // 'main' | toolUseId
@@ -43,6 +45,8 @@ export interface ClaudeState {
   contextMax: number
   costUsd: number
   busy: boolean
+  /** Отправленные и ещё не завершённые ходы (сообщения в очереди claude); busy = pending > 0. */
+  pending: number
   items: FeedClaudeItem[]
   agents: Agent[]
   /** агент, чьё событие пришло последним; null, пока ничего не идёт */
@@ -82,6 +86,7 @@ export function initialClaude(): ClaudeState {
     contextMax: DEFAULT_CONTEXT_MAX,
     costUsd: 0,
     busy: false,
+    pending: 0,
     items: [],
     agents: [{ ...newAgent(MAIN, null, 'Главный', 0), status: 'waiting' }],
     currentAgentId: null,
@@ -104,6 +109,7 @@ export function userSent(s: ClaudeState, text: string, now: number): ClaudeState
   const next: ClaudeState = {
     ...s,
     busy: true,
+    pending: s.pending + 1,
     currentAgentId: MAIN,
     items: [...s.items, { type: 'user', text }],
   }
@@ -300,16 +306,30 @@ function onResult(s: ClaudeState, ev: Rec, now: number): ClaudeState {
     it.type === 'assistant' && it.streaming ? { ...it, streaming: false } : it,
   )
   items.push({ type: 'summary', text: strOr(ev.result), durationMs: num(ev.duration_ms), costUsd: cost, isError })
-  const next: ClaudeState = {
+  // Ход закончен: его незавершённые действия и субагенты больше не идут.
+  const closed: FeedClaudeItem[] = items.map((it) =>
+    it.type === 'action' && it.status === 'running' ? { ...it, status: isError ? 'error' : 'done' } : it,
+  )
+  const pending = Math.max(0, s.pending - 1)
+  let next: ClaudeState = {
     ...s,
-    items,
-    busy: false,
+    items: closed,
+    pending,
+    busy: pending > 0,
     costUsd: cost,
     contextMax,
     sessionId: strOr(ev.session_id) || s.sessionId,
-    currentAgentId: null,
+    currentAgentId: pending > 0 ? MAIN : null,
+    agents: s.agents.map((a) =>
+      a.id !== MAIN && (a.status === 'running' || a.status === 'waiting')
+        ? { ...a, status: isError ? 'error' : 'done', endedAt: now, now: isError ? 'Ошибка' : 'Готово' }
+        : a,
+    ),
   }
-  return patchAgent(next, MAIN, { status: isError ? 'error' : 'done', endedAt: now, now: isError ? 'Ошибка' : 'Готово' })
+  // В очереди ещё сообщение — главный агент продолжает (следующий ход), «закончил» не наступает.
+  if (pending > 0) return patchAgent(next, MAIN, { status: 'running', now: 'Думает' })
+  next = patchAgent(next, MAIN, { status: isError ? 'error' : 'done', endedAt: now, now: isError ? 'Ошибка' : 'Готово' })
+  return next
 }
 
 export function reduceClaude(s: ClaudeState, line: string | object, now: number): ClaudeState {
