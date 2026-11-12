@@ -299,13 +299,13 @@ export function TerminalPane(p: TerminalPaneProps) {
         setAwaitingShell(false)
         return true
       }
+      // Приглашение во время команды (ssh на хост со своей интеграцией) — не наше: блок не трогаем.
+      if (ev.t === 'prompt' && runningRef.current) return true
       setContinuation(false)
       setAwaitingShell(false)
       if (ev.t === 'prompt') {
-        // Новое приглашение посреди команды (`exec zsh`, `omz reload`): команда закончилась без D.
-        if (runningRef.current) endBlock(null)
         // Строка принята, но команда не запустилась (ошибка разбора): её вывод — блоком.
-        else if (acceptedRef.current !== null) flushStray(acceptedRef.current)
+        if (acceptedRef.current !== null) flushStray(acceptedRef.current)
         acceptedRef.current = null
         return true
       }

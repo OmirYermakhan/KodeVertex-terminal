@@ -850,16 +850,21 @@ describe('TerminalPane', () => {
       expect(slot.style.height).toBe(`${Math.ceil(3 * cell)}px`)
     })
 
-    it('новое приглашение посреди команды (exec zsh) завершает блок без кода', async () => {
-      const { term } = await mounted()
-      osc133(term, 'C;' + b64('exec zsh'))
-      expect(textarea()).toBeDisabled()
-      term.lines = ['']
+    it('приглашение во время команды (ssh с интеграцией) не закрывает блок; OSC 7 после него не принимается', async () => {
+      const onCwd = vi.fn()
+      render(<TerminalPane {...props()} onCwd={onCwd} focused initialCwd="/w" />)
+      spawns[0].resolve()
+      await flush()
+      const term = terms[0]
+      act(() => void oscHandler(term, 7)('file://mac/a'))
+      osc133(term, 'C;' + b64('ssh srv'))
       osc133(term, 'A')
       const blk = document.querySelector('.blk:not(.feed-park .blk)')!
-      expect(blk).not.toHaveClass('run')
-      expect(blk).not.toHaveClass('err')
-      expect(textarea()).not.toBeDisabled()
+      expect(blk).toHaveClass('run')
+      expect(textarea()).toBeDisabled()
+      expect(host().closest('.feed-park')).toBeNull()
+      act(() => void oscHandler(term, 7)('file:///remote'))
+      expect(onCwd.mock.calls.map((c) => c[0])).toEqual(['/a'])
     })
 
     it('вывод вне C…D (ошибка разбора) — отдельный блок с отправленной строкой; обычное приглашение блоков не добавляет', async () => {
