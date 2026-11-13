@@ -11,7 +11,17 @@ export interface HintRow {
   command?: string
 }
 
-export function emptyHintRows(): HintRow[] {
+/** claude — режим Claude панели (↵ уже спрашивает Claude): свои строки, без «Команда ↵». */
+export function emptyHintRows(claude = false): HintRow[] {
+  if (claude)
+    return [
+      { label: 'Спросить Claude', keys: bindingKeys(INPUT_BINDINGS.run) },
+      { label: 'Файл или блок в сообщение', command: '@' },
+      { label: 'Сменить модель', command: '/model' },
+      { label: 'История сообщений', keys: bindingKeys(INPUT_BINDINGS.history) },
+      { label: 'Палитра команд', keys: actionKeys('palette') },
+      { label: 'Назад в оболочку', command: '/exit' },
+    ]
   return [
     { label: 'Команда', keys: bindingKeys(INPUT_BINDINGS.run) },
     { label: 'Спросить Claude', keys: bindingKeys(INPUT_BINDINGS.ask) },
@@ -22,13 +32,13 @@ export function emptyHintRows(): HintRow[] {
   ]
 }
 
-export function EmptyHint() {
+export function EmptyHint({ claude = false }: { claude?: boolean }) {
   return (
     <div className="feed-empty">
       <div className="ks" role="note" aria-label={EMPTY_TITLE}>
         <h3>{EMPTY_TITLE}</h3>
         <ul>
-          {emptyHintRows().map((r) => (
+          {emptyHintRows(claude).map((r) => (
             <li key={r.label}>
               <span>{r.label}</span>
               <span className="ks-k">

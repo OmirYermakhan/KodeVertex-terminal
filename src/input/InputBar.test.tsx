@@ -1320,6 +1320,17 @@ describe('подсказка следующего сообщения (режим
     expect(shown()).toBeNull()
   })
 
+  it('гонка: ⌘X до прихода подсказки — правка поля, подсказка не покажется в опустевшем поле', () => {
+    const { ref, ed, ta, shown, rerender, onDismissSuggestion } = mount({ suggestion: null })
+    const turnEnd = Date.now() - 1000
+    act(() => ref.current!.restore({ doc: { text: 'черновик', tokens: [] }, claude: true }))
+    setSelection(ed, 0, ta.value.length)
+    fireEvent.cut(ed, { clipboardData: { setData: vi.fn() } })
+    expect(ta.value).toBe('')
+    rerender({ suggestion: sugg('спасибо', turnEnd) })
+    expect(onDismissSuggestion).toHaveBeenCalled()
+  })
+
   it('подсказка после конца хода без набора — показывается', () => {
     const { shown, rerender, onDismissSuggestion } = mount({ suggestion: null })
     rerender({ suggestion: sugg('добавь тесты', Date.now()) })

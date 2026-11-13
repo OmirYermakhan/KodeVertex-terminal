@@ -124,6 +124,8 @@ export interface InputBarProps {
   onTokens?(n: number): void
   /** Строка стала (или перестала) принимать значки: режим Claude и не ответ на вопрос. */
   onAcceptsTokens?(yes: boolean): void
+  /** Режим Claude строки включился или выключился (и при монтировании). */
+  onClaudeMode?(on: boolean): void
   /** Мини-просмотр значков (наведение, ␣ у значка); клавиши в открытый просмотр идут отсюда. */
   preview?: PreviewApi
   /** Блоки и ответы Claude ленты — группы «Блоки» и «Сообщения» в `@`. */
@@ -352,6 +354,9 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   useEffect(() => {
     props.current.onAcceptsTokens?.(accepting)
   }, [accepting])
+  useEffect(() => {
+    props.current.onClaudeMode?.(claudeMode)
+  }, [claudeMode])
 
   useEffect(() => {
     void loadHistory()
@@ -1094,7 +1099,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     if (!sel || sel.start === sel.end) return
     e.preventDefault()
     e.clipboardData.setData('text/plain', readable(docRef.current, sel.start, sel.end))
-    if (cut) apply(insertText(docRef.current, sel, ''))
+    if (!cut) return
+    // Вырезание — правка поля, как набор: подсказка Claude, пришедшая после неё, не покажется.
+    lastEdit.current = Date.now()
+    apply(insertText(docRef.current, sel, ''))
   }
 
   // Выбор `@` (режим Claude): файлы из подсказок путей + блоки и сообщения ленты.

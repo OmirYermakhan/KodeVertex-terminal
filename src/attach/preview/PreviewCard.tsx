@@ -1,5 +1,5 @@
 // Карточка мини-просмотра (макет 06-attachments `.pv`, галерея В): своя для каждого типа значка.
-// Размеры и значки записей — cardLayout.ts. variant: card — всплывающая над значком (~300px); bubble — картинка из пузыря «Вы» (сцена Д,
+// Размеры — cardLayout.ts. variant: card — всплывающая над значком (~300px); bubble — картинка из пузыря «Вы» (сцена Д,
 // 210px, без заголовка); side — справа от выбора `@` (сцена Е, 220px, без подвала).
 import { memo, type ReactNode } from 'react'
 import { relativize } from '../serialize'

@@ -36,6 +36,19 @@ describe('подсказка пустой ленты', () => {
     expect(isBinding(INPUT_BINDINGS.history, ev('KeyR', { ctrlKey: true, shiftKey: true }))).toBe(false)
   })
 
+  it('в режиме Claude — свои строки: ↵ спрашивает Claude, без «Команда ↵» и ⌘↵', () => {
+    expect(emptyHintRows(true).map((r) => [r.label, (r.keys ?? [r.command]).join(' ')])).toEqual([
+      ['Спросить Claude', '↵'],
+      ['Файл или блок в сообщение', '@'],
+      ['Сменить модель', '/model'],
+      ['История сообщений', '⌃ R'],
+      ['Палитра команд', '⌘ P'],
+      ['Назад в оболочку', '/exit'],
+    ])
+    const { container } = render(<Feed items={[]} selectedId={null} renderLive={() => null} claudeMode />)
+    expect(container.querySelector('.ks li span')!.textContent).toBe('Спросить Claude')
+  })
+
   it('порядок модификаторов как в макете: ⌥ ⌘ ←, ⌘ ⇧ D', () => {
     expect(actionKeys('focusLeft')).toEqual(['⌥', '⌘', '←'])
     expect(actionKeys('splitDown')).toEqual(['⌘', '⇧', 'D'])

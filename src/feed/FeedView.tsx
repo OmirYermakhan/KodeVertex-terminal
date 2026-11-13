@@ -34,6 +34,8 @@ export interface FeedProps {
   onEdit?(id: string): void
   /** Сообщение, которое сейчас правится в строке ввода. */
   editingId?: string | null
+  /** Строка ввода в режиме Claude — подсказка пустой ленты про этот режим. */
+  claudeMode?: boolean
 }
 
 /**
@@ -65,7 +67,7 @@ export function finishAppear(feed: HTMLElement | null): void {
 }
 
 export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
-  { items, selectedId, renderLive, agents = NO_AGENTS, renderClaude, onScroll, park, onAttach, onCopy, onRepeat, onAsk, onRead, editable, onEdit, editingId },
+  { items, selectedId, renderLive, agents = NO_AGENTS, renderClaude, onScroll, park, onAttach, onCopy, onRepeat, onAsk, onRead, editable, onEdit, editingId, claudeMode = false },
   ref,
 ) {
   const own = useRef<HTMLDivElement | null>(null)
@@ -141,7 +143,7 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
         </ErrorBoundary>
       ))}
       {/* Пустая лента — подсказка с клавишами; исчезает с первым блоком или карточкой. */}
-      {items.length === 0 && <EmptyHint />}
+      {items.length === 0 && <EmptyHint claude={claudeMode} />}
       {park}
     </div>
   )

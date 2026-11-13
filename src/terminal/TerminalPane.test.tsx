@@ -486,6 +486,19 @@ describe('TerminalPane', () => {
         expect(document.querySelector('.feed .card')).toBeNull()
       })
 
+      it('⌃L в режиме Claude: подсказка пустой ленты — про режим Claude, не «Команда ↵»', async () => {
+        claudeOk()
+        await mounted()
+        const labels = () => [...document.querySelectorAll('.feed .feed-empty li > span:first-child')].map((e) => e.textContent)
+        expect(labels()[0]).toBe('Команда')
+        type('claude')
+        keyIn('Enter')
+        await act(async () => await flush())
+        keyIn('l', { ctrlKey: true })
+        expect(labels()[0]).toBe('Спросить Claude')
+        expect(labels()).not.toContain('Команда')
+      })
+
       it('вопрос агента: блок над строкой ввода с фокусом, в ленте — «ждёт ответа»; ответ уходит, блок исчезает', async () => {
         claudeOk()
         await mounted()

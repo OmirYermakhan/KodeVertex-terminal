@@ -810,6 +810,8 @@ export function TerminalPane(p: TerminalPaneProps) {
   const dropHere = useDrop((s) => (s.paneId === p.paneId ? s.paths : null))
   /** Строка ввода в режиме Claude: брошенные файлы станут значками (иначе — путями). */
   const [acceptsTokens, setAcceptsTokens] = useState(false)
+  /** Строка ввода в режиме Claude (подсказка пустой ленты — про этот режим). */
+  const [inClaude, setInClaude] = useState(restored?.claudeMode === true)
   useEffect(() => registerDropTarget(p.paneId, (paths) => inputRef.current?.insertPaths(paths)), [p.paneId])
   const onClearFeed = useCallback(() => {
     // Идущий блок и незаконченный ответ Claude (с ним — всё после него) не трогаем:
@@ -1115,6 +1117,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         editable={editable}
         onEdit={onEditItem}
         editingId={editing ? claudeItemId(editing.index) : null}
+        claudeMode={inClaude}
         park={
           // Пока xterm не показан, он стоит здесь: невидим, но сохраняет ширину текста блока (cols).
           // inert: спрятанный xterm не получает фокус по Tab/⇧Tab (ввод вслепую в ZLE).
@@ -1195,6 +1198,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           onAsk={onAsk}
           onTokens={onTokens}
           onAcceptsTokens={setAcceptsTokens}
+          onClaudeMode={setInClaude}
           onEnterClaude={onEnterClaude}
           onNewClaude={onNewClaude}
           onExitClaude={onExitClaude}
