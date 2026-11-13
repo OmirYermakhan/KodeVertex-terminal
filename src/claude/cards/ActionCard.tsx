@@ -13,7 +13,7 @@ function shortResult(result: string | undefined): string {
 }
 
 /** Действие агента (макет 02 B / 04, .act): пунктирная рамка, подпись --info, деталь моноширинным. */
-export const ActionCard = memo(function ActionCard({ item, agent, id }: { item: Action; agent: Agent | undefined; id?: string }) {
+export const ActionCard = memo(function ActionCard({ item, agent, id, cwd }: { item: Action; agent: Agent | undefined; id?: string; cwd?: string | null }) {
   const icon = EDIT_TOOLS.has(item.tool) || item.diff ? '✎' : '▶'
   // Субагент: подпись — «Имя · Модель» (макет 04 «▶ Поиск · Haiku 5.5»), название действия уходит в тело.
   const isSub = !!agent && agent.id !== 'main'
@@ -39,7 +39,7 @@ export const ActionCard = memo(function ActionCard({ item, agent, id }: { item: 
           {res}
         </>
       )}
-      {diff && <DiffView diff={diff} />}
+      {diff && <DiffView diff={diff} cwd={cwd} />}
       {running && (
         <div className="act-now">
           <span className="spin" aria-hidden="true" />

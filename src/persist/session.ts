@@ -106,7 +106,7 @@ function saveClaude(p: PaneClaude): SavedClaude {
       contextUsed: s.contextUsed,
       contextMax: s.contextMax,
       costUsd: s.costUsd,
-      items: s.items,
+      items: s.items.map(saveItem),
       chain: s.chain,
       epoch: s.epoch,
       edits: s.edits,
@@ -198,8 +198,30 @@ function validTab(t: unknown): t is Tab {
   return leaves(t.tree).includes(t.focused)
 }
 
+/**
+ * Элемент для файла сессии: исходный файл правки (diff.original, до 64 КБ на правку) не сохраняется —
+ * иначе файл сессии растёт без предела. Восстановленный вид изменений просто не разворачивает
+ * свёрнутые строки.
+ */
+function saveItem(it: FeedClaudeItem): FeedClaudeItem {
+  if (it.type === 'action' && it.diff?.original !== undefined) {
+    const { original: _original, ...diff } = it.diff
+    return { ...it, diff }
+  }
+  if (it.type === 'replaced') return { ...it, items: it.items.map(saveItem) }
+  return it
+}
+
+const TODO_STATUSES = new Set(['pending', 'in_progress', 'completed'])
+const validTodos = (v: unknown): boolean =>
+  Array.isArray(v) &&
+  v.every((t) => isRec(t) && typeof t.content === 'string' && TODO_STATUSES.has(t.status as string) && (t.activeForm === undefined || typeof t.activeForm === 'string'))
+
 /** Недоигранное при закрытии: ответ дописан, действия не идут, вопросы и разрешения сняты. */
 function restoreItem(it: FeedClaudeItem): FeedClaudeItem {
+  // Испорченный план — убрать (на месте элемента 'gone': индексы ленты не сдвигаются).
+  if (it.type === 'todo' && (typeof it.agentId !== 'string' || typeof it.toolUseId !== 'string' || !validTodos(it.todos))) return { type: 'gone' }
+  if (it.type === 'replaced' && Array.isArray(it.items)) return { ...it, items: it.items.map(restoreItem) }
   if (it.type === 'assistant' && it.streaming) return { ...it, streaming: false }
   if (it.type === 'action' && it.status === 'running') return { ...it, status: 'error', result: it.result ?? 'Прервано: приложение закрылось' }
   return it

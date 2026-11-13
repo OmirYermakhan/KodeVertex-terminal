@@ -31,7 +31,7 @@ export type FeedClaudeItem =
    * План агента (TodoWrite): одна карточка на агента, каждый следующий TodoWrite обновляет её
    * на месте, а не добавляет новую.
    */
-  | { type: 'todo'; agentId: string; toolUseId: string; todos: Todo[] }
+  | { type: 'todo'; agentId: string; toolUseId: string; todos: Todo[]; /** Ушла из ленты (⌃L, /clear): больше не обновляется — следующий TodoWrite добавит новую. */ frozen?: boolean }
   /** Тихая моноширинная строка ленты (например, «Модель: Fable 5.2 · усилие high»). */
   | { type: 'note'; text: string }
   /** Вопрос агента с вариантами (AskUserQuestion): ответы по шагам, всё отвечено — done. */
@@ -98,12 +98,21 @@ function parseTodos(v: unknown[]): Todo[] {
 
 /** План агента в ленте: есть карточка — обновить на месте, нет — добавить в конец. */
 function upsertTodo(s: ClaudeState, aid: string, toolUseId: string, todos: Todo[]): ClaudeState {
-  const idx = s.items.findIndex((it) => it.type === 'todo' && it.agentId === aid)
+  const idx = s.items.findIndex((it) => it.type === 'todo' && it.agentId === aid && !it.frozen)
   const item: FeedClaudeItem = { type: 'todo', agentId: aid, toolUseId, todos }
   if (idx < 0) return { ...s, items: [...s.items, item] }
   const items = s.items.slice()
   items[idx] = item
   return { ...s, items }
+}
+
+/**
+ * Лента очищена (⌃L, /clear): карточки плана с индексом < from не видны — их больше не обновляем,
+ * следующий TodoWrite покажет план новой карточкой внизу.
+ */
+export function freezeTodos(s: ClaudeState, from: number): ClaudeState {
+  if (!s.items.some((it, i) => i < from && it.type === 'todo' && !it.frozen)) return s
+  return { ...s, items: s.items.map((it, i) => (i < from && it.type === 'todo' && !it.frozen ? { ...it, frozen: true } : it)) }
 }
 
 export type PermissionDecision = 'allow' | 'always' | 'deny'
@@ -254,6 +263,7 @@ export function clearSession(s: ClaudeState): ClaudeState {
   const items = s.items.map((it): FeedClaudeItem => {
     if (it.type === 'assistant' && it.streaming) return { ...it, streaming: false }
     if (it.type === 'action' && it.status === 'running') return { ...it, status: 'error' }
+    if (it.type === 'todo' && !it.frozen) return { ...it, frozen: true }
     return it
   })
   return {
@@ -366,10 +376,12 @@ function diffOf(tool: string, i: Rec): FileDiff | undefined {
  * Результат правки файла (`tool_use_result` события user): structuredPatch — куски с настоящими
  * номерами строк, originalFile — файл до правки (храним, только если небольшой), type create — новый файл.
  */
-function withPatch(diff: FileDiff, r: unknown): FileDiff {
+function withPatch(diff: FileDiff, r: unknown, single: boolean): FileDiff {
   if (!isRec(r)) return diff
+  // tool_use_result — одно на событие: при нескольких tool_result в событии сверяем путь
+  // (в одиночном — нет: /tmp и /private/tmp — один файл).
   const file = strOr(r.filePath)
-  if (file && diff.path && file !== diff.path) return diff
+  if (!single && file !== diff.path) return diff
   if (r.type === 'create') return { ...diff, created: true, ...(typeof r.content === 'string' ? { after: r.content } : {}) }
   const hunks = parseHunks(r.structuredPatch)
   if (!hunks || hunks.length === 0) return diff
@@ -466,6 +478,7 @@ function onUser(s: ClaudeState, ev: Rec, now: number): ClaudeState {
   const msg = ev.message
   if (!isRec(msg) || !Array.isArray(msg.content)) return s
   let next = s
+  const single = msg.content.filter((b) => isRec(b) && b.type === 'tool_result').length === 1
   for (const b of msg.content) {
     if (!isRec(b) || b.type !== 'tool_result') continue
     const id = strOr(b.tool_use_id)
@@ -479,9 +492,11 @@ function onUser(s: ClaudeState, ev: Rec, now: number): ClaudeState {
       items: next.items.map((it) => {
         if (it.type === 'action' && it.toolUseId === id) {
           actionAgent = it.agentId
-          const diff = it.diff && !isError ? withPatch(it.diff, ev.tool_use_result ?? ev.toolUseResult) : it.diff
+          const diff = it.diff && !isError ? withPatch(it.diff, ev.tool_use_result ?? ev.toolUseResult, single) : it.diff
           return { ...it, status, result, ...(diff ? { diff } : {}) } as FeedClaudeItem
         }
+        // План (TodoWrite) — своя карточка, не действие: ответ тоже возвращает агента из «ждёт».
+        if (it.type === 'todo' && it.toolUseId === id) actionAgent = it.agentId
         return it
       }),
     }

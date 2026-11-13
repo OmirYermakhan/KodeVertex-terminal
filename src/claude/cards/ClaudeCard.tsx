@@ -17,7 +17,7 @@ export const OLD_VARIANT = '↺ Прежний вариант'
  * Прежний вариант разговора после правки сообщения: приглушённая строка на месте изменённого
  * пузыря; клик или ↵ раскрывает прежние элементы (только для чтения — без панелек действий).
  */
-function ReplacedRow({ id, items, count, agents }: { id: string; items: FeedClaudeItem[]; count: number; agents?: readonly Agent[] }) {
+function ReplacedRow({ id, items, count, agents, cwd }: { id: string; items: FeedClaudeItem[]; count: number; agents?: readonly Agent[]; cwd?: string | null }) {
   const [open, setOpen] = useState(false)
   return (
     <div className={'cl-old' + (open ? ' open' : '')} data-item-id={id}>
@@ -28,7 +28,7 @@ function ReplacedRow({ id, items, count, agents }: { id: string; items: FeedClau
       {open && (
         <div className="cl-old-items">
           {items.map((x, i) => (
-            <ClaudeCard key={i} item={{ kind: 'claude', id: `${id}-old-${i}`, item: x }} agent={agentOf(agents, x)} agents={agents} />
+            <ClaudeCard key={i} item={{ kind: 'claude', id: `${id}-old-${i}`, item: x }} agent={agentOf(agents, x)} agents={agents} cwd={cwd} />
           ))}
         </div>
       )}
@@ -50,6 +50,7 @@ export const ClaudeCard = memo(function ClaudeCard({
   onEdit,
   editing,
   agents,
+  cwd,
 }: {
   item: ClaudeItem
   agent?: Agent
@@ -60,6 +61,8 @@ export const ClaudeCard = memo(function ClaudeCard({
   editing?: boolean
   /** Агенты сессии — для карточек внутри «Прежнего варианта». */
   agents?: readonly Agent[]
+  /** Каталог сессии: пути правок — относительно него. */
+  cwd?: string | null
   /** Ответ — значком в строку ввода / копировать (панелька над карточкой). */
   onAttach?(id: string): void
   onCopy?(id: string): void
@@ -74,7 +77,7 @@ export const ClaudeCard = memo(function ClaudeCard({
     case 'action':
       // Вопрос агента показывает своя карточка (question), действие «AskUserQuestion» не дублируем.
       if (it.tool === 'AskUserQuestion') return null
-      return <ActionCard id={item.id} item={it} agent={agent} />
+      return <ActionCard id={item.id} item={it} agent={agent} cwd={cwd} />
     case 'permission':
       return <PermissionCard id={item.id} item={it} />
     case 'question':
@@ -86,7 +89,7 @@ export const ClaudeCard = memo(function ClaudeCard({
     case 'session':
       return <SessionNote id={item.id} cwd={it.cwd} mode={it.mode} />
     case 'replaced':
-      return <ReplacedRow id={item.id} items={it.items} count={it.count} agents={agents} />
+      return <ReplacedRow id={item.id} items={it.items} count={it.count} agents={agents} cwd={cwd} />
     case 'todo':
       return <TodoCard id={item.id} todos={it.todos} />
     case 'gone':

@@ -399,8 +399,8 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .dv-btn:hover, .dv-btn:focus-visible { border-color: var(--acc); color: var(--strong); outline: none; }
 .diff.dv-body { white-space: normal; padding: 6px 0; overflow-wrap: anywhere; }
 .dv-body .dl { display: flex; padding: 0 10px; color: var(--text); }
-.dv-body .dl.a { background: color-mix(in srgb, var(--add) 12%, transparent); }
-.dv-body .dl.d { background: color-mix(in srgb, var(--del) 12%, transparent); }
+.dv-body .dl.a { color: var(--add); background: color-mix(in srgb, var(--add) 12%, transparent); }
+.dv-body .dl.d { color: var(--del); background: color-mix(in srgb, var(--del) 12%, transparent); }
 .dv-body .dn { flex: none; margin-right: 8px; text-align: right; color: var(--com); user-select: none; font-variant-numeric: tabular-nums; }
 .dv-body .dn + .dn { margin-right: 10px; }
 .dv-body.nonum .dn { display: none; }

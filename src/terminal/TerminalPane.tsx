@@ -22,7 +22,7 @@ import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
 import { applyShell, claudeIndex, claudeItemId, commandBytes, failurePrompt, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
-import { editClaude, dismissQueueHint, dismissSuggestion, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
+import { editClaude, dismissQueueHint, dismissSuggestion, feedCleared, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
 import { aliasOf } from '../claude/models'
 import { canEdit, editInfo, lastEditable, pendingPrompt, type PermissionDecision } from '../claude/reducer'
 import { EditChip } from '../claude/EditChip'
@@ -821,7 +821,8 @@ export function TerminalPane(p: TerminalPaneProps) {
     claudeFrom.current = from
     setItems((it) => it.filter((x) => (x.kind === 'shell' ? x.running : claudeIndex(x.id) >= from)))
     setSelected(null)
-  }, [])
+    feedCleared(p.paneId, from)
+  }, [p.paneId])
   // `claude [вопрос]` ↵ — наши карточки вместо полноэкранного TUI (в PTY ничего не уходит).
   const onEnterClaude = useCallback(
     (question?: string) => {
@@ -1107,6 +1108,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         ref={feedRef}
         items={items}
         agents={claude?.state.agents}
+        cwd={claude?.cwd}
         selectedId={selected}
         renderLive={renderLive}
         onScroll={onFeedScroll}

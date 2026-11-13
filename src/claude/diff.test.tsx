@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { diffParts, diffStat, firstChangedLine, lineDiff, parseHunks, type DiffPart, type FileDiff } from './diff'
-import { DIFF_SHOWN, DiffView, unchangedLabel } from './cards/DiffView'
+import { DIFF_SHOWN, DiffView, shownPath, unchangedLabel } from './cards/DiffView'
 import { initialClaude, reduceClaude } from './reducer'
 
 const invoke = vi.fn((..._a: unknown[]) => Promise.resolve())
@@ -121,7 +121,27 @@ describe('reducer: результат правки', () => {
     expect(s.items[0]).toMatchObject({ status: 'done', diff: { path: '/p/a.ts', original: 'l1\nl2\n', hunks: [{ oldStart: 1, newStart: 1 }] } })
   })
 
-  it('большой originalFile не хранится; чужой путь не применяется', () => {
+  it('событие настоящего CLI (claude 2.1, stream-json --verbose): tool_use_result.structuredPatch', () => {
+    // Сокращённые строки прогона `claude -p … --output-format stream-json --verbose` с Edit на временном файле.
+    const tu = { type: 'assistant', parent_tool_use_id: null, session_id: 's', message: { model: 'claude-haiku', content: [
+      { type: 'tool_use', id: 'toolu_1', name: 'Edit', input: { replace_all: false, file_path: '/tmp/demo/f.txt', old_string: 'line5', new_string: 'LINE5' } } ] } }
+    const orig = Array.from({ length: 10 }, (_, i) => `line${i + 1}`).join('\n') + '\n'
+    const res = {
+      type: 'user', parent_tool_use_id: null, session_id: 's', uuid: 'u', timestamp: '2026-11-13T11:30:30.967Z',
+      message: { role: 'user', content: [{ tool_use_id: 'toolu_1', type: 'tool_result', content: 'The file /tmp/demo/f.txt has been updated successfully.' }] },
+      tool_use_result: { filePath: '/tmp/demo/f.txt', oldString: 'line5', newString: 'LINE5', originalFile: orig,
+        structuredPatch: [{ oldStart: 2, oldLines: 7, newStart: 2, newLines: 7, lines: [' line2', ' line3', ' line4', '-line5', '+LINE5', ' line6', ' line7', ' line8'] }],
+        userModified: false, replaceAll: false, contentNotInModelContext: true },
+      tool_result_meta: [{ id: 'toolu_1', permission_decision: { decision: 'accept', source: 'config', reason_type: 'mode' } }],
+    }
+    const s = reduceClaude(reduceClaude(initialClaude(), tu, 1), res, 2)
+    const it0 = s.items[0]
+    expect(it0.type === 'action' && it0.diff && show(diffParts(it0.diff))).toEqual([
+      'n1/1 line1', 'n2/2 line2', 'n3/3 line3', 'n4/4 line4', 'd5/_ line5', 'a_/5 LINE5', 'n6/6 line6', 'n7/7 line7', 'n8/8 line8', '~2',
+    ])
+  })
+
+  it('большой originalFile не хранится; при нескольких результатах в событии чужой путь не применяется', () => {
     let s = reduceClaude(initialClaude(), edit, 1)
     const big = 'x\n'.repeat(40_000)
     s = reduceClaude(s, result({ filePath: '/p/a.ts', originalFile: big, structuredPatch: [{ oldStart: 1, newStart: 1, lines: ['-l2', '+L2'] }] }), 2)
@@ -129,7 +149,9 @@ describe('reducer: результат правки', () => {
     expect(it0.type === 'action' && it0.diff?.original).toBeUndefined()
     expect(it0.type === 'action' && it0.diff?.hunks).toHaveLength(1)
     let t = reduceClaude(initialClaude(), edit, 1)
-    t = reduceClaude(t, result({ filePath: '/other', structuredPatch: [{ oldStart: 1, newStart: 1, lines: ['-a', '+b'] }] }), 2)
+    const two = result({ filePath: '/other', structuredPatch: [{ oldStart: 1, newStart: 1, lines: ['-a', '+b'] }] })
+    two.message.content.push({ type: 'tool_result', tool_use_id: 'x9', content: 'ok' })
+    t = reduceClaude(t, two, 2)
     const it1 = t.items[0]
     expect(it1.type === 'action' && it1.diff?.hunks).toBeUndefined()
   })
@@ -148,13 +170,15 @@ describe('DiffView', () => {
     before: '',
     after: '',
     original: file(20),
-    hunks: [{ oldStart: 9, newStart: 9, lines: [' l9', '-l10', '+const x = 1', ' l11'] }],
+    hunks: [{ oldStart: 9, newStart: 9, lines: [' const y = 2', '-l10', '+const x = 1', ' l11'] }],
   }
 
   it('номера строк, подсветка по расширению, свёрнутые куски разворачиваются', () => {
     const { container } = render(<DiffView diff={d} />)
     expect(container.querySelector('.dv-body')).not.toHaveClass('nonum')
-    expect(container.querySelector('.dl.a .hljs-keyword')?.textContent).toBe('const')
+    // Контекст — с подсветкой, изменённые строки — сплошным цветом (макет 02 .diff .a/.d).
+    expect(container.querySelector('.dl.n .hljs-keyword')?.textContent).toBe('const')
+    expect(container.querySelector('.dl.a [class^="hljs"], .dl.d [class^="hljs"]')).toBeNull()
     const gaps = screen.getAllByRole('button', { name: /без изменений/ })
     expect(gaps.map((g) => g.textContent)).toEqual(['… 6 строк без изменений', '… 7 строк без изменений'])
     const before = container.querySelectorAll('.dl:not(.gap)').length
@@ -163,10 +187,29 @@ describe('DiffView', () => {
     expect(container.querySelector('.dl .dn')?.textContent).toBe('1')
   })
 
-  it('«Открыть в редакторе» — preview_open с первой изменённой строкой; «Копировать путь»', async () => {
-    const writeText = vi.fn(() => Promise.resolve())
+  it('развёрнутый кусок не пересоздаёт строки ниже', () => {
+    const { container } = render(<DiffView diff={d} />)
+    const row = Array.from(container.querySelectorAll('.dl.a'))[0]
+    fireEvent.click(screen.getAllByRole('button', { name: /без изменений/ })[0])
+    expect(container.querySelector('.dl.a')).toBe(row)
+  })
+
+  it('путь — относительно каталога сессии, полный — в подсказке; копируется полный', () => {
+    expect(shownPath('/w/src/Form.tsx', '/w')).toBe('src/Form.tsx')
+    expect(shownPath('/w/src/Form.tsx', '/w/')).toBe('src/Form.tsx')
+    expect(shownPath('/wx/a.ts', '/w')).toBe('/wx/a.ts')
+    expect(shownPath('/elsewhere/a.ts', '/w')).toBe('/elsewhere/a.ts')
+    expect(shownPath('/w/a.ts', null)).toBe('/w/a.ts')
+    const { container } = render(<DiffView diff={d} cwd="/p" />)
+    const b = container.querySelector('.dv-path')!
+    expect(b.textContent).toBe('a.ts')
+    expect(b.getAttribute('title')).toBe('/p/a.ts')
+  })
+
+  it('«Открыть в редакторе» — preview_open с первой изменённой строкой; «Копировать путь» — полный', async () => {
+    const writeText = vi.fn((_t: string) => Promise.resolve())
     Object.assign(navigator, { clipboard: { writeText } })
-    render(<DiffView diff={d} />)
+    render(<DiffView diff={d} cwd="/p" />)
     fireEvent.click(screen.getByRole('button', { name: 'Открыть в редакторе' }))
     expect(invoke).toHaveBeenCalledWith('preview_open', { path: '/p/a.ts', how: 'editor', line: 10 })
     fireEvent.click(screen.getByRole('button', { name: 'Копировать путь' }))
