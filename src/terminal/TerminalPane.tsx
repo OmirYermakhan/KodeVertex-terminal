@@ -29,6 +29,7 @@ import { EditChip } from '../claude/EditChip'
 import { docOf } from '../attach/doc'
 import { PermissionPrompt } from '../claude/PermissionPrompt'
 import { QuestionPrompt } from '../claude/QuestionPrompt'
+import { dropPaneFeed, restoredPane, scheduleSave, setPaneFeed } from '../persist/session'
 import { InputBar, type InputBarHandle, type InputSnapshot } from '../input/InputBar'
 import { QueuePanel, type QueuePanelHandle } from '../claude/QueuePanel'
 import { AgentsPanel, type AgentsPanelHandle } from '../claude/AgentsPanel'
@@ -170,7 +171,9 @@ export function TerminalPane(p: TerminalPaneProps) {
     return () => clearTimeout(t)
   }, [agentRequest])
 
-  const [items, setItems] = useState<FeedItem[]>([])
+  // Лента, восстановленная после перезапуска приложения (до монтирования панели).
+  const [restored] = useState(() => restoredPane(p.paneId))
+  const [items, setItems] = useState<FeedItem[]>(() => (restored ? [...restored.items] : []))
   const itemsRef = useRef(items)
   useEffect(() => {
     itemsRef.current = items
@@ -226,9 +229,10 @@ export function TerminalPane(p: TerminalPaneProps) {
   // Claude-сессия панели (стор по paneId): её элементы — в той же ленте, по времени появления.
   const claude = useClaudeSessions((st) => st.sessions[p.paneId])
   const claudeItems = claude?.state.items ?? NO_CLAUDE_ITEMS
-  const claudePrev = useRef<readonly FeedClaudeItem[]>(NO_CLAUDE_ITEMS)
+  // Восстановленная лента уже содержит карточки сессии: синхронизация — от них.
+  const claudePrev = useRef<readonly FeedClaudeItem[]>(restored ? claudeItems : NO_CLAUDE_ITEMS)
   // ⌃L: элементы Claude с индексом меньше этого в ленте больше не показываются.
-  const claudeFrom = useRef(0)
+  const claudeFrom = useRef(restored?.claudeFrom ?? 0)
   useEffect(() => {
     const prev = claudePrev.current
     const from = claudeFrom.current
@@ -239,6 +243,14 @@ export function TerminalPane(p: TerminalPaneProps) {
     const paneId = p.paneId
     return () => stopClaude(paneId)
   }, [p.paneId])
+  // Сессия окна между запусками: лента панели читается в момент снимка, изменения — автосохранение.
+  useEffect(() => {
+    const paneId = p.paneId
+    const feed = () => ({ items: itemsRef.current, claudeFrom: claudeFrom.current, claudeMode: inputRef.current?.claudeMode() ?? false })
+    setPaneFeed(paneId, feed)
+    return () => dropPaneFeed(paneId, feed)
+  }, [p.paneId])
+  useEffect(() => scheduleSave(), [items])
 
   // Create xterm + PTY once per pane.
   useEffect(() => {
@@ -1148,6 +1160,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         )}
         <InputBar
           ref={inputRef}
+          initialClaudeMode={restored?.claudeMode}
           queue={queueInput}
           answer={answerMode}
           edit={editMode}

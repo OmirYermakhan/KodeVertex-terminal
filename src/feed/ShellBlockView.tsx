@@ -90,6 +90,9 @@ export function HoverActions({
   )
 }
 
+/** Блок шёл, когда приложение закрылось (восстановлен из сохранённой сессии). */
+export const INTERRUPTED = 'прервано'
+
 export const ShellBlockView = memo(function ShellBlockView({ block, selected, live, onAttach, onCopy, onRepeat, onAsk }: ShellBlockViewProps) {
   const failed = block.exitCode !== null && block.exitCode !== 0
   const cls = ['blk', selected && 'sel', failed && 'err', block.running && 'run'].filter(Boolean).join(' ')
@@ -118,8 +121,9 @@ export const ShellBlockView = memo(function ShellBlockView({ block, selected, li
               )}
             </span>
           )}
+          {block.interrupted && <span className="exit">{INTERRUPTED}</span>}
           {failed && <span className="exit">exit {block.exitCode}</span>}
-          {failed && block.durationMs !== null && ' · '}
+          {(failed || block.interrupted) && block.durationMs !== null && ' · '}
           {block.durationMs !== null && formatDuration(block.durationMs)}
         </span>
       </div>

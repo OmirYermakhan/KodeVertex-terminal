@@ -71,6 +71,11 @@ describe('Feed', () => {
 })
 
 describe('ShellBlockView', () => {
+  it('блок, прерванный закрытием приложения, — «прервано» и длительность', () => {
+    const { container } = render(<ShellBlockView block={blk({ interrupted: true, exitCode: null, html: null, lines: 0, durationMs: 2000 })} selected={false} />)
+    expect(container.querySelector('.bh')?.textContent).toContain('прервано · 2.0 с')
+  })
+
   it('заголовок ❯ команда и длительность', () => {
     const { container } = render(<ShellBlockView block={blk()} selected={false} />)
     expect(container.querySelector('.bh .p')!.textContent).toBe('❯')

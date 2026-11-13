@@ -8,6 +8,7 @@ mod git;
 mod history;
 mod preview;
 mod pty;
+mod session;
 mod settings;
 mod shell;
 mod slash_commands;
@@ -62,6 +63,8 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       settings::settings_load,
       settings::settings_save,
+      session::session_load,
+      session::session_save,
       fonts::fonts_list,
       fs_complete::fs_list,
       fs_complete::fs_preview,

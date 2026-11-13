@@ -24,12 +24,18 @@ import App from './App.tsx'
 import { ErrorBoundary } from './diag/ErrorBoundary'
 import { installGlobalErrorLog } from './diag/log'
 
+import { finalSave, restoreSession } from './persist/session'
+
 installGlobalErrorLog()
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <ErrorBoundary name="окно" variant="window">
-      <App />
-    </ErrorBoundary>
-  </StrictMode>,
-)
+// Вкладки, панели и ленты прошлого запуска — до первого рендера (оболочки стартуют в своих каталогах).
+void restoreSession().then(() => {
+  window.addEventListener('beforeunload', () => void finalSave())
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <ErrorBoundary name="окно" variant="window">
+        <App />
+      </ErrorBoundary>
+    </StrictMode>,
+  )
+})

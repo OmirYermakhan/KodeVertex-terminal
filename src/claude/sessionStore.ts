@@ -55,6 +55,11 @@ export interface PaneClaude {
    * карточки остаются в ленте. Следующий вопрос или `claude` начинает новую сессию.
    */
   closed?: boolean
+  /**
+   * Сессия восстановлена после перезапуска приложения: процесса ещё нет, следующий запуск —
+   * с `--resume`, в ленте перед ним заметка «Разговор восстановлен · каталог».
+   */
+  restored?: boolean
 }
 
 export interface QueuedMessage {
@@ -153,7 +158,24 @@ export const NOT_ATTACHED = 'Не приложено, Claude получил пу
 /** ⌘↵ раньше, чем панель узнала свой каталог (OSC 7). */
 export const NO_CWD = 'Каталог панели ещё неизвестен — повторите через секунду'
 
+/** Заметка в ленте перед первым запуском восстановленной сессии. */
+export const RESTORED_NOTE = 'Разговор восстановлен'
+
+function noteRestored(paneId: string): void {
+  const p = get(paneId)
+  if (!p.restored) return
+  patch(paneId, (x) => ({
+    ...x,
+    restored: false,
+    state:
+      x.state.sessionId !== null && x.cwd !== null
+        ? { ...x.state, items: [...x.state.items, { type: 'note', text: `${RESTORED_NOTE} · ${x.cwd}` }] }
+        : x.state,
+  }))
+}
+
 function start(paneId: string): Proc {
+  noteRestored(paneId)
   const proc: Proc = { ready: Promise.resolve(null), id: null, interrupted: false, chain: Promise.resolve() }
   const alive = () => procs.get(paneId) === proc
   const prev = get(paneId)
@@ -405,7 +427,7 @@ function switchCwd(paneId: string, paneCwd: string | undefined): string | null {
   if (cwd === null) return null
   if (cur.cwd !== null && cwd !== cur.cwd) {
     dropProc(paneId)
-    patchState(paneId, (s) => ({ ...newSession(stopped(s, Date.now())), contextUsed: 0 }))
+    patch(paneId, (p) => ({ ...p, restored: false, state: { ...newSession(stopped(p.state, Date.now())), contextUsed: 0 } }))
   }
   if (cur.cwd !== cwd) patch(paneId, (p) => ({ ...p, cwd }))
   if (cur.closed) patch(paneId, (p) => ({ ...p, closed: false }))
@@ -433,7 +455,7 @@ export function enterClaude(paneId: string, paneCwd: string | undefined): boolea
  */
 export function clearClaude(paneId: string): void {
   dropProc(paneId)
-  patch(paneId, (p) => ({ ...p, procId: null, queue: [], paused: false, pauseHint: false, rewindAt: null, state: clearSession(p.state) }))
+  patch(paneId, (p) => ({ ...p, procId: null, queue: [], paused: false, pauseHint: false, rewindAt: null, restored: false, state: clearSession(p.state) }))
 }
 
 /** `/exit`: закрыть Claude панели (процесс остановлен, сессия забыта); лента не трогается. */
@@ -480,6 +502,7 @@ async function send(paneId: string, paneCwd: string | undefined, text: string, t
   if (!edit && !procs.has(paneId) && get(paneId).state.sessionId === null) {
     patchState(paneId, (s) => ({ ...s, items: [...s.items, { type: 'session', cwd }] }))
   }
+  if (!procs.has(paneId)) noteRestored(paneId)
   patchState(paneId, (s) => userSent(s, text, Date.now(), toks))
   // Значки → текст и файлы (картинки и pdf base64 собирает Rust); пути — относительно каталога сессии.
   const out = toks ? serialize(docOf(text, toks), cwd) : { text, files: [] }

@@ -53,6 +53,8 @@ const AT_SIDE_MIN = 600
 const NOTE_MS = 3500
 
 export interface InputBarProps {
+  /** Режим Claude при монтировании (восстановлен после перезапуска приложения). */
+  initialClaudeMode?: boolean
   /** Идёт shell-команда: строка неактивна, ввод — в живом терминале. */
   disabled: boolean
   /** Подсказки путей разрешены (панель в фокусе, настройки закрыты, включены в настройках). */
@@ -199,8 +201,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const [note, setNote] = useState<string | null>(null)
   const noteTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   /** Режим Claude панели: ↵ — вопрос агенту, подсказки путей выключены. */
-  const [claudeMode, setClaudeModeState] = useState(false)
-  const claudeRef = useRef(false)
+  const [claudeMode, setClaudeModeState] = useState(() => p.initialClaudeMode === true)
+  const claudeRef = useRef(claudeMode)
   const setClaudeMode = useCallback((v: boolean) => {
     claudeRef.current = v
     setClaudeModeState(v)
