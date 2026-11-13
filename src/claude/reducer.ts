@@ -3,6 +3,7 @@
 import { actionTitle, modelLabel, nowLabel } from './labels'
 import { parsePermissionRequest, type Question } from './questions'
 import type { Attachment } from '../attach/types'
+import { ORIGINAL_MAX, parseHunks, type FileDiff } from './diff'
 
 export { actionTitle, modelLabel, nowLabel }
 
@@ -20,7 +21,7 @@ export type FeedClaudeItem =
       tool: string
       title: string
       detail: string
-      diff?: { before: string; after: string; path: string }
+      diff?: FileDiff
       status: 'running' | 'done' | 'error'
       result?: string
     }
@@ -306,19 +307,36 @@ function onDelta(s: ClaudeState, aid: string, text: string, now: number): Claude
   return next
 }
 
-function diffOf(tool: string, i: Rec): { before: string; after: string; path: string } | undefined {
+function diffOf(tool: string, i: Rec): FileDiff | undefined {
   const path = strOr(i.file_path)
   if (tool === 'Edit') return { before: strOr(i.old_string), after: strOr(i.new_string), path }
   if (tool === 'Write') return { before: '', after: strOr(i.content), path }
   if (tool === 'MultiEdit' && Array.isArray(i.edits)) {
-    const edits = i.edits.filter(isRec)
+    const parts = i.edits.filter(isRec).map((e) => ({ before: strOr(e.old_string), after: strOr(e.new_string) }))
     return {
-      before: edits.map((e) => strOr(e.old_string)).join('\n'),
-      after: edits.map((e) => strOr(e.new_string)).join('\n'),
+      before: parts.map((e) => e.before).join('\n'),
+      after: parts.map((e) => e.after).join('\n'),
       path,
+      ...(parts.length > 1 ? { parts } : {}),
     }
   }
   return undefined
+}
+
+/**
+ * Результат правки файла (`tool_use_result` события user): structuredPatch — куски с настоящими
+ * номерами строк, originalFile — файл до правки (храним, только если небольшой), type create — новый файл.
+ */
+function withPatch(diff: FileDiff, r: unknown): FileDiff {
+  if (!isRec(r)) return diff
+  const file = strOr(r.filePath)
+  if (file && diff.path && file !== diff.path) return diff
+  if (r.type === 'create') return { ...diff, created: true, ...(typeof r.content === 'string' ? { after: r.content } : {}) }
+  const hunks = parseHunks(r.structuredPatch)
+  if (!hunks || hunks.length === 0) return diff
+  const original = typeof r.originalFile === 'string' && r.originalFile.length <= ORIGINAL_MAX ? r.originalFile : undefined
+  const { parts: _parts, ...rest } = diff
+  return { ...rest, hunks, ...(original !== undefined ? { original } : {}) }
 }
 
 function onToolUse(s: ClaudeState, aid: string, block: Rec, now: number): ClaudeState {
@@ -420,7 +438,8 @@ function onUser(s: ClaudeState, ev: Rec, now: number): ClaudeState {
       items: next.items.map((it) => {
         if (it.type === 'action' && it.toolUseId === id) {
           actionAgent = it.agentId
-          return { ...it, status, result } as FeedClaudeItem
+          const diff = it.diff && !isError ? withPatch(it.diff, ev.tool_use_result ?? ev.toolUseResult) : it.diff
+          return { ...it, status, result, ...(diff ? { diff } : {}) } as FeedClaudeItem
         }
         return it
       }),

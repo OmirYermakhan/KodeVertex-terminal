@@ -6,7 +6,7 @@ import { EditChip } from '../EditChip'
 import { EDIT_FILES, editEffect } from '../editText'
 import { EDIT_ACTION } from '../../feed/ShellBlockView'
 import { Markdown } from '../Markdown'
-import { ActionCard, diffLines } from './ActionCard'
+import { ActionCard } from './ActionCard'
 import { AssistantCard } from './AssistantCard'
 import { ClaudeCard } from './ClaudeCard'
 import { ErrorCard } from './ErrorCard'
@@ -185,7 +185,7 @@ describe('карточки', () => {
     expect(screen.getByText('Сейчас выполняю…')).toBeInTheDocument()
   })
 
-  it('изменение файла: ✎ и diff со строками -/+', () => {
+  it('изменение файла: ✎, путь +A −D и строки -/+ (номера до результата неизвестны)', () => {
     const item = action({
       tool: 'Edit',
       title: 'Изменил файл',
@@ -194,21 +194,14 @@ describe('карточки', () => {
     })
     const { container } = render(<ActionCard item={item} agent={agent()} />)
     expect(container.querySelector('.act .who')?.textContent).toBe('✎ Изменил файл')
-    const lines = Array.from(container.querySelectorAll('.diff > div'), (d) => [d.className, d.textContent])
+    expect(container.querySelector('.dv-path')?.textContent).toBe('src/Form.tsx')
+    expect(container.querySelector('.dv-stat')?.textContent).toBe('+1 −1')
+    expect(container.querySelector('.dv-body')).toHaveClass('nonum')
+    const lines = Array.from(container.querySelectorAll('.dl'), (d) => [d.className, d.querySelector('.dm')?.textContent, d.querySelector('.dt')?.textContent])
     expect(lines).toEqual([
-      ['d', '- <button>'],
-      ['a', '+ <button onClick={send}>'],
+      ['dl d', '−', '<button>'],
+      ['dl a', '+', '<button onClick={send}>'],
     ])
-  })
-
-  it('diffLines: общие строки по краям — контекст, середина — -/+', () => {
-    expect(diffLines('a\nb\nc', 'a\nB\nc')).toEqual([
-      { k: 'n', t: 'a' },
-      { k: 'd', t: 'b' },
-      { k: 'a', t: 'B' },
-      { k: 'n', t: 'c' },
-    ])
-    expect(diffLines('', 'new')).toEqual([{ k: 'a', t: 'new' }])
   })
 
   it('итог: «✓ Итог», время и стоимость', () => {

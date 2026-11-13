@@ -376,6 +376,31 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .diff .d { color: var(--del); }
 .diff .n { color: var(--com); }
 .diff-more { display: block; }
+/* Вид изменений файла (Edit/Write/MultiEdit): заголовок «путь +A −D» и кнопки, ниже — .diff макета 02
+   с колонками номеров «было/стало»; строки +/− — тонированный фон --add/--del, код — подсветка hljs. */
+.dv { margin-top: 2px; }
+.dv-h { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 4px; }
+.dv-path { min-width: 0; overflow-wrap: anywhere; }
+.dv-stat { flex: none; }
+.dv-add { color: var(--add); }
+.dv-del { color: var(--del); }
+.dv-btns { display: flex; gap: 6px; margin-left: auto; flex: none; }
+.dv-btn { font: inherit; font-size: 11px; color: var(--accText); background: transparent; border: 1px solid var(--rule); border-radius: 4px; padding: 1px 7px; cursor: pointer; }
+.dv-btn:hover, .dv-btn:focus-visible { border-color: var(--acc); color: var(--strong); outline: none; }
+.diff.dv-body { white-space: normal; padding: 6px 0; overflow-wrap: anywhere; }
+.dv-body .dl { display: flex; padding: 0 10px; color: var(--text); }
+.dv-body .dl.a { background: color-mix(in srgb, var(--add) 12%, transparent); }
+.dv-body .dl.d { background: color-mix(in srgb, var(--del) 12%, transparent); }
+.dv-body .dn { flex: none; margin-right: 8px; text-align: right; color: var(--com); user-select: none; font-variant-numeric: tabular-nums; }
+.dv-body .dn + .dn { margin-right: 10px; }
+.dv-body.nonum .dn { display: none; }
+.dv-body .dm { flex: none; width: 1ch; margin-right: 8px; color: var(--com); user-select: none; }
+.dv-body .dl.a .dm, .dv-body .dl.a .dn { color: var(--add); }
+.dv-body .dl.d .dm, .dv-body .dl.d .dn { color: var(--del); }
+.dv-body .dt { flex: 1; min-width: 0; white-space: pre-wrap; font-variant-ligatures: var(--liga); }
+.dv-body .dl.gap { display: block; box-sizing: border-box; width: 100%; margin: 2px 0; padding: 0 10px; border: 0; background: color-mix(in srgb, var(--rule) 45%, transparent); font: inherit; color: var(--com); text-align: left; }
+.dv-body button.dl.gap { cursor: pointer; }
+.dv-body button.dl.gap:hover, .dv-body button.dl.gap:focus-visible { color: var(--accText); outline: none; }
 /* Запрос разрешения: весь ввод инструмента (команда, запись, правка, JSON) — моно, со своей прокруткой,
    фон и скругление как у .diff. Стоит после .diff, чтобы .diff.p-code брал отступы отсюда. */
 .p-code { box-sizing: border-box; margin: 0 16px 6px 14px; max-width: 76ch; max-height: 180px; overflow: auto; padding: 6px 10px; background: var(--bg); border-radius: 6px; font-family: var(--font-code); font-size: 12.5px; line-height: 1.5; color: var(--strong); white-space: pre-wrap; word-break: break-all; }
