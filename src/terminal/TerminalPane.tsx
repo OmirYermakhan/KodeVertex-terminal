@@ -329,8 +329,14 @@ export function TerminalPane(p: TerminalPaneProps) {
         setAwaitingShell(false)
         return true
       }
-      // Приглашение во время команды (ssh на хост со своей интеграцией) — не наше: блок не трогаем.
-      if (ev.t === 'prompt' && runningRef.current) return true
+      // Подписанное приглашение посреди команды — снова наш zsh: `exec zsh`, `omz reload` или вложенный
+      // zsh (метку они получают из окружения команды). 133;D такой команде не придёт — блок кончается
+      // с неизвестным кодом. Чужое (ssh на хост со своей интеграцией) без метки сюда не доходит.
+      // В alt screen (tmux, screen) приглашение рисует программа поверх — блок не трогаем.
+      if (ev.t === 'prompt' && runningRef.current) {
+        if (term.buffer.active.type === 'alternate') return true
+        endBlock(null)
+      }
       setContinuation(false)
       setAwaitingShell(false)
       if (ev.t === 'prompt') {

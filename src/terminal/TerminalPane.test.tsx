@@ -1174,7 +1174,7 @@ describe('TerminalPane', () => {
       expect(slot.style.height).toBe(`${Math.ceil(3 * cell)}px`)
     })
 
-    it('приглашение во время команды (ssh с интеграцией) не закрывает блок; OSC 7 после него не принимается', async () => {
+    it('приглашение во время команды (ssh с интеграцией, без нашей метки) не закрывает блок; OSC 7 после него не принимается', async () => {
       const onCwd = vi.fn()
       render(<TerminalPane {...props()} onCwd={onCwd} focused initialCwd="/w" />)
       spawns[0].resolve()
@@ -1182,7 +1182,8 @@ describe('TerminalPane', () => {
       const term = terms[0]
       act(() => void oscHandler(term, 7)('file://mac/a'))
       osc133(term, 'C;' + b64('ssh srv'))
-      osc133(term, 'A')
+      act(() => void rawOscHandler(term, 133)('A'))
+      act(() => void rawOscHandler(term, 133)('A;kv=remote'))
       const blk = document.querySelector('.blk:not(.feed-park .blk)')!
       expect(blk).toHaveClass('run')
       expect(textarea()).toHaveAttribute('aria-disabled', 'true')
@@ -1224,6 +1225,33 @@ describe('TerminalPane', () => {
       expect([...document.querySelectorAll('.blk .cmd')].map((e) => e.textContent)).toEqual(['cat evil.txt'])
       act(() => void oscHandler(term, 7)('file:///ok'))
       expect(onCwd.mock.calls.map((c) => c[0])).toEqual(['/ok'])
+    })
+
+    it('`exec zsh`: подписанное приглашение посреди команды заканчивает блок с неизвестным кодом; чужое — нет', async () => {
+      const { term } = await mounted()
+      osc133(term, 'C;' + b64('exec zsh'))
+      // Чужой 133;A без метки (ssh на хост со своей интеграцией) блок не заканчивает.
+      act(() => void rawOscHandler(term, 133)('A'))
+      expect(document.querySelectorAll('.blk.run')).toHaveLength(1)
+      // В alt screen (tmux) приглашение рисует программа — тоже нет.
+      term.buffer.active.type = 'alternate'
+      osc133(term, 'A')
+      expect(document.querySelectorAll('.blk.run')).toHaveLength(1)
+      term.buffer.active.type = 'normal'
+      // Новая оболочка подписывает приглашение той же меткой: блок закончен, не ошибка.
+      term.lines = ['Last login']
+      osc133(term, 'A')
+      expect(document.querySelector('.blk.run')).toBeNull()
+      const blk = document.querySelector('.blk:not(.feed-park .blk)')!
+      expect(blk.querySelector('.cmd')!.textContent).toBe('exec zsh')
+      expect(blk).not.toHaveClass('err')
+      expect(blk.querySelector('.exit')).toBeNull()
+      expect(textarea()).not.toHaveAttribute('aria-disabled')
+      // Дальше — обычные блоки.
+      osc133(term, 'C;' + b64('echo hi'))
+      term.lines = ['hi']
+      osc133(term, 'D;0')
+      expect([...document.querySelectorAll('.blk:not(.feed-park .blk) .cmd')].map((e) => e.textContent)).toEqual(['exec zsh', 'echo hi'])
     })
 
     it('маркеры до запуска сессии (метка ещё неизвестна) игнорируются', async () => {
