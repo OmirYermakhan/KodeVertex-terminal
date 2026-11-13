@@ -62,21 +62,27 @@ export function tailOutput(output: string): string {
 }
 
 const attr = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/\n/g, ' ')
-/** Закрывающий тег внутри содержимого не должен закрыть обёртку раньше времени. */
-const body = (s: string, tag: string) => s.replaceAll(`</${tag}>`, `<\\/${tag}>`)
+/**
+ * Теги обёрток в содержимом (вывод команды, текст сообщения) в любом написании: `</terminal_block>`,
+ * `</TERMINAL_BLOCK >`, `< / quoted_message>`, `<terminal_block n="9" …>`. Иначе вывод мог бы закрыть
+ * обёртку раньше времени и дописать «свой» блок с поддельной командой и кодом выхода.
+ */
+const WRAPPER_TAG = /<(\s*\/?\s*)(terminal_block|quoted_message)(?=[\s/>]|$)/gi
+/** Тег обёртки внутри содержимого обезврежен: `<` → `<\` (`</x>` → `<\/x>`, `<x …>` → `<\x …>`). */
+const body = (s: string) => s.replace(WRAPPER_TAG, '<\\$1$2')
 
 function terminalBlock(n: number, t: Attachment): string {
   const b = t.block
   if (!b) return ''
   const exit = b.exitCode === null ? '' : ` exit="${b.exitCode}"`
-  return `<terminal_block n="${n}" cmd="${attr(b.command)}"${exit} cwd="${attr(b.cwd)}">\n${body(tailOutput(b.output), 'terminal_block')}\n</terminal_block>`
+  return `<terminal_block n="${n}" cmd="${attr(b.command)}"${exit} cwd="${attr(b.cwd)}">\n${body(tailOutput(b.output))}\n</terminal_block>`
 }
 
 function quotedMessage(n: number, t: Attachment): string {
   const m = t.message
   if (!m) return ''
   const text = capBytes(m.text, MESSAGE_MAX_BYTES, 'head')
-  return `<quoted_message n="${n}" author="${attr(m.author)}">\n${body(text, 'quoted_message')}\n</quoted_message>`
+  return `<quoted_message n="${n}" author="${attr(m.author)}">\n${body(text)}\n</quoted_message>`
 }
 
 function pathRef(t: Attachment, cwd: string | null | undefined): string {
