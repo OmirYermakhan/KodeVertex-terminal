@@ -599,6 +599,11 @@ export function editInfo(s: ClaudeState, index: number): EditInfo | null {
   return { n, total: us.length, after: us.length - n, busy: s.busy, files: touchesFiles(s.items.slice(index + 1)) }
 }
 
+/** Агент для подписи карточки (по agentId элемента). */
+export function agentOf(agents: readonly Agent[] | undefined, x: FeedClaudeItem): Agent | undefined {
+  return x.type === 'assistant' || x.type === 'action' || x.type === 'question' ? agents?.find((a) => a.id === x.agentId) : undefined
+}
+
 /** «1 сообщение», «3 сообщения», «5 сообщений». */
 export function messagesLabel(n: number): string {
   const d = n % 10

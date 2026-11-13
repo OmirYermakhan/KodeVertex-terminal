@@ -2,16 +2,11 @@
 import { forwardRef, Fragment, type ReactNode } from 'react'
 import { ClaudeCard } from '../claude/cards/ClaudeCard'
 import { ErrorBoundary } from '../diag/ErrorBoundary'
-import type { Agent } from '../claude/reducer'
+import { agentOf, type Agent } from '../claude/reducer'
 import type { ClaudeItem, FeedItem, ShellBlock } from './feed'
 import { ShellBlockView } from './ShellBlockView'
 
 const NO_AGENTS: readonly Agent[] = []
-
-function agentOf(agents: readonly Agent[], it: ClaudeItem): Agent | undefined {
-  const x = it.item
-  return x.type === 'assistant' || x.type === 'action' || x.type === 'question' ? agents.find((a) => a.id === x.agentId) : undefined
-}
 
 export interface FeedProps {
   items: FeedItem[]
@@ -30,10 +25,15 @@ export interface FeedProps {
   onCopy?(id: string): void
   /** Ответ — в режиме чтения. */
   onRead?(id: string): void
+  /** Сообщения «Вы», которые можно изменить (id ленты), и «✎ Изменить». */
+  editable?: ReadonlySet<string>
+  onEdit?(id: string): void
+  /** Сообщение, которое сейчас правится в строке ввода. */
+  editingId?: string | null
 }
 
 export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
-  { items, selectedId, renderLive, agents = NO_AGENTS, renderClaude, onScroll, park, onAttach, onCopy, onRead },
+  { items, selectedId, renderLive, agents = NO_AGENTS, renderClaude, onScroll, park, onAttach, onCopy, onRead, editable, onEdit, editingId },
   ref,
 ) {
   return (
@@ -53,7 +53,17 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
           ) : renderClaude ? (
             <Fragment>{renderClaude(it)}</Fragment>
           ) : (
-            <ClaudeCard item={it} agent={agentOf(agents, it)} selected={it.id === selectedId} onAttach={onAttach} onCopy={onCopy} onRead={onRead} />
+            <ClaudeCard
+              item={it}
+              agent={agentOf(agents, it.item)}
+              agents={it.item.type === 'replaced' ? agents : undefined}
+              selected={it.id === selectedId}
+              onAttach={onAttach}
+              onCopy={onCopy}
+              onRead={onRead}
+              onEdit={editable?.has(it.id) ? onEdit : undefined}
+              editing={it.id === editingId}
+            />
           )}
         </ErrorBoundary>
       ))}

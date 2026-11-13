@@ -20,14 +20,16 @@ import { isLocalHost, parseOsc7Url, unmark } from './osc'
 import { useHome } from '../status/useGitInfo'
 import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
-import { applyShell, claudeIndex, commandBytes, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
+import { applyShell, claudeIndex, claudeItemId, commandBytes, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
-import { dismissQueueHint, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, enterClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
+import { editClaude, dismissQueueHint, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, enterClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
 import { aliasOf } from '../claude/models'
-import { pendingPrompt, type PermissionDecision } from '../claude/reducer'
+import { canEdit, editInfo, lastEditable, pendingPrompt, type PermissionDecision } from '../claude/reducer'
+import { EditChip } from '../claude/EditChip'
+import { docOf } from '../attach/doc'
 import { PermissionPrompt } from '../claude/PermissionPrompt'
 import { QuestionPrompt } from '../claude/QuestionPrompt'
-import { InputBar, type InputBarHandle } from '../input/InputBar'
+import { InputBar, type InputBarHandle, type InputSnapshot } from '../input/InputBar'
 import { QueuePanel, type QueuePanelHandle } from '../claude/QueuePanel'
 import { AgentsPanel, type AgentsPanelHandle } from '../claude/AgentsPanel'
 import { blockText, cleanSerializedHtml } from '../feed/blockHtml'
@@ -791,6 +793,82 @@ export function TerminalPane(p: TerminalPaneProps) {
     [p.paneId],
   )
 
+  // Правка отправленного сообщения: index — элемент ClaudeState.items, snap — черновик строки до правки.
+  const [editing, setEditing] = useState<{ index: number; snap: InputSnapshot } | null>(null)
+  const editingRef = useRef(editing)
+  useLayoutEffect(() => {
+    editingRef.current = editing
+  })
+  const claudeState = claude?.state
+  /** Сообщения «Вы», которые можно изменить (id ленты): у остальных «Изменить» не показываем. */
+  const editable = useMemo(() => {
+    const ids = new Set<string>()
+    claudeState?.items.forEach((_, i) => {
+      if (canEdit(claudeState, i)) ids.add(claudeItemId(i))
+    })
+    return ids
+  }, [claudeState])
+  const editableRef = useRef(editable)
+  useLayoutEffect(() => {
+    editableRef.current = editable
+  })
+  /** Начать правку сообщения index: его текст со значками — в строку, черновик сохраняется до esc. */
+  const beginEdit = useCallback((index: number) => {
+    const st = useClaudeSessions.getState().sessions[callbacks.current.paneId]?.state
+    const it = st?.items[index]
+    const bar = inputRef.current
+    if (!st || !bar || it?.type !== 'user' || !canEdit(st, index)) return false
+    // Правка другого сообщения поверх идущей — черновик тот же, что был до первой.
+    const snap = editingRef.current?.snap ?? bar.snapshot()
+    if (!bar.load(it.tokens && it.tokens.length > 0 ? docOf(it.text, it.tokens) : docOf(it.text))) return false
+    editingRef.current = { index, snap }
+    setEditing({ index, snap })
+    setSelected(null)
+    return true
+  }, [])
+  const cancelEdit = useCallback(() => {
+    const e = editingRef.current
+    if (!e) return
+    editingRef.current = null
+    setEditing(null)
+    inputRef.current?.restore(e.snap)
+  }, [])
+  const editMode = useMemo(
+    () =>
+      editing
+        ? {
+            onSubmit: (text: string, tokens?: Attachment[]) => {
+              const e = editingRef.current
+              if (!e) return
+              editingRef.current = null
+              setEditing(null)
+              inputRef.current?.restore(e.snap)
+              void editClaude(p.paneId, e.index, text, tokens).then((ok) => {
+                if (!ok) inputRef.current?.note('Это сообщение уже нельзя изменить')
+              })
+            },
+            onCancel: cancelEdit,
+          }
+        : null,
+    [editing, p.paneId, cancelEdit],
+  )
+  const edit = editing && claudeState ? editInfo(claudeState, editing.index) : null
+  // Сообщение больше нельзя изменить (другая сессия, ⌃L не в счёт) — правка отменяется, черновик возвращается.
+  const editLost = !!editing && !edit
+  useEffect(() => {
+    if (editLost) cancelEdit()
+  }, [editLost, cancelEdit])
+  const onEditLast = useCallback(() => {
+    const st = useClaudeSessions.getState().sessions[callbacks.current.paneId]?.state
+    const i = st ? lastEditable(st) : -1
+    return i >= 0 && beginEdit(i)
+  }, [beginEdit])
+  const onEditSelected = useCallback(() => {
+    const i = selectedRef.current ? claudeIndex(selectedRef.current) : -1
+    return i >= 0 && beginEdit(i)
+  }, [beginEdit])
+  const onEditItem = useCallback((id: string) => void beginEdit(claudeIndex(id)), [beginEdit])
+
   // Автопрокрутка: лента следует за выводом, пока пользователь у низа.
   const stickRef = useRef(true)
   const onFeedScroll = useCallback(() => {
@@ -852,7 +930,8 @@ export function TerminalPane(p: TerminalPaneProps) {
           queueRef.current?.focus()
           return
         }
-        const m = moveSelection(itemsRef.current, selectedRef.current, a === 'blockPrev' ? 'up' : 'down')
+        // Сообщения «Вы», которые можно изменить, тоже выбираются (E — изменить).
+        const m = moveSelection(itemsRef.current, selectedRef.current, a === 'blockPrev' ? 'up' : 'down', (it) => editableRef.current.has(it.id))
         setSelected(m.id)
         // ⌘↓ с последнего блока или из строки ввода — фокус в панель агентов (если она показана).
         if (m.leave) agentsRef.current?.focus()
@@ -900,6 +979,9 @@ export function TerminalPane(p: TerminalPaneProps) {
         onAttach={attachItem}
         onCopy={copyItem}
         onRead={setReaderId}
+        editable={editable}
+        onEdit={onEditItem}
+        editingId={editing ? claudeItemId(editing.index) : null}
         park={
           // Пока xterm не показан, он стоит здесь: невидим, но сохраняет ширину текста блока (cols).
           // inert: спрятанный xterm не получает фокус по Tab/⇧Tab (ввод вслепую в ZLE).
@@ -952,10 +1034,18 @@ export function TerminalPane(p: TerminalPaneProps) {
           />
           </ErrorBoundary>
         )}
+        {edit && !alt && (
+          <ErrorBoundary name="правка сообщения">
+            <EditChip info={edit} />
+          </ErrorBoundary>
+        )}
         <InputBar
           ref={inputRef}
           queue={queueInput}
           answer={answerMode}
+          edit={editMode}
+          onEditLast={onEditLast}
+          onEditSelected={onEditSelected}
           disabled={running || alt || awaiting}
           continuation={cont}
           completions={p.focused && !settingsOpen && settings.pathCompletions}

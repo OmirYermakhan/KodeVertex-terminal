@@ -205,12 +205,13 @@ export function selectable(it: FeedItem): boolean {
 }
 
 /**
- * ⌘↑/⌘↓ по завершённым shell-блокам и ответам Claude. Без выбора ⌘↑ берёт последний.
+ * ⌘↑/⌘↓ по завершённым shell-блокам и ответам Claude (also — ещё какие элементы выбираются,
+ * например сообщения «Вы», которые можно изменить). Без выбора ⌘↑ берёт последний.
  * ⌘↓ с последнего блока снимает выбор и сообщает leave — дальше фокус уходит из ленты
  * (в панель агентов, Task 8).
  */
-export function moveSelection(items: FeedItem[], selected: string | null, dir: 'up' | 'down'): SelectionMove {
-  const ids = items.filter(selectable).map((b) => b.id)
+export function moveSelection(items: FeedItem[], selected: string | null, dir: 'up' | 'down', also?: (it: FeedItem) => boolean): SelectionMove {
+  const ids = items.filter((it) => selectable(it) || !!also?.(it)).map((b) => b.id)
   const i = selected === null ? -1 : ids.indexOf(selected)
   if (dir === 'up') {
     if (ids.length === 0) return { id: null, leave: false }

@@ -41,11 +41,30 @@ function Output({ block }: { block: ShellBlock }) {
  * «⌘L в сообщение» можно и перетащить в строку ввода (TerminalPane).
  */
 export const READ_ACTION = '⌘R читать'
+/** Пузырь «Вы»: изменить отправленное сообщение. */
+export const EDIT_ACTION = '✎ Изменить'
 
-export function HoverActions({ id, onAttach, onCopy, onRead }: { id: string; onAttach?(id: string): void; onCopy?(id: string): void; onRead?(id: string): void }) {
-  if (!onAttach && !onCopy && !onRead) return null
+export function HoverActions({
+  id,
+  onAttach,
+  onCopy,
+  onRead,
+  onEdit,
+}: {
+  id: string
+  onAttach?(id: string): void
+  onCopy?(id: string): void
+  onRead?(id: string): void
+  onEdit?(id: string): void
+}) {
+  if (!onAttach && !onCopy && !onRead && !onEdit) return null
   return (
     <div className="hover-act">
+      {onEdit && (
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => onEdit(id)}>
+          {EDIT_ACTION}
+        </button>
+      )}
       {onAttach && (
         <button type="button" className="on" onMouseDown={(e) => e.preventDefault()} onClick={() => onAttach(id)}>
           {ATTACH_ACTION}

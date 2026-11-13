@@ -38,6 +38,8 @@ export const CLAUDE_HINT = '↵ отправить агенту · /exit вый�
 export const CLAUDE_MARK = '◆'
 export const ANSWER_PLACEHOLDER = 'Ваш ответ на вопрос…'
 export const ANSWER_HINT = '↵ ответить · esc к вопросу'
+export const EDIT_PLACEHOLDER = 'Исправленное сообщение…'
+export const EDIT_HINT = '↵ отправить исправленное · esc отменить'
 export const CONTINUATION_NOTE = 'Команда не закончена — допишите или ⌃C'
 /** ↵ при красном значке: сообщение не уходит. */
 export const UNSUPPORTED_NOTE = 'Красные вложения Claude не примет — уберите их (⌫⌫), чтобы отправить'
@@ -96,6 +98,15 @@ export interface InputBarProps {
    * ↵ в пустой строке — следующее (после паузы); esc — убрать подсказку паузы (true — была).
    */
   queue?: { recall(): string | Doc | null; sendNext(): boolean; dismissHint(): boolean }
+  /**
+   * Правка отправленного сообщения: ↵ (или ⌘↵) отдаёт исправленный текст со значками сюда, esc —
+   * отмена. Строку после ↵ не очищаем: родитель возвращает в неё прежний черновик.
+   */
+  edit?: { onSubmit(text: string, tokens?: Attachment[]): void; onCancel(): void } | null
+  /** ↑ в пустой строке режима Claude при пустой очереди: изменить последнее сообщение; false — нечего. */
+  onEditLast?(): boolean
+  /** E в пустой строке: изменить выбранное ⌘↑ сообщение; false — выбрано не сообщение «Вы». */
+  onEditSelected?(): boolean
   /** Число значков в строке изменилось (сегмент «вложения N» в статус-баре). */
   onTokens?(n: number): void
   /** Строка стала (или перестала) принимать значки: режим Claude и не ответ на вопрос. */
@@ -129,6 +140,17 @@ export interface InputBarHandle {
   removeToken(id: string): boolean
   /** Подсказка над полем (ошибка открытия файла, блока нет в ленте). */
   note(text: string): void
+  /** Что сейчас в строке (текст со значками и режим) — чтобы вернуть после правки сообщения. */
+  snapshot(): InputSnapshot
+  /** Вернуть строку из snapshot. */
+  restore(s: InputSnapshot): void
+  /** Текст со значками — в строку для правки (режим Claude, курсор в конце). false — строка неактивна. */
+  load(d: Doc): boolean
+}
+
+export interface InputSnapshot {
+  doc: Doc
+  claude: boolean
 }
 
 const onFirstLine = (v: string, pos: number) => !v.slice(0, pos).includes('\n')
@@ -294,6 +316,19 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     const tokens = docRef.current.tokens
     if (q.answer) {
       q.answer.onSubmit(readable(docOf(text, tokens)).trim())
+    } else if (q.edit) {
+      const d = docOf(text, tokens)
+      if (sendBlocked(d.tokens)) {
+        showNote(UNSUPPORTED_NOTE)
+        return
+      }
+      completionRef.current.close()
+      hintsRef.current.close()
+      setAt(null)
+      nav.current = NAV_START
+      // Строку не чистим: родитель сразу возвращает в неё черновик (restore).
+      q.edit.onSubmit(d.text, d.tokens.length > 0 ? d.tokens : undefined)
+      return
     } else if ((ask || claudeRef.current) && isModelCommand(text) && q.onChooseModel) {
       const info = q.modelInfo?.() ?? { current: null, effort: null }
       completionRef.current.close()
@@ -331,7 +366,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     setLine('', 0)
     completionRef.current.reset()
     hintsRef.current.reset()
-  }, [setLine, setClaudeMode, setPickerState, showNote])
+  }, [setLine, setClaudeMode, setPickerState, showNote, setAt])
 
   /** Значки у курсора (заменяя выделение). */
   const putTokens = useCallback(
@@ -485,6 +520,26 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       return true
     },
     note: showNote,
+    snapshot: () => ({ doc: docRef.current, claude: claudeRef.current }),
+    restore: (snap) => {
+      completionRef.current.close()
+      hintsRef.current.close()
+      setAt(null)
+      setClaudeMode(snap.claude)
+      nav.current = NAV_START
+      setDoc(snap.doc, snap.doc.text.length)
+    },
+    load: (d) => {
+      if (props.current.disabled) return false
+      completionRef.current.close()
+      hintsRef.current.close()
+      setAt(null)
+      setClaudeMode(true)
+      nav.current = NAV_START
+      setDoc(d, d.text.length)
+      edRef.current?.focus()
+      return true
+    },
   }))
 
   /** `@…` у курсора (режим Claude): выбор с группами; esc закрывает его до правки строки. */
@@ -660,6 +715,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     const only = (m: keyof typeof mods | null) =>
       (Object.keys(mods) as (keyof typeof mods)[]).every((k) => mods[k] === (k === m))
 
+    // E в пустой строке при выбранном (⌘↑) сообщении «Вы» — изменить его.
+    if (e.code === 'KeyE' && plain && v === '' && !props.current.answer && !props.current.edit && props.current.onEditSelected?.()) {
+      e.preventDefault()
+      return
+    }
     // ⌫/⌦: значок сначала выделяется, вторым нажатием удаляется; буквы — по графемам.
     if ((e.key === 'Backspace' || e.key === 'Delete') && plain) {
       e.preventDefault()
@@ -693,6 +753,12 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     if (only('meta') && e.code === 'KeyO') {
       e.preventDefault()
       openDialog()
+      return
+    }
+    // Правка сообщения: esc — отмена (строка вернётся к черновику), набранное правкой не уходит.
+    if (e.key === 'Escape' && plain && props.current.edit && !props.current.answer) {
+      e.preventDefault()
+      props.current.edit.onCancel()
       return
     }
     // Пауза очереди: esc сначала убирает подсказку (режим Claude остаётся).
@@ -729,20 +795,25 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       }
       if (only(null)) {
         if (v.trim()) submit(v, false)
-        else if (v === '' && !props.current.answer) props.current.queue?.sendNext()
+        else if (v === '' && !props.current.answer && !props.current.edit) props.current.queue?.sendNext()
       }
       return
     }
     if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && only(null)) {
       const up = e.key === 'ArrowUp'
       // ↑ в пустой строке — последнее сообщение очереди Claude обратно в строку (для правки).
-      if (up && v === '' && !props.current.answer) {
+      if (up && v === '' && !props.current.answer && !props.current.edit) {
         const r = props.current.queue?.recall() ?? null
         if (r !== null) {
           e.preventDefault()
           nav.current = NAV_START
           const back = typeof r === 'string' ? docOf(r) : docOf(r.text, r.tokens)
           setDoc(back, back.text.length)
+          return
+        }
+        // Очередь пуста — ↑ в режиме Claude правит последнее отправленное сообщение.
+        if (claudeRef.current && props.current.onEditLast?.()) {
+          e.preventDefault()
           return
         }
       }
@@ -867,7 +938,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [open, ctx, buffer, lineStart])
 
   const empty = doc.text === ''
-  const placeholder = p.answer ? ANSWER_PLACEHOLDER : claudeMode ? CLAUDE_PLACEHOLDER : PLACEHOLDER
+  const placeholder = p.answer ? ANSWER_PLACEHOLDER : p.edit ? EDIT_PLACEHOLDER : claudeMode ? CLAUDE_PLACEHOLDER : PLACEHOLDER
   return (
     <div className="input-wrap" ref={wrapRef}>
       {atShown && (
@@ -1005,7 +1076,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           )}
           <span className="in-measure" ref={measureRef} aria-hidden="true" />
         </div>
-        <span className="in-hint">{p.answer ? ANSWER_HINT : claudeMode ? (nearTok ? PREVIEW_HINT : CLAUDE_HINT) : ASK_HINT}</span>
+        <span className="in-hint">{p.answer ? ANSWER_HINT : nearTok && claudeMode ? PREVIEW_HINT : p.edit ? EDIT_HINT : claudeMode ? CLAUDE_HINT : ASK_HINT}</span>
       </div>
     </div>
   )
