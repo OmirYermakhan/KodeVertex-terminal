@@ -22,7 +22,8 @@ import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
 import { applyShell, claudeIndex, claudeItemId, commandBytes, failurePrompt, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
-import { editClaude, dismissQueueHint, dismissSuggestion, feedCleared, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
+import { editClaude, dismissQueueHint, dismissSuggestion, feedCleared, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, listSessions, resumeClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
+import type { SessionInfo } from '../claude/resume'
 import { aliasOf } from '../claude/models'
 import { canEdit, editInfo, lastEditable, pendingPrompt, type PermissionDecision } from '../claude/reducer'
 import { EditChip } from '../claude/EditChip'
@@ -848,6 +849,21 @@ export function TerminalPane(p: TerminalPaneProps) {
     return enterClaude(p.paneId, cwdRef.current)
   }, [p.paneId])
   const onExitClaude = useCallback(() => exitClaude(p.paneId), [p.paneId])
+  // `/resume`: прошлые разговоры каталога панели; выбранный — с чистой ленты (как `/clear`), его история —
+  // карточками. Лента чистится, только когда история прочитана (иначе текущий разговор остаётся).
+  const onListSessions = useCallback(() => listSessions(p.paneId, cwdRef.current), [p.paneId])
+  const onResume = useCallback(
+    (s: SessionInfo) => {
+      if (!claudeCwdKnown(p.paneId, cwdRef.current)) return false
+      void resumeClaude(p.paneId, cwdRef.current, s, (n) => {
+        claudeFrom.current = n
+        setItems((it) => it.filter((x) => (x.kind === 'shell' ? x.running : claudeIndex(x.id) >= n)))
+        setSelected(null)
+      })
+      return true
+    },
+    [p.paneId],
+  )
   const onChooseModel = useCallback((c: ModelChoice) => void chooseModel(p.paneId, cwdRef.current, c), [p.paneId])
   // Текущая модель: выбранная в `/model` для панели, иначе из настроек Claude Code, иначе Default.
   const modelInfo = useCallback(() => {
@@ -993,6 +1009,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         if (a === 'clearFeed') return onClearFeed()
         if (a === 'claudeToggle') return inputRef.current?.toggleClaude()
         if (a === 'chooseModel') return inputRef.current?.openModelPicker()
+        if (a === 'resumeClaude') return inputRef.current?.openResumePicker()
         if (a === 'historySearch') return inputRef.current?.openHistorySearch()
         // ⌘F: строка поиска; уже открыта — фокус в неё.
         if (a === 'find') {
@@ -1208,6 +1225,8 @@ export function TerminalPane(p: TerminalPaneProps) {
           onExitClaude={onExitClaude}
           onChooseModel={onChooseModel}
           modelInfo={modelInfo}
+          onListSessions={onListSessions}
+          onResume={onResume}
           onInterrupt={onInterrupt}
           onEof={onEof}
           onClearFeed={onClearFeed}

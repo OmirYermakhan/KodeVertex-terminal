@@ -234,6 +234,12 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .mp-ok { color: var(--add); text-align: right; font-family: var(--font-code); }
 .mp-effort { padding: 6px 14px; border-top: 1px solid var(--rule); font-family: var(--font-code); font-size: 12px; color: var(--muted); white-space: nowrap; }
 .mp-effort b { color: var(--strong); font-weight: 500; }
+/* Выбор разговора (`/resume`): рамка и строки выбора модели; заголовок — первое сообщение (шрифт текста). */
+.rp .hp-list { --hp-name: 44ch; }
+.rp-row .hp-n { font-family: var(--font-text); font-size: 13.5px; }
+.rp-row .hp-d { font-family: var(--font-code); font-size: 11.5px; }
+.hp-row.rp-empty { grid-template-columns: minmax(0, 1fr); color: var(--muted); cursor: default; }
+.hp-row.rp-empty.err { color: var(--del); white-space: normal; }
 
 /* ⌘P — палитра команд: та же рамка .cp.hp, по центру вверху окна; клавиши — .kbd макета 04. */
 .pal-back { position: fixed; inset: 0; z-index: 90; }
