@@ -480,9 +480,12 @@ export function TerminalPane(p: TerminalPaneProps) {
     else inputRef.current?.focus()
   }, [])
 
+  /** Кнопка мыши нажата в панели: фокус не переносим до отпускания (иначе сорвётся выделение текста). */
+  const pointerDown = useRef(false)
   // Фокус — при смене фокусной панели и после закрытия настроек.
   useEffect(() => {
-    if (p.focused && !settingsOpen) focusActive()
+    // Щелчок в панели сделал её фокусной: фокус поставит onMouseUp, если текст не выделяли.
+    if (p.focused && !settingsOpen && !pointerDown.current) focusActive()
   }, [p.focused, settingsOpen, focusActive])
 
   // Команда закончилась (строка ввода снова активна) — фокус в неё, если он был в панели или нигде.
@@ -994,7 +997,17 @@ export function TerminalPane(p: TerminalPaneProps) {
       onFocus={() => callbacks.current.onFocus()}
       // Панель — фокусная и по щелчку, а не только по фокусу элемента: в WebKit щелчок по кнопке,
       // по тексту ленты или выделение мышью фокус не переносят, и ⌘W закрыл бы прежнюю панель.
-      onPointerDownCapture={() => callbacks.current.onFocus()}
+      onPointerDownCapture={() => {
+        pointerDown.current = true
+        const up = () => {
+          pointerDown.current = false
+          window.removeEventListener('pointerup', up, true)
+          window.removeEventListener('pointercancel', up, true)
+        }
+        window.addEventListener('pointerup', up, true)
+        window.addEventListener('pointercancel', up, true)
+        callbacks.current.onFocus()
+      }}
       onPointerDown={onPanePointerDown}
       // Клик по ленте возвращает ввод туда, где он идёт: в строку ввода, а пока идёт команда — в xterm.
       onMouseUp={(e) => {

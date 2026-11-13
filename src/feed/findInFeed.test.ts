@@ -74,7 +74,9 @@ describe('подсветка', () => {
       constructor(...r: Range[]) {
         this.ranges = r
       }
-      add() {}
+      add(r: Range) {
+        this.ranges.push(r)
+      }
     }
     vi.stubGlobal('CSS', { highlights: reg })
     vi.stubGlobal('Highlight', FakeHighlight)

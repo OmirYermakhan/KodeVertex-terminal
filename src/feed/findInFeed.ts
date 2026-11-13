@@ -138,6 +138,20 @@ function registry(): { reg: Registry; Ctor: HighlightCtor } | null {
   return css?.highlights && Ctor ? { reg: css.highlights, Ctor } : null
 }
 
+/** Сколько совпадений подсвечивается (счётчик «N из M» считает все). */
+export const MAX_HIGHLIGHTS = 5000
+
+/**
+ * Диапазоны добавляются по одному: `new Highlight(...ranges)` при десятках тысяч совпадений
+ * упирается в лимит аргументов JavaScriptCore (RangeError).
+ */
+function highlight(Ctor: HighlightCtor, ranges: Range[]): HighlightLike {
+  const h = new Ctor()
+  const n = Math.min(ranges.length, MAX_HIGHLIGHTS)
+  for (let i = 0; i < n; i++) h.add(ranges[i])
+  return h
+}
+
 function sync(): void {
   const api = registry()
   if (!api) return
@@ -147,9 +161,9 @@ function sync(): void {
     for (const r of v.all) if (r !== v.current) all.push(r)
     if (v.current) cur.push(v.current)
   }
-  if (all.length) api.reg.set(FIND_HIGHLIGHT, new api.Ctor(...all))
+  if (all.length) api.reg.set(FIND_HIGHLIGHT, highlight(api.Ctor, all))
   else api.reg.delete(FIND_HIGHLIGHT)
-  if (cur.length) api.reg.set(FIND_CURRENT, new api.Ctor(...cur))
+  if (cur.length) api.reg.set(FIND_CURRENT, highlight(api.Ctor, cur))
   else api.reg.delete(FIND_CURRENT)
 }
 
