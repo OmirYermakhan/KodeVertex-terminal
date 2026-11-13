@@ -293,3 +293,20 @@ describe('вопросы агента (can_use_tool AskUserQuestion)', () => {
     expect(cancelPrompts(s)).toBe(s)
   })
 })
+
+describe('итог не повторяет ответ', () => {
+  const answer = 'Есть два пути:\n\n1. **Путь кода**\n2. **Путь запроса**'
+  it('result совпадает с ответом этого хода — итог без текста', () => {
+    const s = run(userSent(initialClaude(), 'объясни', 0), [
+      assistant([{ type: 'text', text: answer }]),
+      { type: 'result', result: answer + '\n', total_cost_usd: 0.29, duration_ms: 52_600 },
+    ])
+    expect(s.items.filter((i) => i.type === 'assistant')).toHaveLength(1)
+    expect(s.items.at(-1)).toMatchObject({ type: 'summary', text: '', costUsd: 0.29 })
+  })
+  it('ответ прошлого хода не считается; без ответа текст итога остаётся', () => {
+    const s1 = run(userSent(initialClaude(), 'a', 0), [assistant([{ type: 'text', text: 'да' }]), { type: 'result', result: 'да' }])
+    const s2 = run(userSent(s1, 'b', 0), [{ type: 'result', result: 'да' }])
+    expect(s2.items.at(-1)).toMatchObject({ type: 'summary', text: 'да' })
+  })
+})

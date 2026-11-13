@@ -7,7 +7,7 @@ export function formatCost(usd: number): string {
   return `$${usd.toFixed(2)}`
 }
 
-/** Итог хода (макет 02, вариант B, .sum): «✓ Итог», время и стоимость. */
+/** Итог хода (макет 02, вариант B, .sum): «✓ Итог», время и стоимость; без текста — «✓ Готово». */
 export const SummaryCard = memo(function SummaryCard({
   text,
   durationMs,
@@ -24,7 +24,8 @@ export const SummaryCard = memo(function SummaryCard({
   return (
     <div className={isError ? 'sum err' : 'sum'} data-item-id={id}>
       <div className="who">
-        <span>{isError ? '✕ Итог' : '✓ Итог'}</span>
+        {/* Ответ уже в карточке выше — итог одной строкой: «✓ Готово · время · цена». */}
+        <span>{text ? (isError ? '✕ Итог' : '✓ Итог') : isError ? '✕ Ошибка' : '✓ Готово'}</span>
         <span className="sum-meta">
           {formatDuration(durationMs)} · {formatCost(costUsd)}
         </span>

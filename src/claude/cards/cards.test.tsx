@@ -214,6 +214,12 @@ describe('карточки', () => {
     expect(container.querySelector('.sum strong')?.textContent).toBe('4')
   })
 
+  it('итог без текста (ответ уже выше) — одна строка «✓ Готово»', () => {
+    const { container } = render(<SummaryCard text="" durationMs={52600} costUsd={0.29} isError={false} />)
+    expect(container.querySelector('.sum .who')?.textContent).toBe('✓ Готово52.6 с · $0.29')
+    expect(container.querySelector('.sum .md, .sum p')).toBeNull()
+  })
+
   it('итог с ошибкой помечен', () => {
     const { container } = render(<SummaryCard text="упало" durationMs={1000} costUsd={0} isError />)
     expect(container.querySelector('.sum')).toHaveClass('err')

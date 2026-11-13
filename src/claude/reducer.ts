@@ -338,6 +338,20 @@ function onUser(s: ClaudeState, ev: Rec, now: number): ClaudeState {
   return next
 }
 
+const squash = (t: string) => t.replace(/\s+/g, ' ').trim()
+
+/** Текст итога (`result`) уже есть в ответах этого хода — второй раз его не показываем. */
+function repeatsAnswer(items: readonly FeedClaudeItem[], result: string): boolean {
+  const r = squash(result)
+  if (!r) return false
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]
+    if (it.type === 'user') break
+    if (it.type === 'assistant' && squash(it.text).includes(r)) return true
+  }
+  return false
+}
+
 function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
   // Ход закончен — его вопросы и запросы разрешений больше не ждут ответа.
   const s = cancelPrompts(prev)
@@ -353,7 +367,8 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
   const items: FeedClaudeItem[] = s.items.map((it) =>
     it.type === 'assistant' && it.streaming ? { ...it, streaming: false } : it,
   )
-  items.push({ type: 'summary', text: strOr(ev.result), durationMs: num(ev.duration_ms), costUsd: cost, isError })
+  const result = strOr(ev.result)
+  items.push({ type: 'summary', text: repeatsAnswer(items, result) ? '' : result, durationMs: num(ev.duration_ms), costUsd: cost, isError })
   // Ход закончен: его незавершённые действия и субагенты больше не идут.
   const closed: FeedClaudeItem[] = items.map((it) =>
     it.type === 'action' && it.status === 'running' ? { ...it, status: isError ? 'error' : 'done' } : it,
