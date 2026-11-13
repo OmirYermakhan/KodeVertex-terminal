@@ -20,7 +20,7 @@ import { isLocalHost, parseOsc7Url, unmark } from './osc'
 import { useHome } from '../status/useGitInfo'
 import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
-import { applyShell, claudeIndex, claudeItemId, commandBytes, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
+import { applyShell, claudeIndex, claudeItemId, commandBytes, failurePrompt, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
 import { editClaude, dismissQueueHint, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
 import { aliasOf } from '../claude/models'
@@ -32,7 +32,8 @@ import { QuestionPrompt } from '../claude/QuestionPrompt'
 import { InputBar, type InputBarHandle, type InputSnapshot } from '../input/InputBar'
 import { QueuePanel, type QueuePanelHandle } from '../claude/QueuePanel'
 import { AgentsPanel, type AgentsPanelHandle } from '../claude/AgentsPanel'
-import { blockText, cleanSerializedHtml } from '../feed/blockHtml'
+import { blockText, blockTextOf, cleanSerializedHtml } from '../feed/blockHtml'
+import { pushHistory } from '../input/history'
 import { Feed } from '../feed/FeedView'
 import { LiveTerminal } from '../feed/LiveTerminal'
 import { registerPaneCommands, type PaneAction } from '../feed/paneCommands'
@@ -177,6 +178,10 @@ export function TerminalPane(p: TerminalPaneProps) {
   const [selected, setSelected] = useState<string | null>(null)
   /** Ответ, открытый в режиме чтения (id элемента ленты). */
   const [readerId, setReaderId] = useState<string | null>(null)
+  const readerIdRef = useRef(readerId)
+  useLayoutEffect(() => {
+    readerIdRef.current = readerId
+  })
   const selectedRef = useRef(selected)
   useEffect(() => {
     selectedRef.current = selected
@@ -710,6 +715,33 @@ export function TerminalPane(p: TerminalPaneProps) {
     if (text) navigator.clipboard?.writeText(text).catch(() => {})
   }, [])
 
+  // Оболочка в простое: строка ввода активна и не ждёт продолжения (PS2) — команду можно повторить.
+  const shellIdle = !running && !alt && !awaiting && !cont
+  const shellIdleRef = useRef(shellIdle)
+  useLayoutEffect(() => {
+    shellIdleRef.current = shellIdle
+  })
+  /** «Повторить»: команда блока — как набранная и ↵ (в историю, черновик строки не трогаем). */
+  const repeatBlock = useCallback(
+    (id: string | null) => {
+      const it = id ? itemsRef.current.find((x) => x.id === id) : undefined
+      if (it?.kind !== 'shell' || it.running || !shellIdleRef.current) return false
+      if (onRun(it.command)) pushHistory(it.command)
+      return true
+    },
+    [onRun],
+  )
+  const repeatBlockClick = useCallback((id: string) => void repeatBlock(id), [repeatBlock])
+  /** «Спросить Claude»: код, каталог и хвост вывода упавшего блока — в Claude-сессию панели (занята — в очередь). */
+  const askBlock = useCallback((id: string | null) => {
+    const it = id ? itemsRef.current.find((x) => x.id === id) : undefined
+    if (it?.kind !== 'shell' || it.running || it.exitCode === null || it.exitCode === 0) return
+    const paneId = callbacks.current.paneId
+    // Каталог неизвестен — askClaude покажет ошибку карточкой, режим не включаем.
+    if (claudeCwdKnown(paneId, cwdRef.current)) inputRef.current?.claudeOn()
+    void askClaude(paneId, cwdRef.current, failurePrompt(it.command, it.exitCode, it.cwd, blockTextOf(it)))
+  }, [])
+
   // Перетаскивание блока (за строку команды) или ответа (за подпись) в строку ввода — значком.
   const [drag, setDrag] = useState<{ token: Attachment; x: number; y: number } | null>(null)
   const onPanePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -930,6 +962,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         if (a === 'clearFeed') return onClearFeed()
         if (a === 'claudeToggle') return inputRef.current?.toggleClaude()
         if (a === 'chooseModel') return inputRef.current?.openModelPicker()
+        if (a === 'historySearch') return inputRef.current?.openHistorySearch()
         // ⌘F: строка поиска; уже открыта — фокус в неё.
         if (a === 'find') {
           if (findRef.current) findRef.current.focus()
@@ -939,6 +972,19 @@ export function TerminalPane(p: TerminalPaneProps) {
         if (a === 'blockCopy') {
           copyItem(selectedRef.current)
           return
+        }
+        // ⌘⇧A: выбранный упавший блок — «Спросить Claude».
+        if (a === 'blockAsk') {
+          askBlock(selectedRef.current)
+          return
+        }
+        // ⌘R на выбранном блоке оболочки (режим чтения закрыт) — «Повторить».
+        if (a === 'blockRead' && !readerIdRef.current) {
+          const sel = itemsRef.current.find((it) => it.id === selectedRef.current)
+          if (sel?.kind === 'shell') {
+            if (!repeatBlock(sel.id)) inputRef.current?.note('Повторить можно, когда оболочка свободна')
+            return
+          }
         }
         // ⌘R: выбранный ответ (или последний ответ в ленте) — в режиме чтения; повторно — закрыть.
         if (a === 'blockRead') {
@@ -981,7 +1027,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         // ⌘↓ с последнего блока или из строки ввода — фокус в панель агентов (если она показана).
         if (m.leave) agentsRef.current?.focus()
       }, () => ({ claude: inputRef.current?.claudeMode() ?? false })),
-    [p.paneId, focusPrompt, attachItem, copyItem, onClearFeed],
+    [p.paneId, focusPrompt, attachItem, copyItem, onClearFeed, askBlock, repeatBlock],
   )
 
   const readerItem = readerId ? items.find((it) => it.id === readerId) : undefined
@@ -1036,6 +1082,8 @@ export function TerminalPane(p: TerminalPaneProps) {
         onScroll={onFeedScroll}
         onAttach={attachItem}
         onCopy={copyItem}
+        onRepeat={shellIdle ? repeatBlockClick : undefined}
+        onAsk={askBlock}
         onRead={setReaderId}
         editable={editable}
         onEdit={onEditItem}

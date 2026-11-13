@@ -1,7 +1,7 @@
-// Команды ленты (⌘↑/⌘↓/⌘⇧C/⌘L, ⌘F) идут через общий keymap → runAction → обработчик фокусной панели.
-export type BlockAction = 'blockPrev' | 'blockNext' | 'blockCopy' | 'blockAttach' | 'blockRead'
+// Команды ленты (⌘↑/⌘↓/⌘⇧C/⌘L/⌘⇧A, ⌘F) идут через общий keymap → runAction → обработчик фокусной панели.
+export type BlockAction = 'blockPrev' | 'blockNext' | 'blockCopy' | 'blockAttach' | 'blockRead' | 'blockAsk'
 /** Плюс команды палитры ⌘P для строки ввода и ленты фокусной панели. */
-export type PaneAction = BlockAction | 'find' | 'clearFeed' | 'claudeToggle' | 'chooseModel'
+export type PaneAction = BlockAction | 'find' | 'clearFeed' | 'claudeToggle' | 'chooseModel' | 'historySearch'
 
 /** Что палитре нужно знать о панели (подпись «Режим Claude: включить/выключить»). */
 export interface PaneInfo {

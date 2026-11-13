@@ -1003,6 +1003,61 @@ describe('TerminalPane', () => {
       expect(document.querySelector('.blk.sel')).toBeNull()
     })
 
+    it('«Спросить Claude» у упавшего блока: код, каталог и вывод — в Claude, строка в режиме Claude; ⌘⇧A — то же', async () => {
+      invoke.mockImplementation((cmd: string) => Promise.resolve(cmd === 'claude_start' ? 'c1' : undefined))
+      const { term } = await mounted()
+      osc133(term, 'C;' + b64('true'))
+      osc133(term, 'D;0')
+      osc133(term, 'C;' + b64('npm test'))
+      term.lines = ['out1', 'out2']
+      osc133(term, 'D;1')
+      const blocks = () => Array.from(document.querySelectorAll('.blk:not(.feed-park .blk)'))
+      // Только у упавшего блока.
+      expect(blocks()[0].querySelector('.bh-act .ask')).toBeNull()
+      fireEvent.click(blocks()[1].querySelector<HTMLButtonElement>('.bh-act .ask')!)
+      await act(async () => {
+        await flush()
+        await flush()
+      })
+      expect(document.querySelector('.input .in-mode')).not.toBeNull()
+      const sends = () => invoke.mock.calls.filter((c) => c[0] === 'claude_send')
+      expect(sends()[0][1]).toEqual({
+        id: 'c1',
+        text: 'Команда `npm test` завершилась с кодом 1 в /w. Вывод:\n```\nout1\nout2\n```\nПомоги понять причину и исправить.',
+      })
+      // Ход идёт — ⌘⇧A на выбранном блоке ставит вопрос в очередь.
+      // Над строкой ввода — пузырь «Вы» (тоже выбирается): поднимаемся до блока.
+      for (let i = 0; i < 5 && !document.querySelector('.blk.sel'); i++) act(() => runPaneCommand('p', 'blockPrev'))
+      expect(document.querySelector('.blk.sel .cmd')!.textContent).toBe('npm test')
+      act(() => runPaneCommand('p', 'blockAsk'))
+      await act(async () => {
+        await flush()
+      })
+      expect(sends()).toHaveLength(1)
+      expect(useClaudeSessions.getState().sessions.p.queue.map((q) => q.text)).toEqual([sends()[0][1].text])
+    })
+
+    it('«Повторить» и ⌘R на выбранном блоке: команда снова уходит в оболочку и в историю; пока команда идёт — нельзя', async () => {
+      const { term } = await mounted()
+      const write = spawns[0].handle.write
+      osc133(term, 'C;' + b64('make'))
+      osc133(term, 'D;2')
+      act(() => void oscHandlerOf(term)('A'))
+      fireEvent.click(document.querySelector<HTMLButtonElement>('.blk .bh-act button:not(.ask)')!)
+      expect(write).toHaveBeenLastCalledWith('\x1b[200~make\x1b[201~\r')
+      expect(getHistory()).toEqual(['make'])
+      // Оболочка ещё не ответила — кнопки нет, ⌘R не повторяет и не открывает чтение.
+      expect(document.querySelector('.blk .bh-act button:not(.ask)')).toBeNull()
+      write.mockClear()
+      act(() => runPaneCommand('p', 'blockPrev'))
+      act(() => runPaneCommand('p', 'blockRead'))
+      expect(write).not.toHaveBeenCalled()
+      act(() => void oscHandlerOf(term)('A'))
+      act(() => runPaneCommand('p', 'blockRead'))
+      expect(write).toHaveBeenCalledWith('\x1b[200~make\x1b[201~\r')
+      expect(document.querySelector('.reader')).toBeNull()
+    })
+
     it('⌘L: выбранный блок — значком у курсора, строка в режиме Claude; кнопка «⌘L в сообщение» — то же; уходит <terminal_block>', async () => {
       invoke.mockImplementation((cmd: string) => Promise.resolve(cmd === 'claude_start' ? 'c1' : undefined))
       const { term } = await mounted()

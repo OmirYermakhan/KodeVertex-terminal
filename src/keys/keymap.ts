@@ -4,7 +4,7 @@ export type Action =
   | 'tab1' | 'tab2' | 'tab3' | 'tab4' | 'tab5' | 'tab6' | 'tab7' | 'tab8' | 'tab9'
   | 'prevTab' | 'nextTab'
   | 'fontBigger' | 'fontSmaller' | 'fontReset' | 'openSettings'
-  | 'blockPrev' | 'blockNext' | 'blockCopy' | 'blockAttach' | 'blockRead'
+  | 'blockPrev' | 'blockNext' | 'blockCopy' | 'blockAttach' | 'blockRead' | 'blockAsk'
   | 'toggleAgents' | 'find' | 'palette'
 
 export interface Binding {
@@ -50,6 +50,8 @@ export const KEYMAP: Binding[] = [
   cmd('blockAttach', 'KeyL'),
   // ⌘R: выбранный (или последний) ответ — в режиме чтения.
   cmd('blockRead', 'KeyR'),
+  // ⌘⇧A: выбранный упавший блок — «Спросить Claude».
+  cmd('blockAsk', 'KeyA', { shift: true }),
   cmd('toggleAgents', 'KeyJ'),
   // ⌘F: поиск в ленте фокусной панели.
   cmd('find', 'KeyF'),

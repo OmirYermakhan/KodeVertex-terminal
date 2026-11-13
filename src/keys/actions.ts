@@ -45,6 +45,7 @@ export function runAction(a: Action): void {
     case 'blockCopy':
     case 'blockAttach':
     case 'blockRead':
+    case 'blockAsk':
     case 'find': {
       const t = tabs.tabs.find((x) => x.id === tabs.active)
       return t && runPaneCommand(t.focused, a)

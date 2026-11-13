@@ -41,7 +41,7 @@ function pane(id: PaneAction, title: string, keys?: string[], note?: string): Pa
   }
 }
 
-/** Все команды в порядке по умолчанию. Поиска по истории (⌃R) пока нет — строки для него нет. */
+/** Все команды в порядке по умолчанию. */
 export function paletteCommands(ctx: PaletteContext): PaletteCommand[] {
   // Темы — в том же порядке, что в настройках.
   const themes = (Object.keys(THEMES) as ThemeId[]).map(
@@ -67,6 +67,7 @@ export function paletteCommands(ctx: PaletteContext): PaletteCommand[] {
     ...claudeRows,
     pane('clearFeed', 'Очистить ленту', ['⌃', 'L']),
     pane('find', 'Найти в ленте', ['⌘', 'F']),
+    pane('historySearch', 'Поиск по истории', ['⌃', 'R']),
     app('toggleAgents', ctx.agentsHidden ? 'Показать панель агентов' : 'Скрыть панель агентов', ['⌘', 'J']),
     app('fontBigger', 'Крупнее шрифт', ['⌘', '=']),
     app('fontSmaller', 'Мельче шрифт', ['⌘', '−']),

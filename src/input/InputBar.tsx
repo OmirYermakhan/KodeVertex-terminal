@@ -145,6 +145,8 @@ export interface InputBarHandle {
    * Claude (из оболочки). false — не вставлено (строка неактивна или пишет ответ на вопрос).
    */
   insertTokens(tokens: Attachment[], opts?: { claude?: boolean }): boolean
+  /** Переключить строку в режим Claude (набранное остаётся). false — строка неактивна или пишет ответ. */
+  claudeOn(): boolean
   /** Файлы у курсора: в режиме Claude — значками, в оболочке — экранированными путями. */
   insertPaths(paths: string[]): void
   /** Убрать значок (⌫ в мини-просмотре); false — его уже нет. */
@@ -159,6 +161,8 @@ export interface InputBarHandle {
   load(d: Doc): boolean
   /** ⌘P «Режим Claude»: включить (как `claude` ↵) или выключить (как esc на пустой строке). */
   toggleClaude(): void
+  /** Палитра ⌘P: поиск по истории, как ⌃R в строке. */
+  openHistorySearch(): void
   /** ⌘P «/model»: карточка выбора модели, как после `/model` ↵ (набранное в строке остаётся). */
   openModelPicker(): void
 }
@@ -553,6 +557,15 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       edRef.current?.focus()
       return true
     },
+    claudeOn: () => {
+      if (props.current.disabled || props.current.answer) return false
+      if (!claudeRef.current) {
+        completionRef.current.close()
+        hintsRef.current.close()
+        setClaudeMode(true)
+      }
+      return true
+    },
     insertPaths,
     removeToken: (id) => {
       const d = docRef.current
@@ -572,6 +585,15 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       setClaudeMode(snap.claude)
       nav.current = NAV_START
       setDoc(snap.doc, snap.doc.text.length)
+    },
+    openHistorySearch: () => {
+      const q = props.current
+      if (q.disabled || q.answer || pickerRef.current) return
+      completionRef.current.close()
+      hintsRef.current.close()
+      setAt(null)
+      setHs({ selected: 0 })
+      edRef.current?.focus()
     },
     toggleClaude: () => {
       const q = props.current
