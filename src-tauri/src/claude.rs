@@ -77,11 +77,16 @@ pub struct Launch {
   pub effort: Option<String>,
   /// `default` | `acceptEdits` | `bypassPermissions` (см. `permission_mode`).
   pub permission_mode: Option<String>,
+  /// Правка отправленного сообщения: продолжить сессию `resume` с сообщения `uuid` (включительно),
+  /// всё после него отбрасывается (`--resume-session-at`, только вместе с `--resume`).
+  pub resume_at: Option<String>,
+  /// `--fork-session`: продолжение — в новой сессии, файл исходной остаётся как был.
+  pub fork: bool,
 }
 
-/// Аргументы `claude` после обязательных: `--permission-mode`, `--model`, `--effort`, `--resume`.
-/// Пустые значения, значения с `-` в начале и неизвестное усилие пропускаются; неизвестный режим —
-/// `acceptEdits`.
+/// Аргументы `claude` после обязательных: `--permission-mode`, `--model`, `--effort`, `--resume`
+/// (с ним — `--resume-session-at`, `--fork-session`). Пустые значения, значения с `-` в начале
+/// и неизвестное усилие пропускаются; неизвестный режим — `acceptEdits`.
 pub fn launch_args(l: &Launch) -> Vec<String> {
   let mut a = vec!["--permission-mode".to_string(), permission_mode(l.permission_mode.as_deref()).to_string()];
   if let Some(m) = l.model.as_deref().map(str::trim).filter(|m| !m.is_empty() && !m.starts_with('-')) {
@@ -90,8 +95,16 @@ pub fn launch_args(l: &Launch) -> Vec<String> {
   if let Some(e) = l.effort.as_deref().filter(|e| EFFORTS.contains(e)) {
     a.extend(["--effort".to_string(), e.to_string()]);
   }
-  if let Some(r) = l.resume.as_deref().filter(|r| !r.is_empty() && !r.starts_with('-')) {
+  let ok = |v: &&str| !v.is_empty() && !v.starts_with('-');
+  if let Some(r) = l.resume.as_deref().filter(ok) {
     a.extend(["--resume".to_string(), r.to_string()]);
+    // Точка перемотки и ответвление имеют смысл только у продолжаемой сессии.
+    if let Some(u) = l.resume_at.as_deref().filter(ok) {
+      a.extend(["--resume-session-at".to_string(), u.to_string()]);
+    }
+    if l.fork {
+      a.push("--fork-session".to_string());
+    }
   }
   a
 }
@@ -413,6 +426,8 @@ pub async fn claude_start(
   model: Option<String>,
   effort: Option<String>,
   permission_mode: Option<String>,
+  resume_at: Option<String>,
+  fork: Option<bool>,
   on_line: Channel<String>,
   on_exit: Channel<ClaudeExit>,
 ) -> Result<String, String> {
@@ -420,7 +435,7 @@ pub async fn claude_start(
   manager.start(
     &program,
     Path::new(&cwd),
-    Launch { resume, model, effort, permission_mode },
+    Launch { resume, model, effort, permission_mode, resume_at, fork: fork.unwrap_or(false) },
     move |line| {
       let _ = on_line.send(line);
     },
@@ -616,7 +631,7 @@ mod tests {
     let (_d, p) = script("printf '{\"args\":\"%s\"}\\n' \"$*\"");
     let m = ClaudeManager::default();
     let (ltx, lrx) = mpsc::channel();
-    m.start(&p, Path::new("/"), Launch { resume: Some("abc-123".into()), model: Some("fable".into()), effort: Some("high".into()), permission_mode: Some("default".into()) }, move |l| {
+    m.start(&p, Path::new("/"), Launch { resume: Some("abc-123".into()), model: Some("fable".into()), effort: Some("high".into()), permission_mode: Some("default".into()), ..Launch::default() }, move |l| {
       let _ = ltx.send(l);
     }, |_, _| {})
     .unwrap();
@@ -631,9 +646,9 @@ mod tests {
   #[test]
   fn launch_args_skip_empty_and_unknown() {
     assert_eq!(launch_args(&Launch::default()), ["--permission-mode", "acceptEdits"]);
-    let l = Launch { resume: Some(String::new()), model: Some("--evil".into()), effort: Some("huge".into()), permission_mode: None };
+    let l = Launch { resume: Some(String::new()), model: Some("--evil".into()), effort: Some("huge".into()), permission_mode: None, ..Launch::default() };
     assert_eq!(launch_args(&l), ["--permission-mode", "acceptEdits"]);
-    let l = Launch { resume: None, model: Some("default".into()), effort: Some("max".into()), permission_mode: None };
+    let l = Launch { resume: None, model: Some("default".into()), effort: Some("max".into()), permission_mode: None, ..Launch::default() };
     assert_eq!(launch_args(&l), ["--permission-mode", "acceptEdits", "--model", "default", "--effort", "max"]);
   }
 
@@ -645,6 +660,23 @@ mod tests {
     assert!(!launch_args(&l).contains(&"--resume".to_string()));
     let l = Launch { resume: Some("abc-123".into()), ..Launch::default() };
     assert_eq!(launch_args(&l)[2..], ["--resume", "abc-123"]);
+  }
+
+  #[test]
+  fn launch_args_rewind_and_fork_only_with_resume() {
+    let l = Launch { resume: Some("s-1".into()), resume_at: Some("u-9".into()), fork: true, ..Launch::default() };
+    assert_eq!(launch_args(&l)[2..], ["--resume", "s-1", "--resume-session-at", "u-9", "--fork-session"]);
+    // Без --resume точки перемотки и ответвления нет: новая сессия.
+    let l = Launch { resume: None, resume_at: Some("u-9".into()), fork: true, ..Launch::default() };
+    assert_eq!(launch_args(&l), ["--permission-mode", "acceptEdits"]);
+    // Значение, похожее на флаг, или пустое — пропускается; --fork-session остаётся.
+    let l = Launch { resume: Some("s-1".into()), resume_at: Some("--dangerously-skip-permissions".into()), fork: true, ..Launch::default() };
+    assert_eq!(launch_args(&l)[2..], ["--resume", "s-1", "--fork-session"]);
+    let l = Launch { resume: Some("s-1".into()), resume_at: Some(String::new()), fork: false, ..Launch::default() };
+    assert_eq!(launch_args(&l)[2..], ["--resume", "s-1"]);
+    // Модель, усилие и режим при перезапуске сохраняются.
+    let l = Launch { resume: Some("s-1".into()), resume_at: Some("u-9".into()), fork: true, model: Some("fable".into()), effort: Some("high".into()), permission_mode: Some("default".into()) };
+    assert_eq!(launch_args(&l), ["--permission-mode", "default", "--model", "fable", "--effort", "high", "--resume", "s-1", "--resume-session-at", "u-9", "--fork-session"]);
   }
 
   #[test]
