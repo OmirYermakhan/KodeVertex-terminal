@@ -541,6 +541,34 @@ describe('TerminalPane', () => {
         expect(textarea().getAttribute('aria-label')).not.toBe('Ваш ответ на вопрос…')
       })
 
+      it('очередь опустела, пока фокус в ней (⌘↓), — фокус в строку ввода сразу, пока панель ещё уходит', async () => {
+        // С Web Animations панель после ухода последней строки ещё миг на месте (.queue.leaving).
+        ;(HTMLElement.prototype as unknown as { animate?: unknown }).animate = () => ({ cancel() {} })
+        try {
+          claudeOk()
+          await mounted()
+          type('claude')
+          keyIn('Enter')
+          await act(async () => await flush())
+          type('первое')
+          keyIn('Enter')
+          await act(async () => await flush())
+          type('второе')
+          keyIn('Enter')
+          await act(async () => await flush())
+          act(() => runPaneCommand('p', 'blockNext'))
+          expect(document.activeElement).toBe(document.querySelector('.queue'))
+          await act(async () => {
+            startArgs().onLine.onmessage(JSON.stringify({ type: 'result', subtype: 'success', result: 'ok', session_id: 's' }))
+            await flush()
+          })
+          expect(document.querySelector('.queue.leaving')).not.toBeNull()
+          expect(document.activeElement).toBe(textarea())
+        } finally {
+          delete (HTMLElement.prototype as unknown as { animate?: unknown }).animate
+        }
+      })
+
       it('очередь: пока ход идёт — сообщения в очередь над строкой ввода; ⌘↓ ввод → очередь → агенты; по result — отправка', async () => {
         claudeOk()
         await mounted()

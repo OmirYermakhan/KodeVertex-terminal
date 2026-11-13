@@ -531,11 +531,12 @@ export function TerminalPane(p: TerminalPaneProps) {
   useLayoutEffect(() => {
     queueShownRef.current = queueShown
   })
-  // Очередь опустела (ушло последнее), пока фокус был в ней — вернуть ввод.
+  // Очередь опустела (ушло последнее), пока фокус был в ней — вернуть ввод. Уходящая панель
+  // (.queue.leaving) ещё миг держит фокус, а потом пропадает — поэтому фокус в ней тоже считается.
   useEffect(() => {
     if (queueShown || !p.focused) return
     const active = document.activeElement
-    if (!active || active === document.body) focusActive()
+    if (!active || active === document.body || active.closest?.('.queue')) focusActive()
   }, [queueShown, p.focused, focusActive])
   const queueInput = useMemo(
     () => ({
