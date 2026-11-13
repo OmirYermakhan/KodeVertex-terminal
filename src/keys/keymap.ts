@@ -5,7 +5,7 @@ export type Action =
   | 'prevTab' | 'nextTab'
   | 'fontBigger' | 'fontSmaller' | 'fontReset' | 'openSettings'
   | 'blockPrev' | 'blockNext' | 'blockCopy' | 'blockAttach' | 'blockRead'
-  | 'toggleAgents' | 'find'
+  | 'toggleAgents' | 'find' | 'palette'
 
 export interface Binding {
   action: Action
@@ -53,6 +53,8 @@ export const KEYMAP: Binding[] = [
   cmd('toggleAgents', 'KeyJ'),
   // ⌘F: поиск в ленте фокусной панели.
   cmd('find', 'KeyF'),
+  // ⌘P: палитра команд.
+  cmd('palette', 'KeyP'),
 ]
 
 export function matchKey(

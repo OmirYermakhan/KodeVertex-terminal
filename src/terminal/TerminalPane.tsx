@@ -473,7 +473,9 @@ export function TerminalPane(p: TerminalPaneProps) {
 
   /** Куда идёт ввод: пока команда идёт или открыт alt screen — в xterm, иначе в строку ввода. */
   const focusActive = useCallback(() => {
-    if (!callbacks.current.focused || useUi.getState().settingsOpen) return
+    // Открыты настройки или палитра ⌘P — фокус у них (палитра вернёт его сама).
+    const ui = useUi.getState()
+    if (!callbacks.current.focused || ui.settingsOpen || ui.paletteOpen) return
     if (runningRef.current || altRef.current) termRef.current?.focus()
     else inputRef.current?.focus()
   }, [])
@@ -550,7 +552,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       return
     }
     if (!callbacks.current.focused || runningRef.current || altRef.current) return
-    if (useUi.getState().settingsOpen || inputRef.current?.pickerOpen()) return
+    if (useUi.getState().settingsOpen || useUi.getState().paletteOpen || inputRef.current?.pickerOpen()) return
     const active = document.activeElement
     if (active?.closest?.('.agents, .find')) return
     if (inputRef.current?.isEmpty() ?? true) promptRef.current?.focus()
@@ -914,6 +916,10 @@ export function TerminalPane(p: TerminalPaneProps) {
       registerPaneCommands(p.paneId, (a: PaneAction) => {
         // Полноэкранная программа: лента скрыта, выбирать и искать нечего.
         if (altRef.current) return
+        // Палитра ⌘P: ⌃L, режим Claude, `/model` — как из строки ввода.
+        if (a === 'clearFeed') return onClearFeed()
+        if (a === 'claudeToggle') return inputRef.current?.toggleClaude()
+        if (a === 'chooseModel') return inputRef.current?.openModelPicker()
         // ⌘F: строка поиска; уже открыта — фокус в неё.
         if (a === 'find') {
           if (findRef.current) findRef.current.focus()
@@ -964,8 +970,8 @@ export function TerminalPane(p: TerminalPaneProps) {
         setSelected(m.id)
         // ⌘↓ с последнего блока или из строки ввода — фокус в панель агентов (если она показана).
         if (m.leave) agentsRef.current?.focus()
-      }),
-    [p.paneId, focusPrompt, attachItem, copyItem],
+      }, () => ({ claude: inputRef.current?.claudeMode() ?? false })),
+    [p.paneId, focusPrompt, attachItem, copyItem, onClearFeed],
   )
 
   const readerItem = readerId ? items.find((it) => it.id === readerId) : undefined

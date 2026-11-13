@@ -2,7 +2,7 @@ import { act, fireEvent, render } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PtyHandle, SpawnOptions } from '../terminal/ptyClient'
 
-// ⌘W по настоящему пути: keydown в фокусном элементе панели → keymap → действие.
+// Клавиши окна (⌘W, ⌘P) по настоящему пути: keydown в фокусном элементе панели → keymap → действие.
 const terms: FakeTerminal[] = []
 class FakeTerminal {
   options: Record<string, unknown>
@@ -64,6 +64,8 @@ vi.mock('@xterm/addon-serialize', () => ({ SerializeAddon: FakeAddon }))
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn() }))
 vi.mock('@tauri-apps/api/path', () => ({ homeDir: () => Promise.resolve('/h') }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: () => Promise.resolve(() => {}) }))
+// Значок Dock и системные уведомления — не в jsdom.
+vi.mock('../notify/notify', async (orig) => ({ ...(await orig<object>()), installNotifications: () => () => {} }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(() => Promise.resolve(null)), Channel: class {} }))
 const handles: { write: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn> }[] = []
 vi.mock('../terminal/ptyClient', () => ({
@@ -87,6 +89,8 @@ const { useSettings } = await import('../settings/store')
 const { DEFAULTS } = await import('../settings/settings')
 const { useUi } = await import('./uiStore')
 const { CLOSE_PANE_TITLE } = await import('./PaneView')
+const { resetRecent } = await import('../palette/recent')
+const { CLAUDE_PLACEHOLDER } = await import('../input/InputBar')
 
 const flush = () => act(() => new Promise((r) => setTimeout(r, 0)))
 const activeTab = () => {
@@ -200,5 +204,106 @@ describe('⌘W в сплите', () => {
     expect(s.tabs).toHaveLength(1)
     expect(s.tabs[0].id).not.toBe(old)
     expect(document.querySelectorAll('.pane')).toHaveLength(1)
+  })
+})
+
+const cmdKey = (code: string, key: string) => fireEvent.keyDown(document.activeElement ?? document.body, { key, code, metaKey: true })
+const palInput = () => document.querySelector<HTMLInputElement>('.pal-in')
+const palRows = () => Array.from(document.querySelectorAll('.pal-row')).map((r) => r.querySelector('.hp-n')!.textContent)
+const palKey = (key: string) => fireEvent.keyDown(palInput()!, { key })
+
+describe('⌘P — палитра команд', () => {
+  beforeEach(() => {
+    terms.length = 0
+    handles.length = 0
+    localStorage.clear()
+    resetRecent()
+    useTabs.setState(initialTabsState())
+    useUi.setState({ settingsOpen: false, agentsHidden: false, paletteOpen: false })
+    useSettings.setState({ settings: { ...DEFAULTS }, loaded: true, load: async () => {}, update: vi.fn() })
+  })
+
+  it('из строки ввода: нечёткий поиск с подсветкой, ↵ выполняет, фокус возвращается; недавние — сверху', async () => {
+    render(<App />)
+    await flush()
+    const [a] = panes()
+    expect(document.activeElement).toBe(inputOf(a))
+    cmdKey('KeyP', 'p')
+    expect(document.activeElement).toBe(palInput())
+    // Пока палитра открыта, ⌘-клавиши окна не срабатывают.
+    cmdKey('KeyD', 'd')
+    expect(panes()).toHaveLength(1)
+    fireEvent.change(palInput()!, { target: { value: 'рзд впр' } })
+    expect(palRows()[0]).toBe('Разделить вправо')
+    expect(document.querySelector('.pal-row.sel .hp-n b')).not.toBeNull()
+    palKey('Enter')
+    await flush()
+    expect(palInput()).toBeNull()
+    expect(panes()).toHaveLength(2)
+    cmdKey('KeyP', 'p')
+    expect(palRows()[0]).toBe('Разделить вправо')
+    // ⌘P ещё раз — закрыть.
+    cmdKey('KeyP', 'p')
+    expect(palInput()).toBeNull()
+  })
+
+  it('esc закрывает, фокус — туда, где был (живой xterm); в PTY ничего не уходит', async () => {
+    render(<App />)
+    await flush()
+    const t = terms[0]
+    const osc = t.parser.registerOscHandler.mock.calls.find((c) => c[0] === 133)![1] as (d: string) => boolean
+    act(() => void osc('C;' + btoa('vim') + ';kv=m'))
+    await flush()
+    expect(document.activeElement).toBe(t.textarea)
+    cmdKey('KeyP', 'p')
+    expect(document.activeElement).toBe(palInput())
+    palKey('ArrowDown')
+    palKey('ArrowUp')
+    palKey('Escape')
+    expect(palInput()).toBeNull()
+    expect(document.activeElement).toBe(t.textarea)
+    expect(handles[0].write).not.toHaveBeenCalled()
+  })
+
+  it('«Найти в ленте» открывает поиск; тема меняется; ⌘J — подпись по состоянию; ⌃R нет', async () => {
+    render(<App />)
+    await flush()
+    cmdKey('KeyP', 'p')
+    expect(palRows()).toContain('Скрыть панель агентов')
+    expect(palRows().some((r) => /истори/i.test(r!))).toBe(false)
+    expect(document.querySelector('.kbd')).not.toBeNull()
+    fireEvent.change(palInput()!, { target: { value: 'найти' } })
+    palKey('Enter')
+    await flush()
+    expect(document.activeElement).toBe(document.querySelector('.find-in'))
+    cmdKey('KeyP', 'p')
+    fireEvent.change(palInput()!, { target: { value: 'тема светлая' } })
+    palKey('Enter')
+    expect(useSettings.getState().update).toHaveBeenCalledWith({ theme: 'light' })
+  })
+
+  it('«Режим Claude: включить» — строка ввода в режиме Claude; «/model» — карточка выбора модели', async () => {
+    // Каталог панели известен с запуска (иначе режим Claude не включится).
+    const [first] = panes()
+    useTabs.getState().setCwd(first, '/w')
+    render(<App />)
+    await flush()
+    const [a] = panes()
+    cmdKey('KeyP', 'p')
+    fireEvent.change(palInput()!, { target: { value: 'режим claude' } })
+    expect(palRows()[0]).toBe('Режим Claude: включить')
+    palKey('Enter')
+    await flush()
+    expect(inputOf(a).getAttribute('aria-label')).toBe(CLAUDE_PLACEHOLDER)
+    cmdKey('KeyP', 'p')
+    fireEvent.change(palInput()!, { target: { value: 'режим claude' } })
+    expect(palRows()[0]).toBe('Режим Claude: выключить')
+    palKey('Escape')
+    cmdKey('KeyP', 'p')
+    fireEvent.change(palInput()!, { target: { value: 'модель' } })
+    palKey('Enter')
+    await flush()
+    expect(document.querySelector('[role="dialog"][aria-label="Выбор модели"]')).not.toBeNull()
+    expect(document.activeElement).toBe(inputOf(a))
   })
 })

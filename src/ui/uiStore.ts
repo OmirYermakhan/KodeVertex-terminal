@@ -3,6 +3,9 @@ import { create } from 'zustand'
 interface UiState {
   settingsOpen: boolean
   setSettingsOpen(open: boolean): void
+  /** ⌘P: палитра команд открыта. */
+  paletteOpen: boolean
+  setPaletteOpen(open: boolean): void
   /** ⌘J: панель агентов скрыта (во всех панелях). */
   agentsHidden: boolean
   toggleAgents(): void
@@ -15,6 +18,8 @@ interface UiState {
 export const useUi = create<UiState>((set) => ({
   settingsOpen: false,
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+  paletteOpen: false,
+  setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
   agentsHidden: false,
   toggleAgents: () => set((s) => ({ agentsHidden: !s.agentsHidden })),
   agentRequest: null,

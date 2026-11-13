@@ -36,6 +36,10 @@ export function runAction(a: Action): void {
     case 'fontReset': return settings.update({ textSize: DEFAULTS.textSize, codeSize: DEFAULTS.codeSize })
     case 'openSettings': return useUi.getState().setSettingsOpen(true)
     case 'toggleAgents': return useUi.getState().toggleAgents()
+    case 'palette': {
+      const ui = useUi.getState()
+      return ui.setPaletteOpen(!ui.paletteOpen)
+    }
     case 'blockPrev':
     case 'blockNext':
     case 'blockCopy':
