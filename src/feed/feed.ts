@@ -11,6 +11,8 @@ export type ShellBlock = {
   html: string | null
   lines: number
   running: boolean
+  /** Команда шла, когда приложение закрылось: блок восстановлен законченным, «прервано». */
+  interrupted?: boolean
 }
 export type ClaudeItem = { kind: 'claude'; id: string; item: FeedClaudeItem }
 export type FeedItem = ShellBlock | ClaudeItem
