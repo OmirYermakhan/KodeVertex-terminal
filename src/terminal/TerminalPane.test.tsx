@@ -130,6 +130,7 @@ const { mockupScene } = await import('../claude/fixtures/mockupScene')
 const { runAction } = await import('../keys/actions')
 const { initialClaude } = await import('../claude/reducer')
 const { domText, setSelection } = await import('../input/richDom')
+const { ARM_MS } = await import('../claude/PermissionPrompt')
 
 const flush = (ms = 0) => new Promise((r) => setTimeout(r, ms))
 
@@ -570,6 +571,10 @@ describe('TerminalPane', () => {
         expect(perm.querySelector('.ap-who')!.textContent).toContain('! Разрешение')
         expect(document.activeElement).toBe(perm)
         act(() => void fireEvent.keyDown(perm, { key: '2' }))
+        // ↵ сразу после появления запрос не принимает (случайное разрешение) — только через ARM_MS.
+        act(() => void fireEvent.keyDown(perm, { key: 'Enter' }))
+        expect(calls().some((c) => c[0] === 'claude_respond' && (c[1] as { requestId: string }).requestId === 'p1')).toBe(false)
+        await act(async () => await flush(ARM_MS + 20))
         await act(async () => {
           fireEvent.keyDown(perm, { key: 'Enter' })
           await flush()
