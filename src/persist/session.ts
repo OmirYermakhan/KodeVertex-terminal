@@ -175,6 +175,16 @@ export function saveNow(): Promise<void> {
   )
 }
 
+/**
+ * Закрытие окна: последняя запись, дальше автосохранение выключено — выход оболочек при
+ * закрытии не должен затереть сохранённые вкладки.
+ */
+export function finalSave(): Promise<void> {
+  const p = saveNow()
+  enabled = false
+  return p
+}
+
 const isRec = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 function validTree(n: unknown): n is PaneNode {

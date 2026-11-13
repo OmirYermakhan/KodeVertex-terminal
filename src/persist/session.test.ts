@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
 }))
 
-const { applySession, restoredPane, resetPersistForTests, serializeCapped, setPaneFeed, snapshot, saveNow, restoreSession, SESSION_VERSION } = await import('./session')
+const { applySession, restoredPane, resetPersistForTests, serializeCapped, setPaneFeed, snapshot, saveNow, finalSave, restoreSession, SESSION_VERSION } = await import('./session')
 const { useTabs } = await import('../layout/tabsStore')
 const { askClaude, useClaudeSessions, stopClaude, RESTORED_NOTE } = await import('../claude/sessionStore')
 const { initialClaude } = await import('../claude/reducer')
@@ -204,6 +204,21 @@ describe('загрузка и запись', () => {
       await vi.advanceTimersByTimeAsync(1100)
       expect(calls('session_save')).toHaveLength(1)
       expect(JSON.parse(calls('session_save')[0][1].text).tabs[0].cwd).toEqual({ p9: '/r2' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('finalSave пишет и выключает автосохранение', async () => {
+    vi.useFakeTimers()
+    try {
+      invoke.mockImplementation(() => Promise.resolve(undefined))
+      await restoreSession()
+      await finalSave()
+      expect(calls('session_save')).toHaveLength(1)
+      useTabs.getState().newTab('/z')
+      await vi.advanceTimersByTimeAsync(1100)
+      expect(calls('session_save')).toHaveLength(1)
     } finally {
       vi.useRealTimers()
     }
