@@ -475,6 +475,17 @@ describe('TerminalPane', () => {
         expect(document.querySelector('.feed .you')?.textContent).toContain('что тут?')
       })
 
+      it('подсказка пустой ленты пропадает сразу с входом в режим `claude`, до первого ответа', async () => {
+        claudeOk()
+        await mounted()
+        expect(document.querySelector('.feed .feed-empty')).not.toBeNull()
+        type('claude')
+        keyIn('Enter')
+        await act(async () => await flush())
+        expect(document.querySelector('.feed .feed-empty')).toBeNull()
+        expect(document.querySelector('.feed .card')).toBeNull()
+      })
+
       it('вопрос агента: блок над строкой ввода с фокусом, в ленте — «ждёт ответа»; ответ уходит, блок исчезает', async () => {
         claudeOk()
         await mounted()

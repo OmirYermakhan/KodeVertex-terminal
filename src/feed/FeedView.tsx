@@ -55,6 +55,15 @@ export function markStuck(feed: HTMLElement): void {
   }
 }
 
+/** Довести до конца анимации появления у детей ленты (без Web Animations — ничего). */
+export function finishAppear(feed: HTMLElement | null): void {
+  if (!feed) return
+  for (const el of Array.from(feed.children)) {
+    if (typeof el.getAnimations !== 'function') return
+    for (const a of el.getAnimations()) a.finish()
+  }
+}
+
 export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
   { items, selectedId, renderLive, agents = NO_AGENTS, renderClaude, onScroll, park, onAttach, onCopy, onRepeat, onAsk, onRead, editable, onEdit, editingId },
   ref,
@@ -69,18 +78,35 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
     [ref],
   )
   const frame = useRef(0)
-  const scrolled = () => {
-    onScroll?.()
+  // Пересчёт прилипшего заголовка — не чаще кадра; только на прокрутке, смене размера и числа блоков
+  // (кусок стрима ответа Claude его не вызывает).
+  const restick = useCallback(() => {
     if (frame.current) return
     frame.current = requestAnimationFrame(() => {
       frame.current = 0
       if (own.current) markStuck(own.current)
     })
+  }, [])
+  const scrolled = () => {
+    onScroll?.()
+    restick()
   }
+  const blocks = items.reduce((n, it) => (it.kind === 'shell' ? n + 1 : n), 0)
+  useLayoutEffect(restick, [blocks, restick])
   useLayoutEffect(() => {
-    if (own.current) markStuck(own.current)
-  }, [items])
-  useLayoutEffect(() => () => cancelAnimationFrame(frame.current), [])
+    const f = own.current
+    const ro = f && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(restick) : null
+    ro?.observe(f!)
+    return () => {
+      ro?.disconnect()
+      cancelAnimationFrame(frame.current)
+    }
+  }, [restick])
+  // Элементы, что уже есть при монтировании (восстановленная сессия), появляются без анимации:
+  // CSS-анимацию появления у них сразу доводим до конца, до первой отрисовки.
+  useLayoutEffect(() => {
+    finishAppear(own.current)
+  }, [])
   return (
     <div className="feed" ref={setRef} onScroll={scrolled}>
       {items.map((it) => (
