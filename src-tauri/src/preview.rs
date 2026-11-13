@@ -254,6 +254,14 @@ pub struct ImagePreview {
   pub src: String,
 }
 
+/// Обычный файл для просмотра; FIFO и устройства — «Особый файл» (как в `read_text`).
+fn open_regular(path: &Path) -> Result<(fs::File, fs::Metadata), String> {
+  crate::attach::open_regular(path).map_err(|e| match e.kind() {
+    std::io::ErrorKind::InvalidInput => "Особый файл".to_string(),
+    _ => io_message(&e),
+  })
+}
+
 fn encode_preview(img: &DynamicImage) -> Result<String, String> {
   let mut out = Cursor::new(Vec::new());
   if img.color().has_alpha() {
@@ -266,12 +274,12 @@ fn encode_preview(img: &DynamicImage) -> Result<String, String> {
 
 /// Картинка для просмотра: исходные размеры и копия с длинной стороной не больше max.
 pub fn image_preview(path: &Path, max: u32) -> Result<ImagePreview, String> {
-  let size = fs::metadata(path).map_err(|e| io_message(&e))?.len();
+  let (f, meta) = open_regular(path)?;
+  let size = meta.len();
   if size > IMAGE_SOURCE_MAX {
     return Err("Картинка слишком большая для просмотра".to_string());
   }
-  let img = ImageReader::open(path)
-    .map_err(|e| io_message(&e))?
+  let img = ImageReader::new(std::io::BufReader::new(f).take(IMAGE_SOURCE_MAX))
     .with_guessed_format()
     .map_err(|e| e.to_string())?
     .decode()
@@ -294,7 +302,8 @@ pub struct PdfPreview {
 
 /// Страница PDF картинкой шириной width (CoreGraphics; страница вне диапазона — ближайшая).
 pub fn pdf_preview(path: &Path, page: u32, width: u32) -> Result<PdfPreview, String> {
-  let size = fs::metadata(path).map_err(|e| io_message(&e))?.len();
+  // CoreGraphics открывает PDF сам, по пути: тип проверяем заранее.
+  let size = open_regular(path)?.1.len();
   if size > PDF_SOURCE_MAX {
     return Err("PDF слишком большой для просмотра".to_string());
   }
@@ -770,6 +779,17 @@ mod tests {
       other => panic!("{other:?}"),
     }
     assert!(matches!(list_preview(&d.path().join("нет"), 5), DirPreview::Error { .. }));
+  }
+
+  #[test]
+  #[cfg(unix)]
+  fn fifo_image_and_pdf_do_not_block() {
+    use crate::attach::tests::{fifo, no_block};
+    let d = tempfile::tempdir().unwrap();
+    let png = fifo(d.path(), "x.png");
+    let pdf = fifo(d.path(), "x.pdf");
+    assert_eq!(no_block(move || image_preview(&png, 600)).unwrap_err(), "Особый файл");
+    assert_eq!(no_block(move || pdf_preview(&pdf, 1, 600)).unwrap_err(), "Особый файл");
   }
 
   #[test]

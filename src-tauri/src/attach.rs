@@ -3,7 +3,7 @@
 //! Webview большие файлы не читает: всё тяжёлое — здесь.
 
 use std::fs;
-use std::io::Cursor;
+use std::io::{BufReader, Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -56,6 +56,47 @@ pub struct SendFile {
   pub path: String,
 }
 
+/// Открывает только обычный файл. FIFO, устройство, сокет (`x.png` может оказаться FIFO)
+/// не читаются: чтение ждало бы писателя вечно и заняло бы поток навсегда. Открытие —
+/// без блокировки (O_NONBLOCK), тип проверяется уже у открытого дескриптора: файл не
+/// подменить между проверкой и чтением.
+pub fn open_regular(p: &Path) -> std::io::Result<(fs::File, fs::Metadata)> {
+  let mut o = fs::OpenOptions::new();
+  o.read(true);
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::OpenOptionsExt;
+    o.custom_flags(libc::O_NONBLOCK);
+  }
+  let f = o.open(p)?;
+  let meta = f.metadata()?;
+  if !meta.is_file() {
+    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "не обычный файл"));
+  }
+  Ok((f, meta))
+}
+
+/// Весь обычный файл, если он не больше `max` байт; иначе `too_big`.
+fn read_regular(p: &Path, max: u64, too_big: &str) -> Result<Vec<u8>, String> {
+  let (f, meta) = open_regular(p).map_err(|e| format!("{}: {e}", p.display()))?;
+  if meta.len() > max {
+    return Err(format!("{}: {too_big}", p.display()));
+  }
+  let mut bytes = Vec::with_capacity(meta.len() as usize);
+  // Файл мог вырасти после проверки размера: больше max не читаем.
+  f.take(max + 1).read_to_end(&mut bytes).map_err(|e| format!("{}: {e}", p.display()))?;
+  if bytes.len() as u64 > max {
+    return Err(format!("{}: {too_big}", p.display()));
+  }
+  Ok(bytes)
+}
+
+/// Картинка с диска для размеров и миниатюры: только обычный файл.
+fn image_reader(p: &Path) -> Option<ImageReader<BufReader<fs::File>>> {
+  let (f, _) = open_regular(p).ok()?;
+  ImageReader::new(BufReader::new(f)).with_guessed_format().ok()
+}
+
 fn ext(path: &Path) -> String {
   path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
 }
@@ -80,10 +121,12 @@ pub fn inspect(path: &str) -> PathInfo {
     height: None,
     thumb: None,
   };
-  if !info.exists || info.is_dir || !is_image(p) || info.size > IMAGE_SOURCE_MAX {
+  // Не обычный файл (FIFO, устройство) не читаем: чтение могло бы не закончиться.
+  let regular = meta.as_ref().is_some_and(|m| m.is_file());
+  if !regular || !is_image(p) || info.size > IMAGE_SOURCE_MAX {
     return info;
   }
-  if let Ok((w, h)) = ImageReader::open(p).and_then(|r| r.with_guessed_format()).map_err(|_| ()).and_then(|r| r.into_dimensions().map_err(|_| ())) {
+  if let Some((w, h)) = image_reader(p).and_then(|r| r.into_dimensions().ok()) {
     info.width = Some(w);
     info.height = Some(h);
     info.prepared_size = Some(estimate_prepared(w, h, info.size));
@@ -106,7 +149,7 @@ pub fn estimate_prepared(w: u32, h: u32, size: u64) -> u64 {
 }
 
 fn thumbnail(p: &Path) -> Option<String> {
-  let img = ImageReader::open(p).ok()?.with_guessed_format().ok()?.decode().ok()?;
+  let img = image_reader(p)?.decode().ok()?;
   let t = img.resize_to_fill(THUMB, THUMB, FilterType::Triangle);
   let mut out = Cursor::new(Vec::new());
   t.write_to(&mut out, ImageFormat::Png).ok()?;
@@ -137,11 +180,7 @@ fn encode(img: &DynamicImage, jpeg: bool) -> Result<Vec<u8>, String> {
 /// Байты картинки для Claude и её media type. Длинная сторона > LONG_SIDE — уменьшение (PNG
 /// остаётся PNG, если влезает в лимит, иначе JPEG); маленькая и лёгкая — как есть.
 pub fn prepare_image(p: &Path) -> Result<(Vec<u8>, &'static str), String> {
-  let len = fs::metadata(p).map_err(|e| format!("{}: {e}", p.display()))?.len();
-  if len > IMAGE_SOURCE_MAX {
-    return Err(format!("{}: слишком большой файл", p.display()));
-  }
-  let bytes = fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
+  let bytes = read_regular(p, IMAGE_SOURCE_MAX, "слишком большой файл")?;
   let format = image::guess_format(&bytes).map_err(|_| format!("{}: не картинка", p.display()))?;
   let media = media_type(format).ok_or_else(|| format!("{}: формат картинки не поддерживается", p.display()))?;
   let (w, h) = ImageReader::with_format(Cursor::new(&bytes), format).into_dimensions().map_err(|e| e.to_string())?;
@@ -167,11 +206,7 @@ pub fn image_block(p: &Path) -> Result<Value, String> {
 }
 
 pub fn document_block(p: &Path) -> Result<Value, String> {
-  let len = fs::metadata(p).map_err(|e| format!("{}: {e}", p.display()))?.len();
-  if len > PDF_MAX {
-    return Err(format!("{}: PDF больше 20 МБ", p.display()));
-  }
-  let bytes = fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
+  let bytes = read_regular(p, PDF_MAX, "PDF больше 20 МБ")?;
   if !bytes.starts_with(b"%PDF") {
     return Err(format!("{}: не PDF", p.display()));
   }
@@ -307,7 +342,7 @@ pub async fn attach_clipboard_image(app: AppHandle) -> Result<Option<PathInfo>, 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
   use super::*;
 
   fn png(dir: &Path, name: &str, w: u32, h: u32) -> PathBuf {
@@ -465,5 +500,46 @@ mod tests {
     assert_eq!(cleanup(d.path(), KEEP, SystemTime::now()), 1);
     assert!(fresh.exists() && !old.exists());
     assert_eq!(cleanup(&d.path().join("нет"), KEEP, SystemTime::now()), 0);
+  }
+
+  /// FIFO с именем как у вложения: без проверки типа чтение ждало бы писателя вечно.
+  #[cfg(unix)]
+  pub(crate) fn fifo(dir: &Path, name: &str) -> PathBuf {
+    let p = dir.join(name);
+    assert!(std::process::Command::new("mkfifo").arg(&p).status().unwrap().success());
+    p
+  }
+
+  /// `f` в отдельном потоке: зависание на FIFO — провал теста, а не вечный тест.
+  pub(crate) fn no_block<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+      let _ = tx.send(f());
+    });
+    rx.recv_timeout(Duration::from_secs(3)).expect("чтение заблокировалось на FIFO")
+  }
+
+  #[test]
+  #[cfg(unix)]
+  fn fifo_attachments_do_not_block() {
+    let d = tempfile::tempdir().unwrap();
+    let png = fifo(d.path(), "x.png");
+    let pdf = fifo(d.path(), "x.pdf");
+    let (p, q) = (png.clone(), png.clone());
+    let i = no_block(move || inspect(&p.to_string_lossy()));
+    assert!(i.exists && !i.is_dir && i.width.is_none() && i.thumb.is_none());
+    let e = no_block(move || prepare_image(&q)).unwrap_err();
+    assert!(e.contains("не обычный файл"), "{e}");
+    let r = pdf.clone();
+    let e = no_block(move || document_block(&r)).unwrap_err();
+    assert!(e.contains("не обычный файл"), "{e}");
+    // Отправка: FIFO не роняет сообщение — уходит путём, как пропавший файл.
+    let files = vec![
+      SendFile { kind: "image".into(), path: png.to_string_lossy().into_owned() },
+      SendFile { kind: "pdf".into(), path: pdf.to_string_lossy().into_owned() },
+    ];
+    let (content, skipped) = no_block(move || build_content("[Изображение 1] [Документ 1]", &files)).unwrap();
+    assert_eq!(content.len(), 1);
+    assert_eq!(skipped.len(), 2);
   }
 }
