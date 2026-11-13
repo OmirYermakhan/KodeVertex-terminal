@@ -468,8 +468,11 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
   const prevProc = s.costProc ?? 0
   const procTotal = typeof ev.total_cost_usd === 'number' && ev.total_cost_usd >= 0 ? ev.total_cost_usd : prevProc
   // Ход стоит разницу нарастающих итогов процесса; итог сессии — с учётом прежних процессов.
-  const turnCost = Math.max(0, procTotal - prevProc)
-  const cost = (s.costBase ?? 0) + procTotal
+  // Итог процесса не растёт, а стал меньше — это уже другой процесс: прежний итог уходит в базу.
+  const reset = procTotal < prevProc
+  const costBase = (s.costBase ?? 0) + (reset ? prevProc : 0)
+  const turnCost = reset ? procTotal : procTotal - prevProc
+  const cost = costBase + procTotal
   let contextMax = s.contextMax
   if (isRec(ev.modelUsage)) {
     const windows = Object.values(ev.modelUsage)
@@ -486,7 +489,8 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
   // Время и цена хода — в подвале последнего ответа главного агента этого хода.
   for (let i = items.length - 2; i >= 0; i--) {
     const it = items[i]
-    if (it.type === 'user') break
+    // Граница хода — итог предыдущего; сообщение «Вы» из очереди между ответом и result не мешает.
+    if (it.type === 'summary') break
     if (it.type === 'assistant' && it.agentId === MAIN) {
       items[i] = { ...it, turn: { durationMs, costUsd: turnCost } }
       break
@@ -503,6 +507,7 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
     pending,
     busy: pending > 0,
     costUsd: cost,
+    costBase,
     costProc: procTotal,
     contextMax,
     // Подсказка прежнего хода устарела; новая придёт после этого result.

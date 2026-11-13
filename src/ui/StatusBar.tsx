@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { projectName, useHome, type GitInfo } from '../status/useGitInfo'
 import { modelLabel, type ClaudeState } from '../claude/reducer'
 import { tokensLabel } from '../claude/AgentsPanel'
-import { formatCost } from '../claude/cards/SummaryCard'
+import { formatCost } from '../format'
 
 /** Доля контекста, после которой полоска желтеет. */
 export const CONTEXT_WARN = 0.8

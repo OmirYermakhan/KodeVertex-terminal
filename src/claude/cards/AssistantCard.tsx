@@ -1,6 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { formatDuration } from '../../feed/feed'
-import { formatCost } from './SummaryCard'
+import { formatCost } from '../../format'
 import { modelLabel } from '../labels'
 import { Markdown } from '../Markdown'
 import type { Agent } from '../reducer'

@@ -457,4 +457,28 @@ describe('стоимость хода и сессии', () => {
     expect(s.costUsd).toBe(0)
     expect(turn(newProcess(s), 'b', 0.02).costUsd).toBeCloseTo(0.02)
   })
+
+  it('сообщение из очереди между ответом и result не мешает подвалу', () => {
+    let s = userSent(initialClaude(), 'q1', 0)
+    s = run(s, [reply('ответ')])
+    s = userSent(s, 'q2', 0)
+    s = run(s, [res(0.1, 500)])
+    const a = s.items.find((i) => i.type === 'assistant') as { turn?: { costUsd: number } }
+    expect(a.turn?.costUsd).toBeCloseTo(0.1)
+  })
+
+  it('ход без текста главного агента — подвала нет, итог на карточке «Итог»', () => {
+    const s = run(userSent(initialClaude(), 'q', 0), [res(0.2)])
+    expect(s.items.some((i) => i.type === 'assistant')).toBe(false)
+    expect(s.items.at(-1)).toMatchObject({ type: 'summary', costUsd: 0.2 })
+  })
+
+  it('меньший итог внутри процесса считается новым процессом: сумма не убывает', () => {
+    let s = turn(initialClaude(), 'a', 0.5)
+    s = turn(s, 'b', 0.1)
+    expect(s.costUsd).toBeCloseTo(0.6)
+    expect((s.items.filter((i) => i.type === 'summary').at(-1) as { costUsd: number }).costUsd).toBeCloseTo(0.1)
+    s = turn(s, 'c', 0.3)
+    expect(s.costUsd).toBeCloseTo(0.8)
+  })
 })

@@ -125,4 +125,3 @@ describe('стоимость сессии в статус-баре', () => {
     expect(screen.queryByText(/^\$/)).toBeNull()
   })
 })
-
