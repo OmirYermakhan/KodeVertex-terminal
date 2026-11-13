@@ -1,6 +1,7 @@
 // Файл не Feed.tsx: на регистронезависимой ФС macOS он конфликтует с feed.ts (модель ленты).
 import { forwardRef, Fragment, type ReactNode } from 'react'
 import { ClaudeCard } from '../claude/cards/ClaudeCard'
+import { ErrorBoundary } from '../diag/ErrorBoundary'
 import type { Agent } from '../claude/reducer'
 import type { ClaudeItem, FeedItem, ShellBlock } from './feed'
 import { ShellBlockView } from './ShellBlockView'
@@ -35,22 +36,25 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
 ) {
   return (
     <div className="feed" ref={ref} onScroll={onScroll}>
-      {items.map((it) =>
-        it.kind === 'shell' ? (
-          <ShellBlockView
-            key={it.id}
-            block={it}
-            selected={it.id === selectedId}
-            live={it.running ? renderLive(it) : undefined}
-            onAttach={onAttach}
-            onCopy={onCopy}
-          />
-        ) : renderClaude ? (
-          <Fragment key={it.id}>{renderClaude(it)}</Fragment>
-        ) : (
-          <ClaudeCard key={it.id} item={it} agent={agentOf(agents, it)} selected={it.id === selectedId} onAttach={onAttach} onCopy={onCopy} />
-        ),
-      )}
+      {items.map((it) => (
+        // Сбой одной карточки (необычный ответ, вывод инструмента) не роняет ленту и окно.
+        // resetKey: обновлённый элемент (стрим ответа) пробует отрисоваться снова.
+        <ErrorBoundary key={it.id} name={it.kind === 'shell' ? 'блок' : 'карточку'} resetKey={it}>
+          {it.kind === 'shell' ? (
+            <ShellBlockView
+              block={it}
+              selected={it.id === selectedId}
+              live={it.running ? renderLive(it) : undefined}
+              onAttach={onAttach}
+              onCopy={onCopy}
+            />
+          ) : renderClaude ? (
+            <Fragment>{renderClaude(it)}</Fragment>
+          ) : (
+            <ClaudeCard item={it} agent={agentOf(agents, it)} selected={it.id === selectedId} onAttach={onAttach} onCopy={onCopy} />
+          )}
+        </ErrorBoundary>
+      ))}
       {park}
     </div>
   )

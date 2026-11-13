@@ -56,6 +56,15 @@ body {
   cursor: pointer;
 }
 
+.crash { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; gap: 12px; padding: 48px 32px 32px; background: var(--bg); color: var(--text); font-size: 14px; }
+.crash-text { flex: 1; min-height: 0; margin: 0; padding: 12px; overflow: auto; background: var(--panel); border: 1px solid var(--rule); border-left: 2px solid var(--del); border-radius: 6px; font-family: var(--font-code); font-size: 12px; white-space: pre-wrap; user-select: text; }
+.crash-actions { display: flex; gap: 8px; }
+.crash-actions button { font: inherit; color: var(--onAcc); background: var(--acc); border: none; border-radius: 6px; padding: 6px 14px; cursor: pointer; }
+.crash-actions button.ghost { color: var(--text); background: transparent; border: 1px solid var(--rule); }
+.crash-inline { display: flex; align-items: center; gap: 10px; margin: 6px 0; padding: 6px 10px; border-left: 2px solid var(--del); color: var(--muted); font-size: 12px; }
+.crash-inline span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crash-inline button { font: inherit; color: var(--text); background: transparent; border: 1px solid var(--rule); border-radius: 4px; padding: 1px 8px; cursor: pointer; }
+
 .statusbar {
   height: 26px;
   flex-shrink: 0;

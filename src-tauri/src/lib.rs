@@ -1,6 +1,7 @@
 mod attach;
 mod claude;
 mod claude_settings;
+mod diag;
 mod fonts;
 mod fs_complete;
 mod git;
@@ -84,7 +85,8 @@ pub fn run() {
       preview::preview_image,
       preview::preview_pdf,
       preview::preview_open,
-      slash_commands::claude_slash_commands
+      slash_commands::claude_slash_commands,
+      diag::frontend_log
     ])
     .manage(pty::PtyManager::default())
     .manage(claude::ClaudeManager::default())
@@ -99,13 +101,15 @@ pub fn run() {
       if let Ok(dir) = attach::dir(app.handle()) {
         std::thread::spawn(move || attach::cleanup(&dir, attach::KEEP, std::time::SystemTime::now()));
       }
-      if cfg!(debug_assertions) {
-        app.handle().plugin(
-          tauri_plugin_log::Builder::default()
-            .level(log::LevelFilter::Info)
-            .build(),
-        )?;
-      }
+      // Журнал и в release-сборке: иначе после сбоя у установленного приложения нечего читать.
+      app.handle().plugin(
+        tauri_plugin_log::Builder::default()
+          .level(log::LevelFilter::Info)
+          .max_file_size(5 * 1024 * 1024)
+          .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+          .build(),
+      )?;
+      diag::install_panic_hook();
       #[cfg(target_os = "macos")]
       if let Some(w) = app.get_webview_window("main") {
         traffic_lights::apply(w.ns_window());

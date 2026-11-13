@@ -1,4 +1,5 @@
 import { FitAddon } from '@xterm/addon-fit'
+import { ErrorBoundary } from '../diag/ErrorBoundary'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebglAddon } from '@xterm/addon-webgl'
@@ -877,9 +878,12 @@ export function TerminalPane(p: TerminalPaneProps) {
       </PreviewContext.Provider>
       <div className="dock">
         {claude && !agentsHidden && (
-          <AgentsPanel ref={agentsRef} state={claude.state} queued={queue.length} onExit={() => inputRef.current?.focus()} />
+          <ErrorBoundary name="панель агентов">
+            <AgentsPanel ref={agentsRef} state={claude.state} queued={queue.length} onExit={() => inputRef.current?.focus()} />
+          </ErrorBoundary>
         )}
         {question && !alt && (
+          <ErrorBoundary name="вопрос агента" resetKey={question}>
           <QuestionPrompt
             ref={promptRef}
             item={question}
@@ -890,8 +894,10 @@ export function TerminalPane(p: TerminalPaneProps) {
             onCustom={onCustomQ}
             onLeave={onLeaveQ}
           />
+          </ErrorBoundary>
         )}
         {permission && !alt && (
+          <ErrorBoundary name="запрос разрешения" resetKey={permission}>
           <PermissionPrompt
             key={permission.requestId}
             ref={promptRef}
@@ -900,8 +906,10 @@ export function TerminalPane(p: TerminalPaneProps) {
             onDecide={onDecideP}
             onLeave={onLeaveQ}
           />
+          </ErrorBoundary>
         )}
         {queueShown && (
+          <ErrorBoundary name="очередь сообщений">
           <QueuePanel
             ref={queueRef}
             queue={queue}
@@ -909,6 +917,7 @@ export function TerminalPane(p: TerminalPaneProps) {
             onRemove={onRemoveQueued}
             onExit={() => inputRef.current?.focus()}
           />
+          </ErrorBoundary>
         )}
         <InputBar
           ref={inputRef}
@@ -949,7 +958,9 @@ export function TerminalPane(p: TerminalPaneProps) {
           </div>
         </div>
       )}
-      <PreviewLayer state={preview.state} api={preview.api} container={paneRef} cwd={() => cwdRef.current} home={home} />
+      <ErrorBoundary name="мини-просмотр" resetKey={preview.state}>
+        <PreviewLayer state={preview.state} api={preview.api} container={paneRef} cwd={() => cwdRef.current} home={home} />
+      </ErrorBoundary>
       {drag && (
         <div className="tk-ghost" style={{ left: drag.x + 12, top: drag.y + 10 }} aria-hidden="true">
           <Token token={drag.token} />
