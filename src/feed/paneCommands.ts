@@ -1,5 +1,5 @@
 // Команды ленты (⌘↑/⌘↓/⌘⇧C/⌘L) идут через общий keymap → runAction → обработчик фокусной панели.
-export type BlockAction = 'blockPrev' | 'blockNext' | 'blockCopy' | 'blockAttach'
+export type BlockAction = 'blockPrev' | 'blockNext' | 'blockCopy' | 'blockAttach' | 'blockRead'
 
 type Handler = (a: BlockAction) => void
 const handlers = new Map<string, Handler>()

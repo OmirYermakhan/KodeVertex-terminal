@@ -40,8 +40,10 @@ function Output({ block }: { block: ShellBlock }) {
  * Панелька над блоком или ответом (макет 06, сцена Г): видна при наведении и у выбранного (CSS).
  * «⌘L в сообщение» можно и перетащить в строку ввода (TerminalPane).
  */
-export function HoverActions({ id, onAttach, onCopy }: { id: string; onAttach?(id: string): void; onCopy?(id: string): void }) {
-  if (!onAttach && !onCopy) return null
+export const READ_ACTION = '⌘R читать'
+
+export function HoverActions({ id, onAttach, onCopy, onRead }: { id: string; onAttach?(id: string): void; onCopy?(id: string): void; onRead?(id: string): void }) {
+  if (!onAttach && !onCopy && !onRead) return null
   return (
     <div className="hover-act">
       {onAttach && (
@@ -52,6 +54,11 @@ export function HoverActions({ id, onAttach, onCopy }: { id: string; onAttach?(i
       {onCopy && (
         <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => onCopy(id)}>
           {COPY_ACTION}
+        </button>
+      )}
+      {onRead && (
+        <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => onRead(id)}>
+          {READ_ACTION}
         </button>
       )}
     </div>

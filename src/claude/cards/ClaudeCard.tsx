@@ -20,6 +20,7 @@ export const ClaudeCard = memo(function ClaudeCard({
   selected,
   onAttach,
   onCopy,
+  onRead,
 }: {
   item: ClaudeItem
   agent?: Agent
@@ -27,13 +28,14 @@ export const ClaudeCard = memo(function ClaudeCard({
   /** Ответ — значком в строку ввода / копировать (панелька над карточкой). */
   onAttach?(id: string): void
   onCopy?(id: string): void
+  onRead?(id: string): void
 }) {
   const it = item.item
   switch (it.type) {
     case 'user':
       return <UserBubble id={item.id} text={it.text} tokens={it.tokens} />
     case 'assistant':
-      return <AssistantCard id={item.id} agent={agent} text={it.text} streaming={it.streaming} selected={selected} onAttach={onAttach} onCopy={onCopy} />
+      return <AssistantCard id={item.id} agent={agent} text={it.text} streaming={it.streaming} selected={selected} onAttach={onAttach} onCopy={onCopy} onRead={onRead} />
     case 'action':
       // Вопрос агента показывает своя карточка (question), действие «AskUserQuestion» не дублируем.
       if (it.tool === 'AskUserQuestion') return null

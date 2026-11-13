@@ -253,7 +253,9 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .you { box-sizing: border-box; margin: 0 0 12px auto; max-width: 60%; background: var(--you); border-radius: 10px 10px 2px 10px; padding: 9px 14px; font-family: var(--font-text); font-size: calc(var(--size-text) - 1.5px); line-height: normal; color: var(--strong); white-space: pre-wrap; overflow-wrap: anywhere; }
 .you .who { color: color-mix(in srgb, var(--accText) 45%, var(--strong)); text-align: right; white-space: normal; }
 .card { position: relative; box-sizing: border-box; background: var(--panel); border: 1px solid var(--rule); border-left: 2px solid var(--acc); border-radius: 8px; padding: 11px 14px; margin-bottom: 10px; max-width: 76ch; color: var(--text); font-family: var(--font-text); }
-.card .who { color: var(--accText); }
+.card .who { color: var(--accText); display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.card .read-btn { font: inherit; letter-spacing: inherit; text-transform: inherit; color: var(--accText); background: transparent; border: 1px solid var(--rule); border-radius: 4px; padding: 1px 7px; cursor: pointer; }
+.card .read-btn:hover { border-color: var(--acc); color: var(--strong); }
 .card.sel { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 6%, var(--panel)); }
 .card.fable { border-left-color: #e8c46a; }
 .card.fable .who { color: #e8c46a; }
@@ -329,16 +331,18 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .sum.err .who > span:first-child { color: var(--del); }
 
 /* Режим чтения (макет 01, вариант B): markdown в карточках */
-.md { font-size: calc(var(--size-text) - 1.5px); line-height: var(--lh-text); color: var(--text); overflow-wrap: anywhere; }
+.md { font-size: calc(var(--size-text) - 0.5px); line-height: var(--lh-text); color: var(--text); overflow-wrap: anywhere; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
-.md p { margin: 0 0 10px; }
-.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 14px 0 8px; color: var(--strong); font-weight: 600; letter-spacing: -0.01em; line-height: 1.35; }
-.md h1 { font-size: 19px; }
-.md h2 { font-size: 17px; }
-.md h3 { font-size: 15.5px; }
+.md p { margin: 0 0 12px; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 22px 0 10px; color: var(--strong); font-weight: 600; letter-spacing: -0.01em; line-height: 1.35; }
+.md h1 { font-size: 1.4em; }
+.md h2 { font-size: 1.22em; padding-bottom: 6px; border-bottom: 1px solid var(--rule); }
+.md h3 { font-size: 1.08em; color: var(--accText); }
 .md h4, .md h5, .md h6 { font-size: 1em; }
-.md ul, .md ol { margin: 0 0 10px; padding-left: 20px; }
+.md ul, .md ol { margin: 0 0 12px; padding-left: 22px; }
+.md li { margin: 0 0 6px; }
+.md li > ul, .md li > ol { margin: 6px 0 0; }
 .md li::marker { color: var(--accText); font-family: var(--font-code); font-size: 0.9em; }
 .md li > p { margin: 0; }
 .md strong { color: var(--strong); font-weight: 600; }
@@ -547,3 +551,31 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .toast.done { border-left-color: var(--add); }
 .toast.waiting { border-left-color: var(--warn); }
 .toast.error { border-left-color: var(--del); }
+
+/* Режим чтения ответа: на всю панель, колонка по центру, оглавление, прогресс */
+.reader { position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column; background: var(--bg); color: var(--text); container-type: inline-size; }
+.rd-bar { position: relative; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 40px; padding: 0 16px; border-bottom: 1px solid var(--rule); background: var(--panel); font-family: var(--font-code); font-size: 11px; }
+.rd-title { color: var(--accText); letter-spacing: 0.06em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rd-tools { display: flex; gap: 6px; flex: none; }
+.rd-tools button { font: inherit; color: var(--text); background: transparent; border: 1px solid var(--rule); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+.rd-tools button:hover:not(:disabled) { border-color: var(--acc); color: var(--strong); }
+.rd-tools button:disabled { opacity: 0.4; cursor: default; }
+.rd-tools kbd { font: inherit; color: var(--muted); margin-left: 4px; }
+.rd-progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--acc); transform-origin: left; }
+.rd-main { flex: 1; min-height: 0; display: flex; }
+.rd-toc { flex: none; width: 240px; overflow: auto; padding: 20px 8px 20px 16px; border-right: 1px solid var(--rule); font-family: var(--font-text); font-size: 13px; }
+.rd-toc-h { margin: 0 0 10px 8px; font-family: var(--font-code); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.rd-toc-i { display: block; width: 100%; text-align: left; font: inherit; color: var(--muted); background: transparent; border: 0; border-left: 2px solid transparent; border-radius: 0 4px 4px 0; padding: 4px 8px; line-height: 1.35; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rd-toc-i.l2 { padding-left: 18px; }
+.rd-toc-i.l3 { padding-left: 28px; font-size: 12.5px; }
+.rd-toc-i:hover { color: var(--text); background: var(--panel); }
+.rd-toc-i.on { color: var(--strong); border-left-color: var(--acc); background: color-mix(in srgb, var(--acc) 8%, transparent); }
+.rd-scroll { flex: 1; min-width: 0; overflow: auto; outline: none; scroll-behavior: auto; }
+.rd-body { box-sizing: border-box; max-width: calc(72ch + 64px); margin: 0 auto; padding: 32px 32px 30vh; }
+.rd-body .md { font-size: var(--rd-size, 17px); line-height: 1.75; }
+.rd-body .md p { margin: 0 0 1em; }
+.rd-body .md li { margin: 0 0 0.45em; }
+.rd-body .md h1, .rd-body .md h2, .rd-body .md h3 { margin: 1.6em 0 0.6em; scroll-margin-top: 16px; }
+.rd-body .md > :first-child { margin-top: 0; }
+.rd-body .md pre { font-size: max(12px, calc(var(--rd-size, 17px) - 3px)); }
+@container (max-width: 760px) { .rd-toc { display: none; } .rd-body { padding: 24px 18px 30vh; } }

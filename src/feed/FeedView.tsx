@@ -28,10 +28,12 @@ export interface FeedProps {
   /** Блок — значком в строку ввода («⌘L в сообщение»). */
   onAttach?(id: string): void
   onCopy?(id: string): void
+  /** Ответ — в режиме чтения. */
+  onRead?(id: string): void
 }
 
 export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
-  { items, selectedId, renderLive, agents = NO_AGENTS, renderClaude, onScroll, park, onAttach, onCopy },
+  { items, selectedId, renderLive, agents = NO_AGENTS, renderClaude, onScroll, park, onAttach, onCopy, onRead },
   ref,
 ) {
   return (
@@ -51,7 +53,7 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
           ) : renderClaude ? (
             <Fragment>{renderClaude(it)}</Fragment>
           ) : (
-            <ClaudeCard item={it} agent={agentOf(agents, it)} selected={it.id === selectedId} onAttach={onAttach} onCopy={onCopy} />
+            <ClaudeCard item={it} agent={agentOf(agents, it)} selected={it.id === selectedId} onAttach={onAttach} onCopy={onCopy} onRead={onRead} />
           )}
         </ErrorBoundary>
       ))}

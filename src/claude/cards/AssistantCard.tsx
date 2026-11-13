@@ -3,6 +3,7 @@ import { modelLabel } from '../labels'
 import { Markdown } from '../Markdown'
 import type { Agent } from '../reducer'
 import { HoverActions } from '../../feed/ShellBlockView'
+import { isLongAnswer } from '../reader/ReaderView'
 
 /** «Имя агента · Модель»; без агента — «Claude». */
 export function agentSignature(agent: Agent | undefined): string {
@@ -21,6 +22,7 @@ export const AssistantCard = memo(function AssistantCard({
   selected,
   onAttach,
   onCopy,
+  onRead,
 }: {
   agent: Agent | undefined
   text: string
@@ -30,11 +32,21 @@ export const AssistantCard = memo(function AssistantCard({
   selected?: boolean
   onAttach?(id: string): void
   onCopy?(id: string): void
+  /** Открыть ответ в режиме чтения. */
+  onRead?(id: string): void
 }) {
+  const long = !!onRead && !!id && isLongAnswer(text)
   return (
     <div className={(isFable(agent) ? 'card fable' : 'card') + (selected ? ' sel' : '')} data-item-id={id}>
-      {!streaming && id && <HoverActions id={id} onAttach={onAttach} onCopy={onCopy} />}
-      <div className="who">{agentSignature(agent)}</div>
+      {!streaming && id && <HoverActions id={id} onAttach={onAttach} onCopy={onCopy} onRead={onRead} />}
+      <div className="who">
+        <span>{agentSignature(agent)}</span>
+        {long && (
+          <button type="button" className="read-btn" onMouseDown={(e) => e.preventDefault()} onClick={() => onRead!(id!)}>
+            Читать
+          </button>
+        )}
+      </div>
       <Markdown text={text} streaming={streaming} />
     </div>
   )

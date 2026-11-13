@@ -1,4 +1,6 @@
 import { FitAddon } from '@xterm/addon-fit'
+import { ReaderView } from '../claude/reader/ReaderView'
+import { agentSignature } from '../claude/cards/AssistantCard'
 import { ErrorBoundary } from '../diag/ErrorBoundary'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
@@ -170,6 +172,8 @@ export function TerminalPane(p: TerminalPaneProps) {
     itemsRef.current = items
   })
   const [selected, setSelected] = useState<string | null>(null)
+  /** Ответ, открытый в режиме чтения (id элемента ленты). */
+  const [readerId, setReaderId] = useState<string | null>(null)
   const selectedRef = useRef(selected)
   useEffect(() => {
     selectedRef.current = selected
@@ -814,6 +818,19 @@ export function TerminalPane(p: TerminalPaneProps) {
           copyItem(selectedRef.current)
           return
         }
+        // ⌘R: выбранный ответ (или последний ответ в ленте) — в режиме чтения; повторно — закрыть.
+        if (a === 'blockRead') {
+          setReaderId((cur) => {
+            const list = itemsRef.current
+            if (cur && list.some((it) => it.id === cur)) return null
+            const isAnswer = (it: FeedItem | undefined) => it?.kind === 'claude' && it.item.type === 'assistant'
+            const sel = list.find((it) => it.id === selectedRef.current)
+            if (isAnswer(sel)) return sel!.id
+            for (let i = list.length - 1; i >= 0; i--) if (isAnswer(list[i])) return list[i].id
+            return null
+          })
+          return
+        }
         // ⌘L: выбранный блок или ответ — значком в строку ввода (макет 06, сцена Г).
         if (a === 'blockAttach') {
           attachItem(selectedRef.current)
@@ -842,6 +859,12 @@ export function TerminalPane(p: TerminalPaneProps) {
       }),
     [p.paneId, focusPrompt, attachItem, copyItem],
   )
+
+  const readerItem = readerId ? items.find((it) => it.id === readerId) : undefined
+  const closeReader = useCallback(() => {
+    setReaderId(null)
+    inputRef.current?.focus()
+  }, [])
 
   const liveHeight = Math.min(hostHeight, livePx)
   const renderLive = (_b: ShellBlock) =>
@@ -876,6 +899,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         onScroll={onFeedScroll}
         onAttach={attachItem}
         onCopy={copyItem}
+        onRead={setReaderId}
         park={
           // Пока xterm не показан, он стоит здесь: невидим, но сохраняет ширину текста блока (cols).
           // inert: спрятанный xterm не получает фокус по Tab/⇧Tab (ввод вслепую в ZLE).
@@ -966,6 +990,16 @@ export function TerminalPane(p: TerminalPaneProps) {
             <small>{dropSubline(dropHere)}</small>
           </div>
         </div>
+      )}
+      {readerItem && readerItem.kind === 'claude' && readerItem.item.type === 'assistant' && (
+        <ErrorBoundary name="режим чтения">
+          <ReaderView
+            title={agentSignature(claude?.state.agents.find((a) => a.id === (readerItem.item as { agentId: string }).agentId))}
+            text={readerItem.item.text}
+            streaming={readerItem.item.streaming}
+            onClose={closeReader}
+          />
+        </ErrorBoundary>
       )}
       <ErrorBoundary name="мини-просмотр" resetKey={preview.state}>
         <PreviewLayer state={preview.state} api={preview.api} container={paneRef} cwd={() => cwdRef.current} home={home} />
