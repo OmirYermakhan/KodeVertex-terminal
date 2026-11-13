@@ -1552,6 +1552,64 @@ describe('TerminalPane: правка отправленного сообщени
     expect(names()).toEqual(['claude_interrupt', 'claude_stop', 'claude_start', 'claude_send'])
   })
 
+  describe('подсказка следующего сообщения', () => {
+    const sugg = () => document.querySelector('.input .in-sugg')?.textContent ?? null
+    const suggest = (text: string) => line({ type: 'prompt_suggestion', suggestion: text, uuid: 'u', session_id: 's1' })
+
+    it('после хода — серым в пустом поле; → в поле без отправки; ↵ потом отправляет', async () => {
+      await twoTurns()
+      suggest('спасибо, до завтра')
+      expect(sugg()).toBe('спасибо, до завтра')
+      invoke.mockClear()
+      keyIn('Enter')
+      await act(async () => await flush())
+      expect(names()).toEqual([])
+      keyIn('ArrowRight')
+      expect(inputText()).toBe('спасибо, до завтра')
+      expect(sugg()).toBeNull()
+      expect(useClaudeSessions.getState().sessions.p.state.suggestion).toBeNull()
+      keyIn('Enter')
+      await act(async () => await flush())
+      expect(names()).toEqual(['claude_send'])
+    })
+
+    it('не во время ответа: пришла, когда уже отправлено следующее, — игнор', async () => {
+      await twoTurns()
+      type('третий')
+      keyIn('Enter')
+      await act(async () => await flush())
+      suggest('спасибо')
+      expect(sugg()).toBeNull()
+    })
+
+    it('при непустой очереди и при выключенной настройке не показывается', async () => {
+      await twoTurns()
+      suggest('спасибо')
+      expect(sugg()).toBe('спасибо')
+      act(() => useSettings.setState({ settings: { ...DEFAULTS, claudePromptSuggestions: false } }))
+      expect(sugg()).toBeNull()
+      act(() => useSettings.setState({ settings: { ...DEFAULTS } }))
+      expect(sugg()).toBe('спасибо')
+      act(() =>
+        useClaudeSessions.setState((st) => {
+          const s = st.sessions.p
+          return { sessions: { ...st.sessions, p: { ...s, queue: [{ id: 1, text: 'ждёт' }], paused: true } } }
+        }),
+      )
+      expect(sugg()).toBeNull()
+    })
+
+    it('esc убирает подсказку, второй esc — выход из режима Claude', async () => {
+      await twoTurns()
+      suggest('спасибо')
+      keyIn('Escape')
+      expect(sugg()).toBeNull()
+      expect(document.querySelector('.input .in-mode')).not.toBeNull()
+      keyIn('Escape')
+      expect(document.querySelector('.input .in-mode')).toBeNull()
+    })
+  })
+
   it('точка перемотки неизвестна — «Изменить» не показываем, ↑ не правит', async () => {
     await twoTurns()
     act(() =>

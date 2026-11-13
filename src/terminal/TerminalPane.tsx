@@ -22,7 +22,7 @@ import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
 import { applyShell, claudeIndex, claudeItemId, commandBytes, failurePrompt, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
-import { editClaude, dismissQueueHint, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
+import { editClaude, dismissQueueHint, dismissSuggestion, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
 import { aliasOf } from '../claude/models'
 import { canEdit, editInfo, lastEditable, pendingPrompt, type PermissionDecision } from '../claude/reducer'
 import { EditChip } from '../claude/EditChip'
@@ -934,6 +934,14 @@ export function TerminalPane(p: TerminalPaneProps) {
   useEffect(() => {
     if (editLost) cancelEdit()
   }, [editLost, cancelEdit])
+  // Подсказка следующего сообщения: только между ходами — не во время ответа, не при очереди,
+  // вопросе или запросе разрешения, не при правке сообщения; выключена в настройках — не видна.
+  const suggestion =
+    settings.claudePromptSuggestions && claudeState && !claudeState.busy && claudeState.pending === 0 &&
+    queue.length === 0 && !prompt && !editing && !alt
+      ? (claudeState.suggestion ?? null)
+      : null
+  const onDismissSuggestion = useCallback(() => dismissSuggestion(p.paneId), [p.paneId])
   const onEditLast = useCallback(() => {
     const st = useClaudeSessions.getState().sessions[callbacks.current.paneId]?.state
     const i = st ? lastEditable(st) : -1
@@ -1194,6 +1202,8 @@ export function TerminalPane(p: TerminalPaneProps) {
           preview={preview.api}
           atFeed={atFeed}
           claudeHistory={claudeHistory}
+          suggestion={suggestion}
+          onDismissSuggestion={onDismissSuggestion}
         />
       </div>
       {alt && (

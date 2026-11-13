@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import raw from './fixtures/bash-ls.jsonl?raw'
-import { canEdit, editInfo, lastEditable, messagesLabel, newSession, replaceFrom, actionTitle, cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaude, pendingPrompt, pendingQuestion, recordAnswer, modelLabel, nowLabel, reduceClaude, userSent } from './reducer'
+import { canEdit, editInfo, lastEditable, messagesLabel, newSession, replaceFrom, actionTitle, cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaude, pendingPrompt, pendingQuestion, recordAnswer, modelLabel, nowLabel, reduceClaude, userSent, dropSuggestion, clearSession } from './reducer'
 import type { ClaudeState } from './reducer'
 
 const lines = raw
@@ -384,5 +384,40 @@ describe('правка сообщения: точки перемотки', () =>
     expect([1, 2, 4, 5, 11, 12, 21, 22, 25].map(messagesLabel)).toEqual([
       '1 сообщение', '2 сообщения', '4 сообщения', '5 сообщений', '11 сообщений', '12 сообщений', '21 сообщение', '22 сообщения', '25 сообщений',
     ])
+  })
+})
+
+describe('подсказка следующего сообщения (prompt_suggestion)', () => {
+  const result = { type: 'result', result: 'ok', duration_ms: 1, total_cost_usd: 0 }
+  const sg = (suggestion: unknown) => ({ type: 'prompt_suggestion', suggestion, uuid: 'u', session_id: 's' })
+  const afterTurn = () => reduceClaude(userSent(initialClaude(), 'привет', 0), result, 500)
+
+  it('после конца хода запоминается с временем этого хода', () => {
+    const s = reduceClaude(afterTurn(), sg('  Добавь тесты для этой функции '), 900)
+    expect(s.suggestion).toEqual({ text: 'Добавь тесты для этой функции', after: 500 })
+  })
+
+  it('во время хода (уже отправлено следующее) и до первого хода — игнор', () => {
+    const busy = userSent(afterTurn(), 'ещё', 600)
+    expect(reduceClaude(busy, sg('спасибо'), 700).suggestion ?? null).toBeNull()
+    expect(reduceClaude(initialClaude(), sg('спасибо'), 700).suggestion ?? null).toBeNull()
+  })
+
+  it('пустая, многострочная, не строка — игнор', () => {
+    for (const bad of ['', '   ', 'а\nб', 5, null, 'x'.repeat(201)]) {
+      expect(reduceClaude(afterTurn(), sg(bad), 900).suggestion ?? null).toBeNull()
+    }
+  })
+
+  it('отправка, новый result, /clear и «убрать» её снимают', () => {
+    const s = reduceClaude(afterTurn(), sg('спасибо, до завтра'), 900)
+    expect(s.suggestion).not.toBeNull()
+    expect(userSent(s, 'другое', 1000).suggestion).toBeNull()
+    expect(dropSuggestion(s).suggestion).toBeNull()
+    expect(clearSession(s).suggestion).toBeNull()
+    expect(newSession(s).suggestion).toBeNull()
+    const again = reduceClaude(userSent(s, 'x', 1000), result, 1200)
+    expect(again.suggestion).toBeNull()
+    expect(again.turnEndAt).toBe(1200)
   })
 })

@@ -26,6 +26,7 @@ import { atRows, type AtFeed, type AtRow } from '../attach/atSearch'
 import { AtPicker } from '../attach/AtPicker'
 import { blockAttachment, messageAttachment } from '../attach/fromFeed'
 import type { PreviewApi } from '../attach/preview/usePreview'
+import type { Suggestion } from '../claude/reducer'
 
 /** Поле растёт до стольких строк, дальше — прокрутка внутри. */
 export const MAX_ROWS = 8
@@ -128,6 +129,14 @@ export interface InputBarProps {
   atFeed?(): AtFeed
   /** Отправленные сообщения Claude панели (старые первыми) — поиск ⌃R в режиме Claude. */
   claudeHistory?(): readonly string[]
+  /**
+   * Подсказка следующего сообщения (как в Claude Code): серым в пустом поле режима Claude, курсор
+   * в начале; → или ⇥ — в поле (не отправляя), набор, вставка, esc — убирают. Родитель передаёт её
+   * только между ходами: не во время ответа, не при очереди, вопросе или правке. null — нет.
+   */
+  suggestion?: Suggestion | null
+  /** Подсказку убрали (набор, вставка, esc, принятие или она пришла после начала набора). */
+  onDismissSuggestion?(): void
 }
 
 export interface InputBarHandle {
@@ -238,6 +247,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const [caretEnd, setCaretEnd] = useState(true)
   /** Идёт набор IME — подсказка-призрак не показывается. */
   const [composing, setComposing] = useState(false)
+  /** Когда строку последний раз меняли: подсказка хода, пришедшая после начала набора, не показывается. */
+  const lastEdit = useRef(0)
   /** Текст, на котором подсказку-призрак скрыли по esc: до правки строки не показываем. */
   const [ghostHidden, setGhostHidden] = useState<string | null>(null)
   /** Поиск ⌃R по истории (запрос — набранная строка); null — закрыт. */
@@ -290,6 +301,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   /** Новая модель строки: поле перерисуется, курсор встанет в cursor. */
   const setDoc = useCallback((d: Doc, cursor: number, selected: string | null = null) => {
     if (d.tokens.length > 0) lastTokens.current = d.tokens
+    lastEdit.current = Date.now()
     docRef.current = d
     selTok.current = selected
     pendingCursor.current = cursor
@@ -794,6 +806,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       selTok.current = null
     }
     if (d.tokens.length > 0) lastTokens.current = d.tokens
+    lastEdit.current = Date.now()
     docRef.current = d
     setDocState(d)
     // Правка строки — выход из истории: ↑ снова начнёт с последней команды.
@@ -840,6 +853,22 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     if ((claudeRef.current ? atKey(ne) : completionRef.current.onKey(ne)) || hintsRef.current.onKey(ne)) {
       e.preventDefault()
       return
+    }
+    // Подсказка следующего сообщения: → / ⇥ — в поле (не отправлять), esc — убрать.
+    if (suggShown && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !ne.isComposing) {
+      if (e.key === 'Tab' || e.key === 'ArrowRight') {
+        e.preventDefault()
+        const t = suggShown.text
+        props.current.onDismissSuggestion?.()
+        nav.current = NAV_START
+        setLine(t, t.length)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        props.current.onDismissSuggestion?.()
+        return
+      }
     }
     // Tab/⇧Tab не уводят фокус из строки ввода (в спрятанный xterm или по кнопкам окна).
     if (e.key === 'Tab') {
@@ -1027,6 +1056,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const onPaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
     e.preventDefault()
     if (props.current.disabled) return
+    if (props.current.suggestion) props.current.onDismissSuggestion?.()
     const cd = e.clipboardData
     const text = cd?.getData('text/plain') ?? ''
     if (text) {
@@ -1114,12 +1144,25 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const empty = doc.text === ''
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const hsRows = useMemo(() => (hs ? historyRows() : []), [hs !== null, doc.text, claudeMode])
+  // Подсказка пришла, когда строку уже начали набирать (или набирают сейчас), — не нужна.
+  useEffect(() => {
+    const sg = p.suggestion
+    if (!sg) return
+    const d = docRef.current
+    if (d.text !== '' || d.tokens.length > 0 || lastEdit.current > sg.after) props.current.onDismissSuggestion?.()
+  }, [p.suggestion, doc])
   // Подсказка-призрак из истории: только оболочка, курсор в конце, без открытых выборок и IME.
   const ghost =
     !claudeMode && focused && caretEnd && !composing && !p.disabled && !p.answer && !p.edit && !p.continuation &&
     !picker && !hs && !(open && pathsOn) && !(hints.state.open && p.hints) && !atShown &&
     doc.tokens.length === 0 && doc.text !== ghostHidden
       ? ghostSuggestion(getHistory(), doc.text)
+      : null
+  // Подсказка следующего сообщения: пустое поле режима Claude, без открытых выборок и IME.
+  const suggShown =
+    p.suggestion && claudeMode && empty && doc.tokens.length === 0 && !composing && !p.disabled && !p.answer && !p.edit &&
+    !picker && !hs
+      ? p.suggestion
       : null
   const placeholder = p.answer ? ANSWER_PLACEHOLDER : p.edit ? EDIT_PLACEHOLDER : claudeMode ? CLAUDE_PLACEHOLDER : PLACEHOLDER
   return (
@@ -1269,10 +1312,16 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               setHs(null)
             }}
           />
-          {empty && (
+          {empty && !suggShown && (
             <span className="ph" aria-hidden="true">
               {placeholder}
               {focused && !p.disabled && <span className="caret" />}
+            </span>
+          )}
+          {suggShown && (
+            <span className="ph in-sugg" data-testid="suggestion" aria-hidden="true">
+              <span className="in-ghost-rest">{suggShown.text}</span>
+              {focused && <span className="caret" />}
             </span>
           )}
           {ghost && (
