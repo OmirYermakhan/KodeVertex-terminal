@@ -24,6 +24,25 @@ export function motionAvailable(): boolean {
   return typeof HTMLElement !== 'undefined' && typeof HTMLElement.prototype.animate === 'function' && !prefersReducedMotion()
 }
 
+/** CSS-анимации появления и ухода (global.css): играют один раз за жизнь элемента. */
+export const ONCE_ANIMATIONS: ReadonlySet<string> = new Set(['kv-in', 'kv-in-q', 'kv-pop', 'kv-out', 'kv-out-fade'])
+
+/**
+ * Довести до конца разовые CSS-анимации внутри root. Нужна, когда root снова показан после
+ * display:none (вкладка): по спецификации CSS Animations все анимации поддерева запускаются заново,
+ * и появление проигралось бы у всей ленты ещё раз. Вызывать до отрисовки (useLayoutEffect).
+ * Без Web Animations (тесты) — ничего.
+ */
+export function finishOnceAnimations(root: Element | null): void {
+  const doc = root?.ownerDocument
+  if (!root || !doc || typeof doc.getAnimations !== 'function') return
+  for (const a of doc.getAnimations()) {
+    const name = (a as Partial<CSSAnimation>).animationName
+    const target = (a.effect as KeyframeEffect | null)?.target
+    if (name && ONCE_ANIMATIONS.has(name) && target && root.contains(target)) a.finish()
+  }
+}
+
 /** Можно ли анимировать элемент из JS (нет Web Animations — например, в тестах — или движение уменьшено). */
 export function canAnimate(el: Element | null | undefined): el is HTMLElement {
   return !!el && typeof (el as HTMLElement).animate === 'function' && !prefersReducedMotion()

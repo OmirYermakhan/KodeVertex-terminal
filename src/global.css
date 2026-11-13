@@ -661,7 +661,9 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 
 /* Плавные анимации (только opacity / transform / height). При «Уменьшить движение» их нет:
    всё — внутри no-preference; раскрытие по высоте (src/ui/motion.tsx) проверяет ту же настройку.
-   translate/scale — отдельными свойствами: не спорят с transform выборок (.cp.pal). */
+   translate/scale — отдельными свойствами: не спорят с transform выборок (.cp.pal).
+   Показ вкладки после display:none перезапустил бы их у всего поддерева — PaneView доводит их
+   до конца до отрисовки (motion.finishOnceAnimations; новое имя ключевых кадров — добавить в ONCE_ANIMATIONS). */
 .kv-collapse { overflow: hidden; }
 .kv-collapse:empty { display: none; }
 .qu-row.leaving, .queue.leaving { pointer-events: none; }
