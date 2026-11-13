@@ -13,12 +13,29 @@ pub struct GitInfo {
   pub dirty: bool,
 }
 
-/// Запускает `program args` в `cwd`; убивает процесс по `deadline`. None при ошибке, таймауте или ненулевом коде.
-fn run_cmd(program: &str, args: &[&str], cwd: &Path, deadline: Instant) -> Option<String> {
+/// Переменные окружения для git: без системного конфига, без блокировок индекса и без
+/// вопросов о паролях (stdin закрыт — git повис бы до таймаута).
+const GIT_ENV: &[(&str, &str)] = &[("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_OPTIONAL_LOCKS", "0"), ("GIT_TERMINAL_PROMPT", "0")];
+
+/// Настройки, перекрывающие конфиг репозитория. git запускается сам при каждом `cd`, а
+/// `.git/config` чужого репозитория (скачанный архив, клон) может назначить команды:
+/// `core.fsmonitor` выполняется прямо из `git status`, хуки — из `hooksPath`.
+const GIT_SAFE_CONFIG: &[&str] = &[
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "core.untrackedCache=false",
+];
+
+/// Запускает `program args` в `cwd` с окружением `env`; убивает процесс по `deadline`.
+/// None при ошибке, таймауте или ненулевом коде.
+fn run_cmd(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)], deadline: Instant) -> Option<String> {
   let mut child = Command::new(program)
     .args(args)
     .current_dir(cwd)
-    .env("GIT_OPTIONAL_LOCKS", "0")
+    .envs(env.iter().copied())
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
     .stderr(Stdio::null())
@@ -46,11 +63,43 @@ fn run_cmd(program: &str, args: &[&str], cwd: &Path, deadline: Instant) -> Optio
   status.success().then(|| text.trim_end().to_string())
 }
 
-/// `git -C <cwd> <args>` с общим дедлайном.
-fn run_git(cwd: &Path, args: &[&str], deadline: Instant) -> Option<String> {
-  let mut full = vec!["-C", cwd.to_str()?];
+/// Аргументы `git`: защитные `-c`, перекрытия `extra` (тоже пары `-c k=v`), `-C <cwd>`, затем `args`.
+fn git_args<'a>(cwd: &'a str, extra: &'a [String], args: &[&'a str]) -> Vec<&'a str> {
+  let mut full: Vec<&str> = GIT_SAFE_CONFIG.to_vec();
+  full.extend(extra.iter().map(String::as_str));
+  full.extend(["-C", cwd]);
   full.extend_from_slice(args);
-  run_cmd("git", &full, Path::new("."), deadline)
+  full
+}
+
+/// `git -C <cwd> <args>` с общим дедлайном и защитными настройками.
+fn run_git(cwd: &Path, args: &[&str], deadline: Instant) -> Option<String> {
+  run_cmd("git", &git_args(cwd.to_str()?, &[], args), Path::new("."), GIT_ENV, deadline)
+}
+
+/// Фильтры (`filter.<имя>.clean/process`) из конфига репозитория: `git status` запускает их
+/// для изменённых файлов с атрибутом `filter=<имя>`. Отключаем каждый пустой командой —
+/// git тогда не фильтрует файл. Чтение конфига само ничего не запускает.
+fn filter_overrides(cwd: &Path, deadline: Instant) -> Vec<String> {
+  let re = r"^filter\..*\.(clean|smudge|process)$";
+  run_git(cwd, &["config", "--name-only", "--get-regexp", re], deadline)
+    .map(|names| filter_overrides_from(&names))
+    .unwrap_or_default()
+}
+
+/// Имена ключей `filter.<имя>.<команда>` по строке → пары `-c filter.<имя>.<команда>=`.
+fn filter_overrides_from(names: &str) -> Vec<String> {
+  let mut drivers: Vec<&str> = names
+    .lines()
+    .filter_map(|k| k.strip_prefix("filter.")?.rsplit_once('.').map(|(name, _)| name))
+    .collect();
+  drivers.sort_unstable();
+  drivers.dedup();
+  drivers
+    .into_iter()
+    .flat_map(|d| ["clean", "smudge", "process"].map(|c| ["-c".to_string(), format!("filter.{d}.{c}=")]))
+    .flatten()
+    .collect()
 }
 
 pub fn git_info_at(cwd: &Path) -> GitInfo {
@@ -62,7 +111,12 @@ pub fn git_info_at(cwd: &Path) -> GitInfo {
   let branch = run_git(cwd, &["branch", "--show-current"], deadline)
     .filter(|s| !s.is_empty())
     .or_else(|| run_git(cwd, &["rev-parse", "--short", "HEAD"], deadline).filter(|s| !s.is_empty()));
-  let dirty = run_git(cwd, &["status", "--porcelain"], deadline).is_some_and(|s| !s.is_empty());
+  let filters = filter_overrides(cwd, deadline);
+  let dirty = cwd.to_str().and_then(|c| {
+    let args = git_args(c, &filters, &["status", "--porcelain"]);
+    run_cmd("git", &args, Path::new("."), GIT_ENV, deadline)
+  });
+  let dirty = dirty.is_some_and(|s| !s.is_empty());
   GitInfo { root: Some(root), branch, dirty }
 }
 
@@ -145,7 +199,7 @@ mod tests {
   #[cfg(unix)]
   fn slow_child_is_killed_at_deadline() {
     let start = Instant::now();
-    let r = run_cmd("sleep", &["5"], Path::new("."), start + Duration::from_millis(200));
+    let r = run_cmd("sleep", &["5"], Path::new("."), &[], start + Duration::from_millis(200));
     assert!(r.is_none());
     assert!(start.elapsed() < Duration::from_secs(2), "took {:?}", start.elapsed());
   }
@@ -156,5 +210,86 @@ mod tests {
     let start = Instant::now();
     assert!(run_git(d.path(), &["status"], start - Duration::from_millis(1)).is_none());
     assert!(start.elapsed() < Duration::from_secs(1));
+  }
+
+  #[test]
+  fn git_args_put_safe_config_first() {
+    let extra = vec!["-c".to_string(), "filter.x.clean=".to_string()];
+    let a = git_args("/r", &extra, &["status", "--porcelain"]);
+    #[rustfmt::skip]
+    let want = [
+      "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.untrackedCache=false",
+      "-c", "filter.x.clean=", "-C", "/r", "status", "--porcelain",
+    ];
+    assert_eq!(a, want);
+    assert!(GIT_ENV.contains(&("GIT_CONFIG_NOSYSTEM", "1")));
+    assert!(GIT_ENV.contains(&("GIT_OPTIONAL_LOCKS", "0")));
+    assert!(GIT_ENV.contains(&("GIT_TERMINAL_PROMPT", "0")));
+  }
+
+  #[test]
+  fn filter_overrides_cover_every_driver() {
+    let o = filter_overrides_from("filter.lfs.clean\nfilter.lfs.process\nfilter.a.b.smudge\n");
+    #[rustfmt::skip]
+    let want = [
+      "-c", "filter.a.b.clean=", "-c", "filter.a.b.smudge=", "-c", "filter.a.b.process=",
+      "-c", "filter.lfs.clean=", "-c", "filter.lfs.smudge=", "-c", "filter.lfs.process=",
+    ];
+    assert_eq!(o, want);
+    assert!(filter_overrides_from("").is_empty());
+  }
+
+  /// Дописывает строки в `.git/config` репозитория (как сделал бы чужой архив).
+  fn hostile_config(d: &Path, text: &str) {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().append(true).open(d.join(".git/config")).unwrap();
+    f.write_all(text.as_bytes()).unwrap();
+  }
+
+  #[test]
+  #[cfg(unix)]
+  fn hostile_fsmonitor_and_filter_do_not_run() {
+    let d = repo();
+    let pwned = d.path().join("pwned");
+    let p = pwned.display();
+    std::fs::write(d.path().join(".gitattributes"), "*.txt filter=evil\n").unwrap();
+    std::fs::write(d.path().join("a.txt"), "a\n").unwrap();
+    git(d.path(), &["-c", "filter.evil.clean=cat", "add", "."]);
+    git(d.path(), &["-c", "filter.evil.clean=cat", "commit", "-m", "a"]);
+    hostile_config(
+      d.path(),
+      &format!(
+        "[core]\n\tfsmonitor = \"touch '{p}'; false\"\n\tuntrackedCache = true\n\
+         [filter \"evil\"]\n\tclean = \"touch '{p}'; cat\"\n\tprocess = \"touch '{p}'\"\n"
+      ),
+    );
+    // Изменённый файл с filter=evil: без защиты git status запустил бы clean-фильтр.
+    std::fs::write(d.path().join("a.txt"), "b\n").unwrap();
+    let i = git_info_at(d.path());
+    assert!(i.dirty);
+    assert!(!pwned.exists(), "команда из .git/config выполнилась");
+  }
+
+  /// Без защиты те же настройки действительно выполняют команду — тест выше что-то проверяет.
+  #[test]
+  #[cfg(unix)]
+  fn hostile_config_runs_without_protection() {
+    let d = repo();
+    let pwned = d.path().join("pwned");
+    hostile_config(d.path(), &format!("[core]\n\tfsmonitor = \"touch '{}'; false\"\n", pwned.display()));
+    let _ = Command::new("git").arg("-C").arg(d.path()).args(["status", "--porcelain"]).output().unwrap();
+    assert!(pwned.exists());
+
+    // И clean-фильтр: git status запускает его для изменённого файла с filter=evil.
+    let d = repo();
+    let pwned = d.path().join("pwned");
+    std::fs::write(d.path().join(".gitattributes"), "*.txt filter=evil\n").unwrap();
+    std::fs::write(d.path().join("a.txt"), "a\n").unwrap();
+    git(d.path(), &["-c", "filter.evil.clean=cat", "add", "."]);
+    git(d.path(), &["-c", "filter.evil.clean=cat", "commit", "-m", "a"]);
+    hostile_config(d.path(), &format!("[filter \"evil\"]\n\tclean = \"touch '{}'; cat\"\n", pwned.display()));
+    std::fs::write(d.path().join("a.txt"), "b\n").unwrap();
+    let _ = Command::new("git").arg("-C").arg(d.path()).args(["status", "--porcelain"]).output().unwrap();
+    assert!(pwned.exists());
   }
 }

@@ -25,3 +25,16 @@ export function isLocalHost(host: string, known: string | null): boolean {
   if (h === '' || h === 'localhost') return true
   return known === null || h === known.toLowerCase()
 }
+
+/**
+ * Маркер OSC 133/7 от нашей оболочки? Интеграция zsh дописывает последним параметром
+ * `;kv=<метка сессии>` (метку выдаёт pty_spawn, командам она не видна). Совпала — полезная
+ * нагрузка без метки; нет метки, чужая или сессия ещё не запущена (`mark` null) — null:
+ * такой маркер мог напечатать кто угодно (`cat` файла, программа, ssh), его игнорируем.
+ */
+export function unmark(data: string, mark: string | null): string | null {
+  if (!mark) return null
+  const i = data.lastIndexOf(';kv=')
+  if (i < 0 || data.slice(i + 4) !== mark) return null
+  return data.slice(0, i)
+}

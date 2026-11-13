@@ -14,7 +14,7 @@ import { useUi } from '../ui/uiStore'
 import { codeFontStack } from '../theme/fontFamily'
 import { ansiFromTokens, THEMES } from '../theme/themes'
 import { matchKey } from '../keys/keymap'
-import { isLocalHost, parseOsc7Url } from './osc'
+import { isLocalHost, parseOsc7Url, unmark } from './osc'
 import { useHome } from '../status/useGitInfo'
 import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
@@ -269,10 +269,14 @@ export function TerminalPane(p: TerminalPaneProps) {
     // Оболочка уже завершилась сама: сессии на стороне Rust больше нет, kill не нужен.
     let exited = false
 
+    // Метка маркеров сессии (из pty_spawn): OSC 133/7 без неё напечатал не наш zsh — `cat` файла,
+    // программа или удалённая оболочка; такие подделали бы блоки, код возврата и каталог.
+    let mark: string | null = null
     // Хост первого OSC 7 нашей оболочки (precmd до любой команды) — этот компьютер.
     let localHost: string | null = null
     term.parser.registerOscHandler(7, (data) => {
-      const url = parseOsc7Url(data)
+      const payload = unmark(data, mark)
+      const url = payload === null ? null : parseOsc7Url(payload)
       // Каталог — только от нашей оболочки в простое: не от `cat` файла, ssh или программы во время команды.
       if (!url || runningRef.current || !isLocalHost(url.host, localHost)) return true
       if (localHost === null && url.host && url.host.toLowerCase() !== 'localhost') localHost = url.host
@@ -302,7 +306,8 @@ export function TerminalPane(p: TerminalPaneProps) {
 
     // Блоки: zsh сообщает начало (C) и конец (D) команды.
     term.parser.registerOscHandler(133, (data) => {
-      const ev = parseOsc133(data)
+      const payload = unmark(data, mark)
+      const ev = payload === null ? null : parseOsc133(payload)
       if (!ev) return true
       if (ev.t === 'accepted') {
         // Во время команды (vared и т. п.) — это не наша строка ввода.
@@ -395,6 +400,10 @@ export function TerminalPane(p: TerminalPaneProps) {
       onExit: () => {
         exited = true
         if (!disposed) callbacks.current.onExit()
+      },
+      // До первого вывода: маркеры первого приглашения уже сверяются с меткой.
+      onSpawn: (h) => {
+        mark = h.mark
       },
     })
       .then((h) => {
