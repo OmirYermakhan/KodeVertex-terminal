@@ -189,7 +189,7 @@ function start(paneId: string): Proc {
   const permissionMode = (prev.rewindAt ? prev.permissionMode : null) ?? useSettings.getState().settings.claudePermissionMode
   // Подсказка следующего сообщения (`--prompt-suggestions`): из настроек на момент запуска.
   const promptSuggestions = useSettings.getState().settings.claudePromptSuggestions
-  patch(paneId, (p) => ({ ...p, permissionMode, rewindAt: null, state: newProcess(p.state) }))
+  patch(paneId, (p) => ({ ...p, permissionMode, rewindAt: null, state: newProcess(p.state, resume) }))
   let gotLine = false
   const onLine = new Channel<string>((line) => {
     gotLine = true
@@ -488,8 +488,8 @@ const resumeSeqs = new Map<string, number>()
  * `/resume` ↵: сначала читается история разговора; не прочиталась — текущий разговор остаётся,
  * в ленте карточка ошибки. Прочиталась — прежний процесс останавливается (как `/clear`),
  * onReplace(n) прячет в ленте элементы до n, история ложится карточками, процесс запускается
- * заново с `--resume <id>`. Два `/resume` подряд — применяется последний. Модель и усилие из
- * `/model` остаются. false — каталог неизвестен или чтение не удалось / устарело.
+ * заново с `--resume <id>`. Два `/resume` подряд — применяется последний. Модель, усилие из
+ * `/model` и очередь сообщений остаются (очередь уходит в продолженный разговор). false — каталог неизвестен или чтение не удалось / устарело.
  */
 export async function resumeClaude(
   paneId: string,
@@ -514,13 +514,27 @@ export async function resumeClaude(
   if (resumeSeqs.get(paneId) !== seq) return false
   switchCwd(paneId, cwd)
   onReplace?.(get(paneId).state.items.length)
+  // Очередь не теряется: она уходит в продолженный разговор (в его каталог), как обычно — по одному за ход.
+  const queue = get(paneId).queue.map((m) => ({ ...m, cwd }))
   clearClaude(paneId)
+  // Итог разговора по CLI (`cost-state`): с него процесс `--resume` продолжит `total_cost_usd`.
+  // Неизвестен — первый ход покажет время без цены, итог задаст его result.
+  const cost = typeof history.cost === 'number' && Number.isFinite(history.cost) && history.cost >= 0 ? history.cost : null
   patchState(paneId, (x) => ({
     ...x,
     sessionId: s.id,
     items: [...x.items, { type: 'session', cwd }, ...historyItems(s.title, history)],
+    costUsd: cost ?? 0,
+    costBase: 0,
+    costProc: cost ?? 0,
+    costOf: cost === null ? {} : { [s.id]: cost },
+    costUnknown: cost === null,
   }))
   start(paneId)
+  if (queue.length > 0) {
+    patch(paneId, (p) => ({ ...p, queue }))
+    sendNextQueued(paneId, cwd)
+  }
   return true
 }
 

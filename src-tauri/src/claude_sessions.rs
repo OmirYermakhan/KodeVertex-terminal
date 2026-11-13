@@ -52,6 +52,10 @@ pub struct SessionHistory {
   pub messages: Vec<HistoryMessage>,
   /// Сколько более ранних сообщений не загружено.
   pub skipped: usize,
+  /// Стоимость разговора по данным CLI: `totalCostUSD` последней записи `cost-state` этого
+  /// разговора в прочитанной части файла (её же CLI берёт за начало итога при `--resume`).
+  /// None — записи нет: стоимость неизвестна.
+  pub cost: Option<f64>,
 }
 
 /// Имя каталога проекта, как его строит Claude Code: всё, кроме латинских букв и цифр, — `-`
@@ -240,6 +244,18 @@ fn message_of(line: &[u8]) -> Option<HistoryMessage> {
   }
 }
 
+/// `totalCostUSD` записи `cost-state` разговора id; None — строка не такая запись.
+fn cost_of(line: &[u8], id: &str) -> Option<f64> {
+  if !line.windows(12).any(|w| w == b"\"cost-state\"") {
+    return None;
+  }
+  let v: Value = serde_json::from_slice(line).ok()?;
+  if v.get("type").and_then(Value::as_str) != Some("cost-state") || v.get("sessionId").and_then(Value::as_str) != Some(id) {
+    return None;
+  }
+  v.get("totalCostUSD").and_then(Value::as_f64).filter(|c| c.is_finite() && *c >= 0.0)
+}
+
 /// Служебный текст в роли пользователя: slash-команды, их вывод, напоминания, уведомления.
 fn is_service(text: &str) -> bool {
   const TAGS: [&str; 12] = [
@@ -380,9 +396,12 @@ pub fn read_history(root: &Path, cwd: &str, id: &str) -> Result<SessionHistory, 
   let len = fs::metadata(&path).map_err(|e| e.to_string())?.len();
   let from = len.saturating_sub(MAX_SCAN);
   let mut all: Vec<HistoryMessage> = Vec::new();
+  let mut cost: Option<f64> = None;
   each_line(&path, from, MAX_SCAN, |line| {
     if let Some(m) = message_of(line) {
       push_message(&mut all, m);
+    } else if let Some(c) = cost_of(line, id) {
+      cost = Some(c);
     }
     true
   })
@@ -404,7 +423,7 @@ pub fn read_history(root: &Path, cwd: &str, id: &str) -> Result<SessionHistory, 
     .into_iter()
     .map(|m| HistoryMessage { role: m.role, text: clip(&m.text, MESSAGE_CHARS) })
     .collect();
-  Ok(SessionHistory { messages, skipped: start })
+  Ok(SessionHistory { messages, skipped: start, cost })
 }
 
 #[tauri::command]
@@ -565,6 +584,17 @@ mod tests {
     assert_eq!(h.messages[0], HistoryMessage { role: "user", text: "вопрос 3".into() });
     assert_eq!(h.messages[1].text, "часть 3\n\nитог 3");
     assert_eq!(h.messages.last().unwrap().role, "assistant");
+  }
+
+  #[test]
+  fn history_cost_is_last_cost_state_of_this_session() {
+    let (t, dir, cwd) = setup();
+    let cost = |sid: &str, c: f64| json!({"type":"cost-state","sessionId":sid,"totalCostUSD":c}).to_string();
+    write(&dir, "c", &[user("вопрос"), cost("c", 0.1), assistant("ответ"), cost("c", 0.25), cost("other", 9.0)]);
+    assert_eq!(read_history(t.path(), cwd, "c").unwrap().cost, Some(0.25));
+    // Записи нет (или она чужого разговора) — стоимость неизвестна.
+    write(&dir, "n", &[user("вопрос"), assistant("ответ"), cost("other", 1.0)]);
+    assert_eq!(read_history(t.path(), cwd, "n").unwrap().cost, None);
   }
 
   #[test]

@@ -686,6 +686,20 @@ describe('exitClaude (/exit)', () => {
     expect(items('p').slice(n).some((i) => i.type === 'session')).toBe(true)
   })
 
+  it('итог стоимости обнуляется, как после /clear: следующая сессия считает с нуля', async () => {
+    enterClaude('p', '/w')
+    await askClaude('p', '/w', 'привет')
+    const line = (m: object) => (calls('claude_start')[0][1].onLine as { onmessage(m: string): void }).onmessage(JSON.stringify(m))
+    line({ type: 'result', result: 'ok', duration_ms: 1, total_cost_usd: 0.4, session_id: 's1' })
+    expect(useClaudeSessions.getState().sessions.p.state.costUsd).toBeCloseTo(0.4)
+    exitClaude('p')
+    expect(useClaudeSessions.getState().sessions.p.state).toMatchObject({ costUsd: 0, costBase: 0, costProc: 0 })
+    await askClaude('p', '/w', 'снова')
+    const next = calls('claude_start')[1][1].onLine as { onmessage(m: string): void }
+    next.onmessage(JSON.stringify({ type: 'result', result: 'ok', duration_ms: 1, total_cost_usd: 0.05, session_id: 's2' }))
+    expect(useClaudeSessions.getState().sessions.p.state.costUsd).toBeCloseTo(0.05)
+  })
+
   it('без сессии — ничего', () => {
     exitClaude('p')
     expect(useClaudeSessions.getState().sessions.p).toBeUndefined()
@@ -769,6 +783,55 @@ describe('resumeClaude (/resume)', () => {
     expect(calls('claude_start')).toHaveLength(1)
     expect(calls('claude_start')[0][1]).toMatchObject({ resume: 'new-2' })
     expect(items('p').filter((i) => i.type === 'note')).toEqual([{ type: 'note', text: 'Разговор продолжен · Второй' }])
+  })
+
+  const result = (total: number) => JSON.stringify({ type: 'result', result: 'ok', duration_ms: 7, total_cost_usd: total, session_id: 'sess-1' })
+  const lastStart = () => calls('claude_start').at(-1)![1].onLine as { onmessage(m: string): void }
+  const state = () => useClaudeSessions.getState().sessions.p.state
+
+  it('стоимость разговора известна (cost-state): итог — от неё, первый ход стоит разницу', async () => {
+    invoke.mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === 'claude_start' ? 'proc-1' : cmd === 'claude_session_history' ? { ...history, cost: 0.5 } : undefined),
+    )
+    enterClaude('p', '/w')
+    await askClaude('p', '/w', 'текущий')
+    calls('claude_start')[0][1].onLine.onmessage(JSON.stringify({ type: 'result', result: 'ok', duration_ms: 1, total_cost_usd: 0.2, session_id: 'cur' }))
+    await resumeClaude('p', '/w', session)
+    expect(state()).toMatchObject({ costUsd: 0.5, costBase: 0, costProc: 0.5, costUnknown: false })
+    await askClaude('p', '/w', 'дальше')
+    lastStart().onmessage(result(0.56))
+    expect(state().costUsd).toBeCloseTo(0.56)
+    expect(state().items.at(-1)).toMatchObject({ type: 'summary' })
+    expect((state().items.at(-1) as { costUsd: number }).costUsd).toBeCloseTo(0.06)
+  })
+
+  it('стоимость разговора неизвестна: первый ход — время без цены, итог — от CLI', async () => {
+    await resumeClaude('p', '/w', session)
+    expect(state()).toMatchObject({ costUsd: 0, costUnknown: true })
+    await askClaude('p', '/w', 'дальше')
+    lastStart().onmessage(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'ответ' }] } }))
+    lastStart().onmessage(result(0.7))
+    expect(state().costUsd).toBeCloseTo(0.7)
+    expect(state().items.at(-1)).not.toHaveProperty('costUsd')
+    expect(state().items.at(-2)).toMatchObject({ type: 'assistant', turn: { durationMs: 7 } })
+    expect(state().items.at(-2)).not.toHaveProperty('turn.costUsd')
+  })
+
+  it('очередь не теряется: первое сообщение уходит в продолженный разговор, остальные — по одному за ход', async () => {
+    enterClaude('p', '/w')
+    await askClaude('p', '/w', 'текущий')
+    await askClaude('p', '/w', 'в очереди 1')
+    await askClaude('p', '/w', 'в очереди 2')
+    expect(useClaudeSessions.getState().sessions.p.queue).toHaveLength(2)
+    await resumeClaude('p', '/w', session)
+    await flush()
+    expect(calls('claude_start').at(-1)![1]).toMatchObject({ resume: 'sess-1' })
+    expect(calls('claude_send').at(-1)![1]).toMatchObject({ text: 'в очереди 1' })
+    expect(useClaudeSessions.getState().sessions.p.queue.map((m) => m.text)).toEqual(['в очереди 2'])
+    lastStart().onmessage(result(0.1))
+    await flush()
+    expect(calls('claude_send').at(-1)![1]).toMatchObject({ text: 'в очереди 2' })
+    expect(calls('claude_start')).toHaveLength(2)
   })
 
   it('каталог неизвестен — false и карточка ошибки', async () => {

@@ -380,6 +380,18 @@ describe('правка сообщения: точки перемотки', () =>
     expect(canEdit(r, i)).toBe(false)
   })
 
+  it('replaceFrom: план, начатый до правленого сообщения, больше не обновляется — у ответвления новая карточка', () => {
+    const todo = (id: string, content: string) => assistant([toolUse(id, 'TodoWrite', { todos: [{ content, status: 'pending' }] })])
+    let s = run(userSent(initialClaude(), 'a', 0), [todo('t1', 'план'), res])
+    s = run(userSent(s, 'b', 0), [todo('t2', 'отброшенная ветка'), res])
+    const i = s.items.findIndex((it) => it.type === 'user' && it.text === 'b')
+    const r = run(userSent(replaceFrom(s, i), 'b2', 0), [todo('t3', 'ответвление')])
+    const todos = r.items.filter((it) => it.type === 'todo')
+    expect(todos[0]).toMatchObject({ frozen: true, todos: [{ content: 'отброшенная ветка' }] })
+    expect(todos.at(-1)).toMatchObject({ toolUseId: 't3', todos: [{ content: 'ответвление' }] })
+    expect(todos.at(-1)).not.toHaveProperty('frozen')
+  })
+
   it('messagesLabel склоняет', () => {
     expect([1, 2, 4, 5, 11, 12, 21, 22, 25].map(messagesLabel)).toEqual([
       '1 сообщение', '2 сообщения', '4 сообщения', '5 сообщений', '11 сообщений', '12 сообщений', '21 сообщение', '22 сообщения', '25 сообщений',
@@ -438,18 +450,74 @@ describe('стоимость хода и сессии', () => {
     expect(last.turn?.costUsd).toBeCloseTo(0.15)
   })
 
-  it('перезапуск процесса (--resume, правка) складывает итоги, а не теряет их', () => {
+  const withId = (total: number, id: string) => ({ ...res(total), session_id: id })
+  const sumCost = (s: ClaudeState) => (s.items.filter((i) => i.type === 'summary').at(-1) as { costUsd?: number }).costUsd
+
+  it('новая сессия без --resume: итог процесса с нуля, набранное в панели остаётся в базе', () => {
     let s = turn(initialClaude(), 'a', 0.3)
-    s = newProcess(s)
+    s = newProcess(s, null)
     s = turn(s, 'b', 0.05)
     expect(s.costUsd).toBeCloseTo(0.35)
-    const sum = s.items.filter((i) => i.type === 'summary').at(-1) as { costUsd: number }
-    expect(sum.costUsd).toBeCloseTo(0.05)
+    expect(sumCost(s)).toBeCloseTo(0.05)
   })
 
-  it('восстановленная сессия (только costUsd) продолжает счёт после запуска процесса', () => {
-    const s = newProcess({ ...initialClaude(), costUsd: 0.42 })
-    expect(turn(s, 'a', 0.08).costUsd).toBeCloseTo(0.5)
+  it('--resume продолжает нарастающий итог CLI: последовательность настоящего CLI без двойного счёта', () => {
+    // total_cost_usd шести ходов одной сессии в трёх перезапусках (замер на настоящем CLI).
+    const steps: [boolean, number][] = [[false, 0.00358], [true, 0.00436], [false, 0.00474], [true, 0.00512], [true, 0.00543], [false, 0.00583]]
+    let s = initialClaude()
+    const turns: number[] = []
+    for (const [restart, total] of steps) {
+      if (restart || s.sessionId === null) s = newProcess(s, s.sessionId)
+      s = run(userSent(s, 'q', 0), [reply('x'), withId(total, 'S')])
+      turns.push(sumCost(s)!)
+    }
+    expect(s.costUsd).toBeCloseTo(0.00583, 6)
+    // Цена хода — разница соседних итогов, и на первом ходу после перезапуска тоже.
+    const expected = steps.map(([, t], i) => t - (i > 0 ? steps[i - 1][1] : 0))
+    turns.forEach((t, i) => expect(t).toBeCloseTo(expected[i], 8))
+  })
+
+  it('правка (--fork-session): итог ответвления продолжает итог сессии, от которой оно ответвилось', () => {
+    // Замер: ответвление от S (итог 0.00487) — первый total_cost_usd 0.00592 (в нём весь итог S).
+    let s = newProcess(initialClaude(), null)
+    s = run(userSent(s, 'q', 0), [reply('a'), withId(0.00451, 'S')])
+    s = run(userSent(s, 'q', 0), [reply('b'), withId(0.00487, 'S')])
+    s = run(userSent(newProcess(s, 'S'), 'q', 0), [reply('c'), withId(0.00592, 'F')])
+    expect(s.costUsd).toBeCloseTo(0.00592, 6)
+    expect(sumCost(s)).toBeCloseTo(0.00105, 6)
+    // Вторая правка того же сообщения — снова от S (итог 0.00487), хоть текущий итог уже F.
+    s = run(userSent(s, 'q', 0), [reply('d'), withId(0.0063, 'F')])
+    s = newProcess(s, 'S')
+    expect(s.costProc).toBeCloseTo(0.00487, 6)
+    s = run(userSent(s, 'q', 0), [reply('e'), withId(0.00587, 'G')])
+    expect(sumCost(s)).toBeCloseTo(0.001, 6)
+    expect(s.costUsd).toBeCloseTo(0.0073, 6)
+  })
+
+  it('процесс с --resume, начавший счёт с нуля (итог уменьшился), — прежний итог уходит в базу', () => {
+    let s = run(userSent(newProcess(initialClaude(), null), 'q', 0), [reply('a'), withId(0.3, 'S')])
+    s = run(userSent(newProcess(s, 'S'), 'q', 0), [reply('b'), withId(0.02, 'S')])
+    expect(s.costUsd).toBeCloseTo(0.32)
+    expect(sumCost(s)).toBeCloseTo(0.02)
+  })
+
+  it('итог до процесса неизвестен: первый ход — время без цены, итог сессии — от CLI', () => {
+    let s = newProcess({ ...initialClaude(), sessionId: 'S', costUnknown: true }, 'S')
+    s = run(userSent(s, 'q', 0), [reply('a'), withId(0.9, 'S')])
+    expect(s.costUsd).toBeCloseTo(0.9)
+    expect(s.costUnknown).toBe(false)
+    expect(sumCost(s)).toBeUndefined()
+    const a = s.items.find((i) => i.type === 'assistant') as { turn?: { durationMs: number; costUsd?: number } }
+    expect(a.turn).toEqual({ durationMs: 1000 })
+    s = run(userSent(s, 'q', 0), [reply('b'), withId(0.95, 'S')])
+    expect(sumCost(s)).toBeCloseTo(0.05)
+  })
+
+  it('подвал хода не ложится на ответ из истории /resume или прерванного хода без result', () => {
+    let s: ClaudeState = { ...initialClaude(), items: [{ type: 'user', text: 'старый' }, { type: 'assistant', agentId: 'main', text: 'старый ответ', streaming: false }] }
+    s = run(userSent(s, 'q', 0), [res(0.1)])
+    expect((s.items[1] as { turn?: unknown }).turn).toBeUndefined()
+    expect(s.items.at(-1)).toMatchObject({ type: 'summary', costUsd: 0.1 })
   })
 
   it('/clear обнуляет итог', () => {

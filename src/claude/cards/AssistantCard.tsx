@@ -50,7 +50,7 @@ export const AssistantCard = memo(function AssistantCard({
   text: string
   streaming: boolean
   /** Время и цена хода — у последнего ответа хода. */
-  turn?: { durationMs: number; costUsd: number }
+  turn?: { durationMs: number; costUsd?: number }
   id?: string
   /** Выбран ⌘↑ (⌘L вложит его в сообщение). */
   selected?: boolean
@@ -127,7 +127,8 @@ export const AssistantCard = memo(function AssistantCard({
       )}
       {turn && !streaming && (
         <div className="turn-meta" data-testid="turn-meta">
-          {formatDuration(turn.durationMs)} · {formatCost(turn.costUsd)}
+          {formatDuration(turn.durationMs)}
+          {turn.costUsd !== undefined && ` · ${formatCost(turn.costUsd)}`}
         </div>
       )}
     </div>

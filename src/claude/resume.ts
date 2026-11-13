@@ -19,6 +19,8 @@ export interface SessionHistory {
   messages: { role: 'user' | 'assistant'; text: string }[]
   /** Более ранних сообщений не загружено. */
   skipped: number
+  /** Итог стоимости разговора по CLI (последняя запись `cost-state`); null — неизвестен. */
+  cost?: number | null
 }
 
 export interface ResumeState {

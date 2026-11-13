@@ -13,7 +13,8 @@ export const SummaryCard = memo(function SummaryCard({
 }: {
   text: string
   durationMs: number
-  costUsd: number
+  /** Нет — стоимость хода неизвестна (первый ход после `/resume` без записи стоимости): только время. */
+  costUsd?: number
   isError: boolean
   id?: string
 }) {
@@ -23,7 +24,8 @@ export const SummaryCard = memo(function SummaryCard({
         {/* Ответ уже в карточке выше — итог одной строкой: «✓ Готово · время · цена». */}
         <span>{text ? (isError ? '✕ Итог' : '✓ Итог') : isError ? '✕ Ошибка' : '✓ Готово'}</span>
         <span className="sum-meta">
-          {formatDuration(durationMs)} · {formatCost(costUsd)}
+          {formatDuration(durationMs)}
+          {costUsd !== undefined && ` · ${formatCost(costUsd)}`}
         </span>
       </div>
       {text && <Markdown text={text} />}

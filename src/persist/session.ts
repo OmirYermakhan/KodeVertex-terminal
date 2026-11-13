@@ -25,7 +25,10 @@ export interface SavedClaude {
   effort: string | null
   closed: boolean
   queue: QueuedMessage[]
-  state: Pick<ClaudeState, 'sessionId' | 'model' | 'effort' | 'defaultModel' | 'contextUsed' | 'contextMax' | 'costUsd' | 'items' | 'chain' | 'epoch' | 'edits'>
+  state: Pick<
+    ClaudeState,
+    'sessionId' | 'model' | 'effort' | 'defaultModel' | 'contextUsed' | 'contextMax' | 'costUsd' | 'costBase' | 'costProc' | 'costOf' | 'costUnknown' | 'items' | 'chain' | 'epoch' | 'edits'
+  >
 }
 
 export interface SavedPane {
@@ -91,8 +94,17 @@ function saveBlock(b: ShellBlock): ShellBlock {
   return { ...b, running: false, interrupted: true, exitCode: null, html: null, lines: 0, durationMs: Math.max(0, Date.now() - b.startedAt) }
 }
 
-function saveClaude(p: PaneClaude): SavedClaude {
+/** Итогов сессий по id в файле не больше (последние — линия правок; см. ClaudeState.costOf). */
+export const MAX_COST_OF = 32
+
+/**
+ * from — граница ленты (⌃L, /clear, /resume): элементы до неё не видны и уже не меняются, в файл
+ * они идут как 'gone' (индексы для edits и chain не сдвигаются), иначе каждый `/resume` с историей
+ * навсегда увеличивал бы файл.
+ */
+function saveClaude(p: PaneClaude, from: number): SavedClaude {
   const s = p.state
+  const costOf = Object.entries(s.costOf ?? {}).slice(-MAX_COST_OF)
   return {
     cwd: p.cwd,
     model: p.model,
@@ -107,7 +119,11 @@ function saveClaude(p: PaneClaude): SavedClaude {
       contextUsed: s.contextUsed,
       contextMax: s.contextMax,
       costUsd: s.costUsd,
-      items: s.items.map(saveItem),
+      costBase: s.costBase ?? 0,
+      costProc: s.costProc ?? 0,
+      costOf: Object.fromEntries(costOf),
+      costUnknown: s.costUnknown === true,
+      items: s.items.map((it, i): FeedClaudeItem => (i < from ? { type: 'gone' } : saveItem(it))),
       chain: s.chain,
       epoch: s.epoch,
       edits: s.edits,
@@ -124,21 +140,53 @@ export function snapshot(): SavedSession {
       const f = feeds.get(id)?.()
       const r = restored.get(id)
       const c = sessions[id]
+      const claudeFrom = f?.claudeFrom ?? r?.claudeFrom ?? 0
       panes[id] = {
         feed: f
           ? f.items.map((it): SavedFeedItem => (it.kind === 'shell' ? saveBlock(it) : { kind: 'claude', id: it.id }))
           : (r?.feed ?? []),
-        claudeFrom: f?.claudeFrom ?? r?.claudeFrom ?? 0,
+        claudeFrom,
         claudeMode: f?.claudeMode ?? r?.claudeMode ?? false,
-        ...(c ? { claude: saveClaude(c) } : {}),
+        ...(c ? { claude: saveClaude(c, claudeFrom) } : {}),
       }
     }
   }
   return { version: SESSION_VERSION, tabs, active, panes }
 }
 
-/** JSON снимка не больше `max`: выбрасываются самые старые блоки оболочки (по всем панелям). */
+/**
+ * JSON снимка не больше `max`: выбрасываются самые старые блоки оболочки (по всем панелям), а если
+ * их не хватило — самые ранние элементы Claude становятся 'gone' (индексы не сдвигаются).
+ */
 export function serializeCapped(s: SavedSession, max = MAX_SESSION_BYTES): string {
+  const text = dropShell(s, max)
+  return text.length <= max ? text : dropClaude(JSON.parse(text) as SavedSession, max)
+}
+
+/** Элементы Claude в 'gone' от самых ранних (по индексу, по всем панелям), порциями, пока не влезет. */
+function dropClaude(s: SavedSession, max: number): string {
+  const panes = { ...s.panes }
+  const live = (id: string) => (panes[id].claude?.state.items ?? []).flatMap((it, i) => (it.type === 'gone' ? [] : [i]))
+  const left: { pane: string; i: number }[] = []
+  for (const id of Object.keys(panes)) for (const i of live(id)) left.push({ pane: id, i })
+  left.sort((x, y) => x.i - y.i)
+  let text = JSON.stringify(s)
+  let done = 0
+  while (text.length > max && done < left.length) {
+    const n = Math.max(1, Math.ceil((left.length - done) / 10))
+    for (const { pane, i } of left.slice(done, done + n)) {
+      const c = panes[pane].claude!
+      const items = c.state.items.slice()
+      items[i] = { type: 'gone' }
+      panes[pane] = { ...panes[pane], claude: { ...c, state: { ...c.state, items } } }
+    }
+    done += n
+    text = JSON.stringify({ ...s, panes })
+  }
+  return text
+}
+
+function dropShell(s: SavedSession, max: number): string {
   let text = JSON.stringify(s)
   if (text.length <= max) return text
   const blocks: { pane: string; b: ShellBlock }[] = []
@@ -225,6 +273,23 @@ function restoreItem(it: FeedClaudeItem): FeedClaudeItem {
   return it
 }
 
+/**
+ * Учёт стоимости из файла. Без costProc (файл версии до учёта по процессам) costUsd и был
+ * нарастающим итогом CLI: costProc = costUsd, база 0.
+ */
+function restoreCost(s: SavedClaude['state']): Pick<ClaudeState, 'costUsd' | 'costBase' | 'costProc' | 'costOf' | 'costUnknown'> {
+  const ok = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
+  const costUsd = ok(s.costUsd) ? s.costUsd : 0
+  const costOf: Record<string, number> = {}
+  if (isRec(s.costOf)) for (const [k, v] of Object.entries(s.costOf)) if (ok(v)) costOf[k] = v
+  const costUnknown = s.costUnknown === true
+  if (!ok(s.costProc)) return { costUsd, costBase: 0, costProc: costUsd, costOf, costUnknown }
+  const costProc = s.costProc
+  // База — то, что не объясняет итог процесса (так costUsd = costBase + costProc и после порчи файла).
+  const costBase = Math.max(0, costUsd - costProc)
+  return { costUsd: costBase + costProc, costBase, costProc, costOf, costUnknown }
+}
+
 function restoreClaude(c: SavedClaude): PaneClaude {
   const base = initialClaude()
   const s = c.state
@@ -239,7 +304,7 @@ function restoreClaude(c: SavedClaude): PaneClaude {
     defaultModel: str(s.defaultModel),
     contextUsed: num(s.contextUsed, 0),
     contextMax: num(s.contextMax, base.contextMax),
-    costUsd: num(s.costUsd, 0),
+    ...restoreCost(s),
     chain: isRec(s.chain) ? s.chain : null,
     epoch: num(s.epoch, 0),
     items: (Array.isArray(c.state.items) ? c.state.items : []).map(restoreItem),

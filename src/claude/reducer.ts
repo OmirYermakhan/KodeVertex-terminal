@@ -13,7 +13,7 @@ export type FeedClaudeItem =
    * порядку (хранятся как есть, не разбираются из текста: правка сообщения вернёт их в строку).
    */
   | { type: 'user'; text: string; tokens?: Attachment[] }
-  | { type: 'assistant'; agentId: string; text: string; streaming: boolean; turn?: { durationMs: number; costUsd: number } }
+  | { type: 'assistant'; agentId: string; text: string; streaming: boolean; turn?: { durationMs: number; costUsd?: number } }
   | {
       type: 'action'
       agentId: string
@@ -25,7 +25,8 @@ export type FeedClaudeItem =
       status: 'running' | 'done' | 'error'
       result?: string
     }
-  | { type: 'summary'; text: string; durationMs: number; costUsd: number; isError: boolean }
+  /** costUsd нет — стоимость хода неизвестна (см. ClaudeState.costUnknown). */
+  | { type: 'summary'; text: string; durationMs: number; costUsd?: number; isError: boolean }
   | { type: 'error'; text: string }
   /**
    * План агента (TodoWrite): одна карточка на агента, каждый следующий TodoWrite обновляет её
@@ -161,10 +162,28 @@ export interface ClaudeState {
   contextMax: number
   /** Стоимость сессии целиком: costBase (завершённые процессы) + costProc (нарастающий итог текущего). */
   costUsd: number
-  /** Сумма итогов прежних процессов `claude`: у перезапущенного (--resume, правка) итог идёт с нуля. */
+  /**
+   * База итога: costUsd = costBase + costProc. Растёт, когда начинается новая сессия без
+   * `--resume` (её `total_cost_usd` идёт с нуля, набранное в панели остаётся) или итог процесса
+   * вдруг уменьшился (процесс начал счёт с нуля).
+   */
   costBase?: number
-  /** `total_cost_usd` последнего result текущего процесса. */
+  /**
+   * Нарастающий итог сессии по CLI (`total_cost_usd` последнего result). Процесс с `--resume`
+   * (⌘↵ после выхода, перезапуск приложения, правка с `--fork-session`) продолжает его — CLI
+   * восстанавливает итог из записей `cost-state` файла разговора (проверено на настоящем CLI).
+   */
   costProc?: number
+  /**
+   * Последний известный нарастающий итог по id сессии (линия правок): ответвление правкой
+   * продолжает итог той сессии, от которой ответвляется, а не текущей.
+   */
+  costOf?: Record<string, number>
+  /**
+   * Итог сессии до этого процесса неизвестен (`/resume` разговора без записи стоимости): первый
+   * result только задаёт costProc, а время хода показывается без цены.
+   */
+  costUnknown?: boolean
   busy: boolean
   /** Отправленные и ещё не завершённые ходы (сообщения в очереди claude); busy = pending > 0. */
   pending: number
@@ -254,9 +273,21 @@ export function initialClaude(): ClaudeState {
   }
 }
 
-/** Запуск нового процесса `claude`: его `total_cost_usd` начнётся с нуля, набранное сохраняется. */
-export function newProcess(s: ClaudeState): ClaudeState {
-  return { ...s, costBase: s.costUsd, costProc: 0 }
+/**
+ * Запуск нового процесса `claude`. resume — id сессии из `--resume` (null — новая сессия).
+ * Новая сессия: её `total_cost_usd` начнётся с нуля, набранное в панели уходит в базу.
+ * Продолжение: CLI продолжает нарастающий итог этой сессии (у ответвления — итог сессии, от которой
+ * оно ответвилось, вместе с её отброшенной частью), так что costProc — последний известный итог
+ * этой сессии. Неизвестен (сохранён старой версией) — текущий costProc.
+ * Слепое пятно: процесс с `--resume`, который всё же начал счёт с нуля (CLI без `cost-state`),
+ * и чей первый ход дороже прежнего итога, читается как продолжение — недосчёт на прежний итог.
+ * Начавший с нуля и первым ходом дешевле — правило «итог уменьшился» в onResult.
+ */
+export function newProcess(s: ClaudeState, resume: string | null = null): ClaudeState {
+  if (resume === null) return { ...s, costBase: s.costUsd, costProc: 0, costUnknown: false }
+  const known = s.costOf?.[resume]
+  if (known === undefined || known === (s.costProc ?? 0)) return s
+  return { ...s, costBase: s.costUsd - known, costProc: known }
 }
 
 /** Новая сессия (другой каталог, --resume не удался): прежние сообщения больше не правятся. */
@@ -285,6 +316,8 @@ export function clearSession(s: ClaudeState): ClaudeState {
     costUsd: 0,
     costBase: 0,
     costProc: 0,
+    costOf: {},
+    costUnknown: false,
     agents: fresh.agents,
     edits: {},
   }
@@ -544,10 +577,13 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
   const procTotal = typeof ev.total_cost_usd === 'number' && ev.total_cost_usd >= 0 ? ev.total_cost_usd : prevProc
   // Ход стоит разницу нарастающих итогов процесса; итог сессии — с учётом прежних процессов.
   // Итог процесса не растёт, а стал меньше — это уже другой процесс: прежний итог уходит в базу.
-  const reset = procTotal < prevProc
-  const costBase = (s.costBase ?? 0) + (reset ? prevProc : 0)
-  const turnCost = reset ? procTotal : procTotal - prevProc
+  // Итог до процесса неизвестен — этот result его и задаёт, цена хода неизвестна.
+  const unknown = s.costUnknown === true
+  const reset = !unknown && procTotal < prevProc
+  const costBase = unknown ? 0 : (s.costBase ?? 0) + (reset ? prevProc : 0)
+  const turnCost = unknown ? undefined : reset ? procTotal : procTotal - prevProc
   const cost = costBase + procTotal
+  const sessionId = strOr(ev.session_id) || s.sessionId
   let contextMax = s.contextMax
   if (isRec(ev.modelUsage)) {
     const windows = Object.values(ev.modelUsage)
@@ -560,14 +596,19 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
   )
   const result = strOr(ev.result)
   const durationMs = num(ev.duration_ms)
-  items.push({ type: 'summary', text: repeatsAnswer(items, result) ? '' : result, durationMs, costUsd: turnCost, isError })
+  const price = turnCost === undefined ? {} : { costUsd: turnCost }
+  items.push({ type: 'summary', text: repeatsAnswer(items, result) ? '' : result, durationMs, ...price, isError })
   // Время и цена хода — в подвале последнего ответа главного агента этого хода.
+  // Граница хода — итог предыдущего или сообщение «Вы», с которого ход начался (pending-е с конца:
+  // более поздние — следующие ходы в очереди claude). Так подвал не попадает на ответ из истории
+  // `/resume` (в ней нет итогов) или прерванного хода без result.
+  let users = 0
   for (let i = items.length - 2; i >= 0; i--) {
     const it = items[i]
-    // Граница хода — итог предыдущего; сообщение «Вы» из очереди между ответом и result не мешает.
     if (it.type === 'summary') break
+    if (it.type === 'user' && ++users >= Math.max(1, s.pending)) break
     if (it.type === 'assistant' && it.agentId === MAIN) {
-      items[i] = { ...it, turn: { durationMs, costUsd: turnCost } }
+      items[i] = { ...it, turn: { durationMs, ...price } }
       break
     }
   }
@@ -584,11 +625,13 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
     costUsd: cost,
     costBase,
     costProc: procTotal,
+    costUnknown: false,
+    ...(sessionId ? { costOf: { ...s.costOf, [sessionId]: procTotal } } : {}),
     contextMax,
     // Подсказка прежнего хода устарела; новая придёт после этого result.
     suggestion: null,
     turnEndAt: now,
-    sessionId: strOr(ev.session_id) || s.sessionId,
+    sessionId,
     currentAgentId: pending > 0 ? MAIN : null,
     agents: s.agents.map((a) =>
       a.id !== MAIN && (a.status === 'running' || a.status === 'waiting')
@@ -789,7 +832,9 @@ export function replaceFrom(s: ClaudeState, index: number): ClaudeState {
   const items = s.items.slice(0, index)
   items.push({ type: 'replaced', items: old, count })
   for (let i = index + 1; i < s.items.length; i++) items.push({ type: 'gone' })
-  return { ...s, items }
+  // План, начатый до правленого сообщения, мог обновляться после него (отброшенная ветка):
+  // больше не обновляется — план ответвления начнёт новую карточку.
+  return freezeTodos({ ...s, items }, index)
 }
 
 export function reduceClaude(s: ClaudeState, line: string | object, now: number): ClaudeState {
