@@ -23,6 +23,9 @@ export interface FeedProps {
   /** Блок — значком в строку ввода («⌘L в сообщение»). */
   onAttach?(id: string): void
   onCopy?(id: string): void
+  /** Блок: «Повторить» (передаётся, только когда оболочка в простое) и «Спросить Claude». */
+  onRepeat?(id: string): void
+  onAsk?(id: string): void
   /** Ответ — в режиме чтения. */
   onRead?(id: string): void
   /** Сообщения «Вы», которые можно изменить (id ленты), и «✎ Изменить». */
@@ -33,7 +36,7 @@ export interface FeedProps {
 }
 
 export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
-  { items, selectedId, renderLive, agents = NO_AGENTS, renderClaude, onScroll, park, onAttach, onCopy, onRead, editable, onEdit, editingId },
+  { items, selectedId, renderLive, agents = NO_AGENTS, renderClaude, onScroll, park, onAttach, onCopy, onRepeat, onAsk, onRead, editable, onEdit, editingId },
   ref,
 ) {
   return (
@@ -49,6 +52,8 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
               live={it.running ? renderLive(it) : undefined}
               onAttach={onAttach}
               onCopy={onCopy}
+              onRepeat={onRepeat}
+              onAsk={onAsk}
             />
           ) : renderClaude ? (
             <Fragment>{renderClaude(it)}</Fragment>

@@ -234,6 +234,12 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .hover-act button.on { cursor: grab; }
 .hover-act button { font: inherit; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 3px 8px; color: var(--text); cursor: pointer; }
 .hover-act button.on { border-color: var(--acc); color: var(--strong); background: color-mix(in srgb, var(--acc) 12%, var(--bg)); }
+/* Действия в заголовке замороженного блока (перед длительностью): при наведении и у выбранного. */
+.blk .bh-act { display: none; gap: 4px; margin-right: 8px; vertical-align: middle; }
+.blk:hover .bh-act, .blk.sel .bh-act { display: inline-flex; }
+.bh-act button { font: inherit; font-size: 11px; line-height: normal; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0 8px; color: var(--text); cursor: pointer; }
+.bh-act button:hover { border-color: var(--acc); }
+.bh-act button.ask { border-color: var(--acc); color: var(--accText); background: color-mix(in srgb, var(--acc) 12%, var(--bg)); }
 .blk.sel { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 6%, transparent); }
 .blk.err { border-left: 2px solid var(--del); padding-left: 11px; }
 .blk .exit { color: var(--del); }

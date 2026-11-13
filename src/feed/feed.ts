@@ -221,3 +221,12 @@ export function moveSelection(items: FeedItem[], selected: string | null, dir: '
   if (i === ids.length - 1) return { id: null, leave: true }
   return { id: ids[i + 1], leave: false }
 }
+
+/** Сколько последних строк вывода уходит в «Спросить Claude». */
+export const ASK_TAIL_LINES = 200
+
+/** Сообщение «Спросить Claude» для упавшей команды: код, каталог и хвост вывода. */
+export function failurePrompt(command: string, exitCode: number, cwd: string, output: string): string {
+  const tail = output.split('\n').slice(-ASK_TAIL_LINES).join('\n')
+  return `Команда \`${command}\` завершилась с кодом ${exitCode} в ${cwd}. Вывод:\n\`\`\`\n${tail}\n\`\`\`\nПомоги понять причину и исправить.`
+}

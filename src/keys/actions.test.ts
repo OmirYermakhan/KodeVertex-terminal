@@ -50,9 +50,9 @@ describe('block actions', () => {
     const t = useTabs.getState().tabs[0]
     const got: string[] = []
     const off = registerPaneCommands(t.focused, (a) => got.push(a))
-    runAction('blockPrev'); runAction('blockNext'); runAction('blockCopy')
+    runAction('blockPrev'); runAction('blockNext'); runAction('blockCopy'); runAction('blockAsk')
     off()
     runAction('blockPrev')
-    expect(got).toEqual(['blockPrev', 'blockNext', 'blockCopy'])
+    expect(got).toEqual(['blockPrev', 'blockNext', 'blockCopy', 'blockAsk'])
   })
 })

@@ -11,10 +11,16 @@ export interface ShellBlockViewProps {
   onAttach?(id: string): void
   /** «⌘⇧C копировать». */
   onCopy?(id: string): void
+  /** «Повторить» в заголовке — только когда оболочка в простое (иначе не передаётся). */
+  onRepeat?(id: string): void
+  /** «Спросить Claude» в заголовке упавшего блока (код ≠ 0). */
+  onAsk?(id: string): void
 }
 
 export const ATTACH_ACTION = '⌘L в сообщение'
 export const COPY_ACTION = '⌘⇧C копировать'
+export const REPEAT_ACTION = 'Повторить'
+export const ASK_ACTION = 'Спросить Claude'
 
 function Output({ block }: { block: ShellBlock }) {
   const [all, setAll] = useState(false)
@@ -84,9 +90,11 @@ export function HoverActions({
   )
 }
 
-export const ShellBlockView = memo(function ShellBlockView({ block, selected, live, onAttach, onCopy }: ShellBlockViewProps) {
+export const ShellBlockView = memo(function ShellBlockView({ block, selected, live, onAttach, onCopy, onRepeat, onAsk }: ShellBlockViewProps) {
   const failed = block.exitCode !== null && block.exitCode !== 0
   const cls = ['blk', selected && 'sel', failed && 'err', block.running && 'run'].filter(Boolean).join(' ')
+  const repeat = !block.running && onRepeat
+  const ask = !block.running && failed && onAsk
   return (
     <div className={cls} data-block-id={block.id}>
       {!block.running && <HoverActions id={block.id} onAttach={onAttach} onCopy={onCopy} />}
@@ -95,6 +103,21 @@ export const ShellBlockView = memo(function ShellBlockView({ block, selected, li
           <span className="p">❯</span> <span className="cmd">{block.command}</span>
         </span>
         <span>
+          {(repeat || ask) && (
+            // Видны при наведении и у выбранного блока (CSS), перед длительностью.
+            <span className="bh-act">
+              {repeat && (
+                <button type="button" title="⌘R" onMouseDown={(e) => e.preventDefault()} onClick={() => repeat(block.id)}>
+                  {REPEAT_ACTION}
+                </button>
+              )}
+              {ask && (
+                <button type="button" className="ask" title="⌘⇧A" onMouseDown={(e) => e.preventDefault()} onClick={() => ask(block.id)}>
+                  {ASK_ACTION}
+                </button>
+              )}
+            </span>
+          )}
           {failed && <span className="exit">exit {block.exitCode}</span>}
           {failed && block.durationMs !== null && ' · '}
           {block.durationMs !== null && formatDuration(block.durationMs)}

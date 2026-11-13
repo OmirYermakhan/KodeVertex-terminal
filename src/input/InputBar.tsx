@@ -141,6 +141,8 @@ export interface InputBarHandle {
    * Claude (из оболочки). false — не вставлено (строка неактивна или пишет ответ на вопрос).
    */
   insertTokens(tokens: Attachment[], opts?: { claude?: boolean }): boolean
+  /** Переключить строку в режим Claude (набранное остаётся). false — строка неактивна или пишет ответ. */
+  claudeOn(): boolean
   /** Файлы у курсора: в режиме Claude — значками, в оболочке — экранированными путями. */
   insertPaths(paths: string[]): void
   /** Убрать значок (⌫ в мини-просмотре); false — его уже нет. */
@@ -529,6 +531,15 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       }
       putTokens(toks)
       edRef.current?.focus()
+      return true
+    },
+    claudeOn: () => {
+      if (props.current.disabled || props.current.answer) return false
+      if (!claudeRef.current) {
+        completionRef.current.close()
+        hintsRef.current.close()
+        setClaudeMode(true)
+      }
       return true
     },
     insertPaths,
