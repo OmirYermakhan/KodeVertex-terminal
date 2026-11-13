@@ -1254,6 +1254,48 @@ describe('TerminalPane', () => {
       expect([...document.querySelectorAll('.blk:not(.feed-park .blk) .cmd')].map((e) => e.textContent)).toEqual(['exec zsh', 'echo hi'])
     })
 
+    it('вывод в простое (фоновое задание) — строка «фоновая задача»; перерисовка приглашения и строка ZLE — нет', async () => {
+      const { term } = await mounted()
+      const buf = term.buffer.active
+      const parsed = () => act(() => (term.onWriteParsed.mock.calls[0][0] as () => void)())
+      const notices = () => [...document.querySelectorAll('.blk-notice')].map((e) => e.textContent)
+      osc133(term, 'C;' + b64('sleep 1 &'))
+      term.lines = ['[1] 4242', '']
+      buf.cursorY = 1
+      buf.cursorX = 0
+      osc133(term, 'D;0')
+      osc133(term, 'A')
+      // Только перерисовка приглашения (строка ZLE под курсором) — ничего.
+      term.lines = ['[1] 4242', '   ']
+      parsed()
+      await act(async () => await flush(200))
+      expect(notices()).toEqual([])
+      // zsh печатает сообщение о задании над строкой ZLE.
+      term.lines = ['[1] 4242', '[1]  + done       sleep 1', '']
+      buf.cursorY = 2
+      parsed()
+      await act(async () => await flush(200))
+      expect(notices()).toEqual(['фоновая задача[1]  + done       sleep 1'])
+      expect(document.querySelector('.blk-notice .lbl')!.textContent).toBe('фоновая задача')
+      // Уже собранное не повторяется; новое перед отправкой команды собирается сразу.
+      term.lines = ['[1] 4242', '[1]  + done       sleep 1', '[2]  + done       sleep 2', '']
+      buf.cursorY = 3
+      parsed()
+      type('ls')
+      keyIn('Enter')
+      expect(spawns[0].handle.write).toHaveBeenCalled()
+      expect(notices()).toEqual(['фоновая задача[1]  + done       sleep 1', 'фоновая задача[2]  + done       sleep 2'])
+      // После отправки — эхо и вывод команды, не «фоновая задача».
+      term.lines = ['[1] 4242', '[1]  + done       sleep 1', '[2]  + done       sleep 2', 'ls', '']
+      buf.cursorY = 4
+      parsed()
+      await act(async () => await flush(200))
+      expect(notices()).toHaveLength(2)
+      // ⌘↑ выбирает блок команды, а не строку задания.
+      act(() => runPaneCommand('p', 'blockPrev'))
+      expect(document.querySelector('.blk.sel .cmd')!.textContent).toBe('sleep 1 &')
+    })
+
     it('маркеры до запуска сессии (метка ещё неизвестна) игнорируются', async () => {
       render(<TerminalPane {...props()} focused initialCwd="/w" />)
       const term = terms[0]

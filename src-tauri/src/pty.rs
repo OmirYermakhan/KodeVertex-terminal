@@ -873,6 +873,23 @@ pub(crate) mod tests {
     m.kill(&id).unwrap();
   }
 
+  #[test]
+  fn background_job_notice_is_printed_while_idle() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), 0));
+    let from = run_pasted(&m, &id, &out, "sleep 0.2 &", &osc(&mk, &["D;0", "A"]));
+    let prompt = osc(&mk, &["D;0", "A"]);
+    let a = find_from(&out, &prompt, from).unwrap() + prompt.len();
+    // Задание кончается в простое: zsh печатает «done» после приглашения, до следующей команды.
+    assert!(out.wait_for(b"done", a), "вывод: {:?}", out.text());
+    let done = find_from(&out, "done", a).unwrap();
+    assert!(strip_escapes(&out.text()[a..]).contains("sleep 0.2"), "вывод: {:?}", out.text());
+    assert!(find_from(&out, "\x1b]133;", a).is_none_or(|i| i > done), "вывод: {:?}", out.text());
+    m.kill(&id).unwrap();
+  }
+
   /// Убирает управляющие последовательности: OSC (до BEL или ESC \\), CSI, прочие двухбайтовые ESC.
   fn strip_escapes(s: &str) -> String {
     let mut out = String::new();
