@@ -1510,3 +1510,80 @@ describe('TerminalPane: правка отправленного сообщени
     expect(chip()).toBeNull()
   })
 })
+
+describe('⌘F — поиск в ленте', () => {
+  beforeEach(() => {
+    terms.length = 0
+    spawns.length = 0
+    useUi.setState({ settingsOpen: false, agentsHidden: false })
+    useSettings.setState({ settings: { ...DEFAULTS } })
+    useClaudeSessions.setState({ sessions: {} })
+  })
+
+  async function withBlocks(n: number) {
+    const r = render(<TerminalPane {...props()} focused initialCwd="/w" />)
+    spawns[0].resolve()
+    await flush()
+    const term = terms[0]
+    term.lines = ['out1', 'out2']
+    for (let i = 0; i < n; i++) {
+      act(() => void oscHandlerOf(term)('C;' + btoa('make')))
+      act(() => void oscHandlerOf(term)('D;0'))
+    }
+    return { ...r, term }
+  }
+  const findInput = () => document.querySelector<HTMLInputElement>('.find-in')
+  const count = () => document.querySelector('.find-n')?.textContent
+  const findKey = (key: string, o: KeyboardEventInit = {}) => fireEvent.keyDown(findInput()!, { key, ...o })
+
+  it('открывается по ⌘F, «N из M», ↵/⇧↵/↑/↓ по кругу, «Aa», esc — ввод обратно в строку', async () => {
+    await withBlocks(1)
+    act(() => runPaneCommand('p', 'find'))
+    expect(document.activeElement).toBe(findInput())
+    fireEvent.change(findInput()!, { target: { value: 'OUT' } })
+    expect(count()).toBe('1 из 2')
+    findKey('Enter')
+    expect(count()).toBe('2 из 2')
+    findKey('Enter')
+    expect(count()).toBe('1 из 2')
+    findKey('Enter', { shiftKey: true })
+    expect(count()).toBe('2 из 2')
+    findKey('ArrowDown')
+    expect(count()).toBe('1 из 2')
+    findKey('ArrowUp')
+    expect(count()).toBe('2 из 2')
+    fireEvent.click(document.querySelector('.find-aa')!)
+    expect(count()).toBe('0 из 0')
+    expect(findInput()!.className).toContain('none')
+    fireEvent.click(document.querySelector('.find-aa')!)
+    expect(count()).toBe('1 из 2')
+    // Повторный ⌘F — фокус в поле, строка не закрывается.
+    textarea().focus()
+    act(() => runPaneCommand('p', 'find'))
+    expect(document.activeElement).toBe(findInput())
+    findKey('Escape')
+    expect(findInput()).toBeNull()
+    expect(document.activeElement).toBe(textarea())
+  })
+
+  it('лента изменилась — совпадения пересчитываются; фокус остаётся в поиске', async () => {
+    const { term } = await withBlocks(1)
+    act(() => runPaneCommand('p', 'find'))
+    fireEvent.change(findInput()!, { target: { value: 'out2' } })
+    expect(count()).toBe('1 из 1')
+    act(() => void oscHandlerOf(term)('C;' + btoa('make')))
+    act(() => void oscHandlerOf(term)('D;0'))
+    await act(() => flush(60))
+    expect(count()).toBe('1 из 2')
+    // Конец команды не уводит фокус из строки поиска.
+    expect(document.activeElement).toBe(findInput())
+  })
+
+  it('в полноэкранной программе ⌘F не открывает поиск', async () => {
+    const { term } = await withBlocks(0)
+    const change = term.buffer.onBufferChange.mock.calls[0][0] as (b: { type: string }) => void
+    act(() => change({ type: 'alternate' }))
+    act(() => runPaneCommand('p', 'find'))
+    expect(findInput()).toBeNull()
+  })
+})

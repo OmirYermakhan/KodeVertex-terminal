@@ -227,6 +227,20 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .pane-x { position: absolute; top: 6px; right: 8px; z-index: 12; width: 20px; height: 20px; padding: 0; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 11px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity 0.12s; }
 .pane-slot:hover .pane-x, .pane-x:focus-visible { opacity: 1; }
 .pane-x:hover { color: var(--del); background: color-mix(in srgb, var(--del) 12%, transparent); }
+/* ⌘F — строка поиска в ленте (справа вверху, как в Warp): рамка — как у попапов (.cp). */
+.find { position: absolute; top: 8px; right: 14px; z-index: 15; display: flex; align-items: center; gap: 2px; height: 32px; box-sizing: border-box; padding: 0 4px 0 10px; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); font-family: var(--font-code); }
+.pane-slot.split .find { right: 34px; }
+.find-in { width: 190px; min-width: 0; border: 0; outline: none; background: transparent; color: var(--strong); font: inherit; font-size: 13px; padding: 0; }
+.find-in::placeholder { color: var(--muted); }
+.find-in.none { color: var(--del); }
+.find-n { min-width: 5.5em; padding: 0 6px; text-align: right; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.find-b { width: 24px; height: 24px; padding: 0; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; line-height: 1; cursor: pointer; }
+.find-b:hover { color: var(--strong); background: var(--panel2); }
+.find-aa { font-family: var(--font-text); font-size: 11.5px; font-weight: 600; }
+.find-aa.on { color: var(--accText); background: color-mix(in srgb, var(--acc) 18%, transparent); }
+/* Совпадения поиска — CSS Custom Highlight API (DOM ленты не меняется): текущее сильнее. */
+::highlight(kv-find) { background-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+::highlight(kv-find-cur) { background-color: var(--acc); color: var(--onAcc); }
 .feed { flex: 1; min-height: 0; overflow: auto; padding: 16px 22px; position: relative; box-sizing: border-box; }
 .blk { position: relative; box-sizing: border-box; border: 1px solid transparent; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-family: var(--font-code); font-size: var(--size-code); line-height: 1.7; max-width: 76ch; color: var(--text); }
 .blk .cmd { color: var(--strong); }

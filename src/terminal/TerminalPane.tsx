@@ -35,7 +35,8 @@ import { AgentsPanel, type AgentsPanelHandle } from '../claude/AgentsPanel'
 import { blockText, cleanSerializedHtml } from '../feed/blockHtml'
 import { Feed } from '../feed/FeedView'
 import { LiveTerminal } from '../feed/LiveTerminal'
-import { registerPaneCommands, type BlockAction } from '../feed/paneCommands'
+import { registerPaneCommands, type PaneAction } from '../feed/paneCommands'
+import { FindBar, type FindBarHandle } from '../feed/FindBar'
 import { feedAttachment } from '../attach/fromFeed'
 import { DROP_TITLE, DROP_TITLE_SHELL, DROP_TITLE_SHELL_MANY, dropSubline, registerDropTarget, setAttachCount, useDrop } from '../attach/dragDrop'
 import { DROP_PATH, Token } from '../attach/tokenView'
@@ -488,7 +489,8 @@ export function TerminalPane(p: TerminalPaneProps) {
     if (running || alt || awaiting) return
     const active = document.activeElement
     const nothingFocused = !active || active === document.body
-    if (nothingFocused || paneRef.current?.contains(active)) focusActive()
+    // Строка поиска (⌘F) фокус не теряет: в ней ещё набирают.
+    if (nothingFocused || (paneRef.current?.contains(active) && !active?.closest?.('.find'))) focusActive()
   }, [running, alt, awaiting, focusActive])
 
   // Панель агентов исчезла (⌘J или сессии больше нет), пока фокус был в ней (элемент уже удалён) — вернуть ввод.
@@ -543,14 +545,14 @@ export function TerminalPane(p: TerminalPaneProps) {
       setCustom(null)
       const active = document.activeElement
       if (!active || active === document.body || (paneRef.current?.contains(active) && !inputRef.current?.hasFocus())) {
-        if (!active?.closest?.('.agents, .queue')) focusActive()
+        if (!active?.closest?.('.agents, .queue, .find')) focusActive()
       }
       return
     }
     if (!callbacks.current.focused || runningRef.current || altRef.current) return
     if (useUi.getState().settingsOpen || inputRef.current?.pickerOpen()) return
     const active = document.activeElement
-    if (active?.closest?.('.agents')) return
+    if (active?.closest?.('.agents, .find')) return
     if (inputRef.current?.isEmpty() ?? true) promptRef.current?.focus()
   }, [promptId, focusActive])
   const onDecideP = useCallback(
@@ -899,11 +901,25 @@ export function TerminalPane(p: TerminalPaneProps) {
     el?.scrollIntoView?.({ block: 'nearest' })
   }, [selected])
 
+  // ⌘F — поиск в ленте; esc/✕ — закрыть, ввод — туда, где он идёт.
+  const [findOpen, setFindOpen] = useState(false)
+  const findRef = useRef<FindBarHandle>(null)
+  const closeFind = useCallback(() => {
+    setFindOpen(false)
+    focusActive()
+  }, [focusActive])
+
   useEffect(
     () =>
-      registerPaneCommands(p.paneId, (a: BlockAction) => {
-        // Полноэкранная программа: лента скрыта, выбирать нечего.
+      registerPaneCommands(p.paneId, (a: PaneAction) => {
+        // Полноэкранная программа: лента скрыта, выбирать и искать нечего.
         if (altRef.current) return
+        // ⌘F: строка поиска; уже открыта — фокус в неё.
+        if (a === 'find') {
+          if (findRef.current) findRef.current.focus()
+          else setFindOpen(true)
+          return
+        }
         if (a === 'blockCopy') {
           copyItem(selectedRef.current)
           return
@@ -977,7 +993,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       // Клик по ленте возвращает ввод туда, где он идёт: в строку ввода, а пока идёт команда — в xterm.
       onMouseUp={(e) => {
         // Кнопки ленты («Показать всё» и т. п.), само поле и выделение текста не трогаем.
-        if ((e.target as Element).closest?.('button, a, input, textarea, select, .input, .agents, .aprompt, .queue')) return
+        if ((e.target as Element).closest?.('button, a, input, textarea, select, .input, .agents, .aprompt, .queue, .find')) return
         if (window.getSelection()?.isCollapsed ?? true) {
           if (runningRef.current || altRef.current) termRef.current?.focus()
           else inputRef.current?.focus()
@@ -1007,6 +1023,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         }
       />
       </PreviewContext.Provider>
+      {findOpen && !alt && <FindBar ref={findRef} paneId={p.paneId} feedRef={feedRef} onClose={closeFind} />}
       <div className="dock">
         {claudeOpen(claude) && !agentsHidden && (
           <ErrorBoundary name="панель агентов">
