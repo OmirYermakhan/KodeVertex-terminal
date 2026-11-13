@@ -15,6 +15,25 @@ export type PreviewFrom = 'input' | 'bubble'
 
 const isText = (d: PreviewData | null) => d?.kind === 'text'
 
+/**
+ * Расширения, у которых «открыть» = запустить код (приложения, сценарии, .command/.terminal,
+ * AppleScript, установщики, ссылки…): ↵ только показывает их в Finder. Тот же список — в
+ * preview.rs (LAUNCH_EXT); Rust решает окончательно (там ещё исполняемый бит и цель ссылки).
+ */
+const LAUNCH_EXT = new Set([
+  'app', 'appex', 'action', 'bundle', 'framework', 'kext', 'plugin', 'prefpane', 'qlgenerator', 'saver', 'service',
+  'xpc', 'osax', 'mdimporter', 'command', 'tool', 'terminal', 'sh', 'bash', 'zsh', 'csh', 'tcsh', 'ksh', 'fish',
+  'scpt', 'scptd', 'applescript', 'workflow', 'wflow', 'shortcut', 'pkg', 'mpkg', 'dmg', 'iso', 'sparseimage',
+  'sparsebundle', 'jar', 'jnlp', 'webloc', 'inetloc', 'fileloc', 'url', 'mobileconfig', 'configprofile',
+])
+
+/** Путь, который ↵ не открывает, а показывает в Finder (по расширению). */
+export function launchesCode(path: string): boolean {
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  const dot = name.lastIndexOf('.')
+  return dot > 0 && LAUNCH_EXT.has(name.slice(dot + 1).toLowerCase())
+}
+
 /** ↵ — главное действие значка; null — нечего делать. */
 export function enterAction(t: Attachment): PreviewAction | null {
   const path = t.path
@@ -23,7 +42,9 @@ export function enterAction(t: Attachment): PreviewAction | null {
       return path ? { type: 'overlay', path, label: t.label } : null
     case 'file':
     case 'pdf':
-      return path ? { type: 'open', how: 'default', path, ...(t.line ? { line: t.line } : {}) } : null
+      if (!path) return null
+      if (launchesCode(path)) return { type: 'open', how: 'reveal', path }
+      return { type: 'open', how: 'default', path, ...(t.line ? { line: t.line } : {}) }
     case 'folder':
       return path ? { type: 'open', how: 'reveal', path } : null
     case 'block':
@@ -67,8 +88,10 @@ export function enterHint(t: Attachment, data: PreviewData | null): string | nul
   switch (t.kind) {
     case 'image':
       return '↵ целиком'
-    case 'file':
-      return data && !isText(data) ? '↵ открыть' : '↵ открыть · ⌘↵ в редакторе'
+    case 'file': {
+      const open = t.path && launchesCode(t.path) ? '↵ в Finder' : '↵ открыть'
+      return data && !isText(data) ? open : `${open} · ⌘↵ в редакторе`
+    }
     case 'pdf':
       return data?.kind === 'pdf' && data.pages > 1 ? '← → страницы · ↵ открыть' : '↵ открыть'
     case 'folder':

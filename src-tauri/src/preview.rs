@@ -591,6 +591,47 @@ fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<Vec<u8>> {
   reader.join().ok()
 }
 
+/// Расширения, которые «открыть» = запустить код: приложения и бандлы, сценарии оболочки и
+/// Terminal, AppleScript и Automator, установщики и образы дисков, ссылки (`.webloc`/`.fileloc`
+/// могут вести на приложение), профили конфигурации. Такие пути ↵ показывает в Finder.
+const LAUNCH_EXT: &[&str] = &[
+  "app", "appex", "action", "bundle", "framework", "kext", "plugin", "prefpane", "qlgenerator", "saver", "service",
+  "xpc", "osax", "mdimporter", "command", "tool", "terminal", "sh", "bash", "zsh", "csh", "tcsh", "ksh", "fish",
+  "scpt", "scptd", "applescript", "workflow", "wflow", "shortcut", "pkg", "mpkg", "dmg", "iso", "sparseimage",
+  "sparsebundle", "jar", "jnlp", "webloc", "inetloc", "fileloc", "url", "mobileconfig", "configprofile",
+];
+
+/// Запуск по `open` исполнил бы код: папка (бандл `.app` — тоже папка), исполняемый файл
+/// или расширение из `LAUNCH_EXT` (у пути или у цели ссылки).
+pub fn launches_code(names: &[&Path], is_dir: bool, mode: u32) -> bool {
+  if is_dir || mode & 0o111 != 0 {
+    return true;
+  }
+  names.iter().any(|n| {
+    let e = n.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    LAUNCH_EXT.contains(&e.as_str())
+  })
+}
+
+/// Безопасный вариант действия: только абсолютный путь (`open` не примет его за ключ), а
+/// «открыть» исполняемое или бандл превращается в «показать в Finder». Возвращает действие
+/// и путь: «показать» — сам путь, открытие — цель символической ссылки (её и проверяем).
+pub fn safe_open(path: &str, how: &str) -> Result<(String, String), String> {
+  let p = Path::new(path);
+  if !p.is_absolute() {
+    return Err("Нужен абсолютный путь".to_string());
+  }
+  let real = fs::canonicalize(p).map_err(|e| io_message(&e))?;
+  let meta = fs::metadata(&real).map_err(|e| io_message(&e))?;
+  #[cfg(unix)]
+  let mode = std::os::unix::fs::PermissionsExt::mode(&meta.permissions());
+  #[cfg(not(unix))]
+  let mode = 0;
+  let how = if how == "default" && launches_code(&[p, &real], meta.is_dir(), mode) { "reveal" } else { how };
+  let target = if how == "reveal" { path.to_string() } else { real.to_string_lossy().into_owned() };
+  Ok((how.to_string(), target))
+}
+
 /// Как открыть: default — программой по умолчанию, editor — в редакторе, reveal — показать в Finder.
 pub fn open_command(how: &str, path: &str, line: Option<u32>, editor: Option<(PathBuf, Vec<String>)>) -> Result<(PathBuf, Vec<String>), String> {
   match how {
@@ -633,6 +674,7 @@ pub fn preview_open(path: String, how: String, line: Option<u32>) -> Result<(), 
   if !Path::new(&path).exists() {
     return Err("Файл не найден".to_string());
   }
+  let (how, path) = safe_open(&path, &how)?;
   let editor = if how == "editor" {
     let (v, c) = editor_env();
     pick_editor(v, resolve_in_shell, c)
@@ -790,6 +832,58 @@ mod tests {
     let pdf = fifo(d.path(), "x.pdf");
     assert_eq!(no_block(move || image_preview(&png, 600)).unwrap_err(), "Особый файл");
     assert_eq!(no_block(move || pdf_preview(&pdf, 1, 600)).unwrap_err(), "Особый файл");
+  }
+
+  #[test]
+  fn launches_code_decision() {
+    let p = |s: &'static str| Path::new(s);
+    assert!(!launches_code(&[p("/w/a.txt")], false, 0o644));
+    assert!(!launches_code(&[p("/w/doc.pdf"), p("/w/doc.pdf")], false, 0o600));
+    assert!(launches_code(&[p("/w/a.txt")], false, 0o755), "исполняемый бит");
+    assert!(launches_code(&[p("/w/a.txt")], false, 0o744));
+    assert!(launches_code(&[p("/w/Calc.app")], true, 0o755), "бандл — папка");
+    for n in ["/w/x.command", "/w/x.TERMINAL", "/w/x.tool", "/w/x.workflow", "/w/x.scpt", "/w/x.pkg", "/w/x.dmg", "/w/x.webloc", "/w/x.sh"] {
+      assert!(launches_code(&[Path::new(n)], false, 0o644), "{n}");
+    }
+    // Ссылка x.png на x.command: решает и цель.
+    assert!(launches_code(&[p("/w/x.png"), p("/w/x.command")], false, 0o644));
+  }
+
+  #[test]
+  #[cfg(unix)]
+  fn safe_open_reveals_code_and_needs_absolute_path() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(d.path()).unwrap();
+    let s = |p: &Path| p.to_string_lossy().into_owned();
+    let txt = root.join("a.txt");
+    fs::write(&txt, "x").unwrap();
+    assert_eq!(safe_open(&s(&txt), "default").unwrap(), ("default".to_string(), s(&txt)));
+    assert_eq!(safe_open(&s(&txt), "editor").unwrap().0, "editor");
+    // Относительный путь или «ключ» — отказ.
+    assert!(safe_open("a.txt", "default").is_err());
+    assert!(safe_open("-a", "default").is_err());
+    // .command, исполняемый файл, бандл .app — только в Finder.
+    let cmd = root.join("x.command");
+    fs::write(&cmd, "echo hi").unwrap();
+    assert_eq!(safe_open(&s(&cmd), "default").unwrap(), ("reveal".to_string(), s(&cmd)));
+    let exe = root.join("run");
+    fs::write(&exe, "#!/bin/sh").unwrap();
+    fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(safe_open(&s(&exe), "default").unwrap().0, "reveal");
+    let app = root.join("Calc.app");
+    fs::create_dir(&app).unwrap();
+    assert_eq!(safe_open(&s(&app), "default").unwrap().0, "reveal");
+    // Ссылка с безобидным именем на .command — тоже в Finder; на текст — открывается цель.
+    let link = root.join("x.png");
+    std::os::unix::fs::symlink(&cmd, &link).unwrap();
+    assert_eq!(safe_open(&s(&link), "default").unwrap(), ("reveal".to_string(), s(&link)));
+    let ok = root.join("ok.md");
+    std::os::unix::fs::symlink(&txt, &ok).unwrap();
+    assert_eq!(safe_open(&s(&ok), "default").unwrap(), ("default".to_string(), s(&txt)));
+    // Путь начинается с «/»: `open` не примет его за ключ.
+    let (_, args) = open_command("default", &s(&txt), None, None).unwrap();
+    assert!(args[0].starts_with('/'));
   }
 
   #[test]

@@ -71,6 +71,20 @@ describe('клавиши просмотра', () => {
     expect(enterHint(p, pdf)).toBe('← → страницы · ↵ открыть')
     expect(enterHint(file(), text)).toBe('↵ открыть · ⌘↵ в редакторе')
   })
+
+  it('исполняемое (.command, .app, .terminal…) ↵ не запускает, а показывает в Finder', () => {
+    const text: PreviewData = { kind: 'text', start: 1, lines: ['x'], total: 1, size: 1 }
+    for (const path of ['/d/x.command', '/d/Calc.app', '/d/x.TERMINAL', '/d/x.workflow', '/d/x.scpt', '/d/x.pkg', '/d/x.dmg', '/d/x.webloc', '/d/run.sh']) {
+      expect(enterAction(file({ path }))).toEqual({ type: 'open', how: 'reveal', path })
+    }
+    expect(enterAction(file({ path: '/d/x.command', kind: 'pdf' }))).toMatchObject({ how: 'reveal' })
+    expect(enterAction(file({ path: '/d/notes.md' }))).toMatchObject({ how: 'default' })
+    expect(enterAction(file({ path: '/d/.command' }))).toMatchObject({ how: 'default' })
+    expect(enterHint(file({ path: '/d/x.command' }), text)).toBe('↵ в Finder · ⌘↵ в редакторе')
+    expect(enterHint(file({ path: '/d/Calc.app' }), { kind: 'binary', size: 3 })).toBe('↵ в Finder')
+    // Редактор исполняемое не запускает — ⌘↵ остаётся.
+    expect(editorAction(file({ path: '/d/x.command' }), text)).toMatchObject({ how: 'editor' })
+  })
 })
 
 describe('мини-просмотр: открытие и закрытие', () => {
