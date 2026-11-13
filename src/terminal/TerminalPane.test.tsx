@@ -1365,3 +1365,148 @@ describe('TerminalPane', () => {
     })
   })
 })
+
+describe('TerminalPane: правка отправленного сообщения', () => {
+  type Ch = { onLine: { onmessage(l: string): void } }
+  let chs: Ch[]
+  beforeEach(() => {
+    terms.length = 0
+    spawns.length = 0
+    useUi.setState({ settingsOpen: false, agentsHidden: false })
+    useSettings.setState({ settings: { ...DEFAULTS } })
+    resetHistory()
+    useClaudeSessions.setState({ sessions: {} })
+    invoke.mockReset()
+    chs = []
+    invoke.mockImplementation(async (cmd: string, a: Record<string, unknown>) => {
+      if (cmd === 'claude_start') {
+        chs.push(a as unknown as Ch)
+        return `c${chs.length}`
+      }
+      return undefined
+    })
+  })
+  const line = (ev: object) => act(() => chs[chs.length - 1].onLine.onmessage(JSON.stringify(ev)))
+  const answer = (session: string, uuid: string, text = 'ок') => {
+    line({ type: 'system', subtype: 'init', session_id: session })
+    line({ type: 'assistant', uuid, session_id: session, parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [{ type: 'text', text }] } })
+    line({ type: 'result', subtype: 'success', result: text, session_id: session })
+  }
+  const names = () => (invoke.mock.calls as [string][]).map((c) => c[0]).filter((n) => n.startsWith('claude') && n !== 'claude_control')
+  const chip = () => document.querySelector<HTMLElement>('.dock .editdock')
+  const bubbles = () => [...document.querySelectorAll<HTMLElement>('.feed > .you')]
+  /** Режим Claude и два отвеченных вопроса: «первый» (сессия s1, ответ m1) и «второй» (m2). */
+  async function twoTurns() {
+    render(<TerminalPane {...props()} focused initialCwd="/w" />)
+    spawns[0].resolve()
+    await flush()
+    type('claude')
+    keyIn('Enter')
+    await act(async () => await flush())
+    type('первый')
+    keyIn('Enter')
+    await act(async () => await flush())
+    answer('s1', 'm1')
+    type('второй')
+    keyIn('Enter')
+    await act(async () => await flush())
+    answer('s1', 'm2')
+  }
+
+  it('«✎ Изменить» у пузыря: текст в строку, блок правки, обводка; esc — черновик обратно', async () => {
+    await twoTurns()
+    type('черновик')
+    const btn = bubbles()[1].querySelector<HTMLButtonElement>('.hover-act button')!
+    expect(btn.textContent).toBe('✎ Изменить')
+    act(() => btn.click())
+    expect(inputText()).toBe('второй')
+    expect(chip()!.querySelector('.dh')!.textContent).toContain('✎ Редактирование · сообщение 2 из 2')
+    expect(chip()!.textContent).toContain('↵ заменит последний вопрос и ответ')
+    expect(bubbles()[1].classList.contains('edit')).toBe(true)
+    keyIn('Escape')
+    expect(inputText()).toBe('черновик')
+    expect(chip()).toBeNull()
+    expect(document.querySelector('.you.edit')).toBeNull()
+    // Режим Claude остался (esc ушёл на отмену правки, а не на выход из режима).
+    expect(document.querySelector('.input .in-mode')).not.toBeNull()
+  })
+
+  it('↑ в пустой строке — правка последнего; ↵: стоп → запуск с перемоткой → отправка; прежний вариант свёрнут', async () => {
+    await twoTurns()
+    invoke.mockClear()
+    keyIn('ArrowUp')
+    expect(inputText()).toBe('второй')
+    type('второй, иначе')
+    keyIn('Enter')
+    await act(async () => await flush())
+    expect(names()).toEqual(['claude_stop', 'claude_start', 'claude_send'])
+    expect((invoke.mock.calls as [string, Record<string, unknown>][]).find((c) => c[0] === 'claude_start')![1]).toMatchObject({ resume: 's1', resumeAt: 'm1', fork: true })
+    expect(inputText()).toBe('')
+    expect(chip()).toBeNull()
+    const row = document.querySelector<HTMLButtonElement>('.feed .cl-old-row')!
+    expect(row.textContent).toContain('↺ Прежний вариант · 1 сообщение')
+    expect(bubbles().map((b) => b.querySelector('.you-text')!.textContent)).toEqual(['первый', 'второй, иначе'])
+    act(() => row.click())
+    expect(document.querySelector('.cl-old-items .you-text')!.textContent).toBe('второй')
+  })
+
+  it('⌘↑ выбирает пузырь, E — правка; старое сообщение — «продолжит разговор…», правки файлов — предупреждение', async () => {
+    await twoTurns()
+    // Во втором ходе Claude правил файл (в ленте — действие Edit).
+    act(() =>
+      useClaudeSessions.setState((st) => {
+        const s = st.sessions.p
+        return { sessions: { ...st.sessions, p: { ...s, state: { ...s.state, items: [...s.state.items, { type: 'action', agentId: 'main', toolUseId: 't', tool: 'Edit', title: 'Правка', detail: 'a.ts', status: 'done' }] } } } }
+      }),
+    )
+    // Ответ, «второй», ответ, «первый».
+    for (let i = 0; i < 4; i++) act(() => runPaneCommand('p', 'blockPrev'))
+    expect(document.querySelector('.you.sel .you-text')!.textContent).toBe('первый')
+    keyIn('e', { code: 'KeyE' })
+    expect(inputText()).toBe('первый')
+    expect(chip()!.textContent).toContain('сообщение 1 из 2')
+    expect(chip()!.textContent).toContain('↵ продолжит разговор с этого места; следующее сообщение уйдёт в историю')
+    expect(chip()!.querySelector('.ed-warn')!.textContent).toBe('Изменения файлов, сделанные после этого сообщения, не откатываются')
+    invoke.mockClear()
+    keyIn('Enter')
+    await act(async () => await flush())
+    // Первое сообщение сессии — новая сессия без --resume.
+    expect((invoke.mock.calls as [string, Record<string, unknown>][]).find((c) => c[0] === 'claude_start')![1]).toMatchObject({ resume: null })
+    expect(document.querySelector('.feed .cl-old-row')!.textContent).toContain('2 сообщения')
+  })
+
+  it('Claude ещё отвечает — «остановит текущий ответ»; ↵ сначала прерывает ход', async () => {
+    await twoTurns()
+    type('третий')
+    keyIn('Enter')
+    await act(async () => await flush())
+    keyIn('ArrowUp')
+    expect(inputText()).toBe('третий')
+    expect(chip()!.textContent).toContain('↵ остановит текущий ответ и отправит исправленный')
+    invoke.mockImplementation(async (cmd: string, a: Record<string, unknown>) => {
+      if (cmd === 'claude_start') {
+        chs.push(a as unknown as Ch)
+        return `c${chs.length}`
+      }
+      if (cmd === 'claude_interrupt') setTimeout(() => chs[chs.length - 1].onLine.onmessage(JSON.stringify({ type: 'result', is_error: true, session_id: 's1' })))
+      return undefined
+    })
+    invoke.mockClear()
+    keyIn('Enter')
+    await act(async () => await flush(5))
+    expect(names()).toEqual(['claude_interrupt', 'claude_stop', 'claude_start', 'claude_send'])
+  })
+
+  it('точка перемотки неизвестна — «Изменить» не показываем, ↑ не правит', async () => {
+    await twoTurns()
+    act(() =>
+      useClaudeSessions.setState((st) => {
+        const s = st.sessions.p
+        return { sessions: { ...st.sessions, p: { ...s, state: { ...s.state, edits: {} } } } }
+      }),
+    )
+    expect(bubbles()[1].querySelector('.hover-act')).toBeNull()
+    keyIn('ArrowUp')
+    expect(chip()).toBeNull()
+  })
+})

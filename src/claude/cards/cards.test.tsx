@@ -1,7 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Agent, FeedClaudeItem } from '../reducer'
+import type { Agent, EditInfo, FeedClaudeItem } from '../reducer'
+import { EditChip } from '../EditChip'
+import { EDIT_FILES, editEffect } from '../editText'
+import { EDIT_ACTION } from '../../feed/ShellBlockView'
 import { Markdown } from '../Markdown'
 import { ActionCard, diffLines } from './ActionCard'
 import { AssistantCard } from './AssistantCard'
@@ -259,5 +262,65 @@ describe('заметка ленты', () => {
     const el = container.querySelector('[data-item-id="n1"]')!
     expect(el).toHaveClass('cl-note')
     expect(el.textContent).toBe('Модель: Fable 5.2 · усилие high')
+  })
+})
+
+describe('правка сообщения: пузырь и «Прежний вариант»', () => {
+  it('«✎ Изменить» — только у сообщений, которые можно изменить; правится — обводка, без панельки', () => {
+    const onEdit = vi.fn()
+    const { container, rerender } = render(<UserBubble id="cl-3" text="вопрос" />)
+    expect(container.querySelector('.hover-act')).toBeNull()
+    rerender(<UserBubble id="cl-3" text="вопрос" onEdit={onEdit} />)
+    fireEvent.click(screen.getByText(EDIT_ACTION))
+    expect(onEdit).toHaveBeenCalledWith('cl-3')
+    rerender(<UserBubble id="cl-3" text="вопрос" onEdit={onEdit} editing />)
+    expect(container.querySelector('.you.edit')).not.toBeNull()
+    expect(container.querySelector('.hover-act')).toBeNull()
+    rerender(<UserBubble id="cl-3" text="вопрос" onEdit={onEdit} selected />)
+    expect(container.querySelector('.you.sel')).not.toBeNull()
+  })
+
+  it('свёрнутая строка «↺ Прежний вариант · N сообщений»; клик раскрывает прежние карточки без действий', () => {
+    const old: FeedClaudeItem[] = [
+      { type: 'user', text: 'старый вопрос' },
+      { type: 'assistant', agentId: 'main', text: 'старый ответ', streaming: false },
+      { type: 'user', text: 'ещё' },
+    ]
+    const { container } = render(<ClaudeCard item={{ kind: 'claude', id: 'cl-4', item: { type: 'replaced', items: old, count: 2 } }} agents={[agent()]} />)
+    const row = container.querySelector<HTMLButtonElement>('.cl-old-row')!
+    expect(row.textContent).toContain('↺ Прежний вариант · 2 сообщения')
+    expect(row.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('старый ответ')).toBeNull()
+    fireEvent.click(row)
+    expect(row.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText('старый вопрос')).toBeTruthy()
+    expect(screen.getByText('старый ответ')).toBeTruthy()
+    expect(container.querySelector('.cl-old-items .hover-act')).toBeNull()
+    fireEvent.click(row)
+    expect(screen.queryByText('старый ответ')).toBeNull()
+  })
+
+  it('место ушедшего в историю элемента ничего не рисует', () => {
+    const { container } = render(<ClaudeCard item={{ kind: 'claude', id: 'cl-5', item: { type: 'gone' } }} />)
+    expect(container.innerHTML).toBe('')
+  })
+})
+
+describe('EditChip: что сделает ↵', () => {
+  const info = (o: Partial<EditInfo>): EditInfo => ({ n: 3, total: 3, after: 0, busy: false, files: false, ...o })
+  it('тексты по случаям', () => {
+    expect(editEffect(info({ busy: true }))).toBe('↵ остановит текущий ответ и отправит исправленный')
+    expect(editEffect(info({}))).toBe('↵ заменит последний вопрос и ответ')
+    expect(editEffect(info({ n: 1, after: 2 }))).toBe('↵ продолжит разговор с этого места; следующие 2 сообщения уйдут в историю')
+    expect(editEffect(info({ n: 1, after: 5, busy: true }))).toBe('↵ продолжит разговор с этого места; следующие 5 сообщений уйдут в историю')
+    expect(editEffect(info({ n: 2, after: 1 }))).toBe('↵ продолжит разговор с этого места; следующее сообщение уйдёт в историю')
+  })
+  it('заголовок «сообщение N из M» и предупреждение про файлы', () => {
+    const { container, rerender } = render(<EditChip info={info({ n: 3, total: 5, after: 2 })} />)
+    expect(container.querySelector('.dh')!.textContent).toContain('✎ Редактирование · сообщение 3 из 5')
+    expect(container.querySelector('.ed-warn')).toBeNull()
+    rerender(<EditChip info={info({ files: true })} />)
+    expect(container.querySelector('.ed-warn')!.textContent).toBe(EDIT_FILES)
+    expect(EDIT_FILES).toBe('Изменения файлов, сделанные после этого сообщения, не откатываются')
   })
 })

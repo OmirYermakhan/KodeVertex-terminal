@@ -900,8 +900,9 @@ export function TerminalPane(p: TerminalPaneProps) {
         if (a === 'blockRead') {
           setReaderId((cur) => {
             const list = itemsRef.current
-            if (cur && list.some((it) => it.id === cur)) return null
             const isAnswer = (it: FeedItem | undefined) => it?.kind === 'claude' && it.item.type === 'assistant'
+            // Открытый ответ мог уйти в «Прежний вариант» (правка сообщения) — тогда открываем заново.
+            if (cur && list.some((it) => it.id === cur && isAnswer(it))) return null
             const sel = list.find((it) => it.id === selectedRef.current)
             if (isAnswer(sel)) return sel!.id
             for (let i = list.length - 1; i >= 0; i--) if (isAnswer(list[i])) return list[i].id

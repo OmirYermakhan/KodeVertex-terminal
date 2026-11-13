@@ -7,7 +7,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...
 const dialogOpen = vi.fn(() => Promise.resolve(null))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: () => dialogOpen() }))
 
-const { InputBar, ASK_HINT, CLAUDE_HINT, CLAUDE_PLACEHOLDER, CONTINUATION_NOTE, PLACEHOLDER, PREVIEW_HINT, UNSUPPORTED_NOTE } = await import('./InputBar')
+const { InputBar, EDIT_HINT, ASK_HINT, CLAUDE_HINT, CLAUDE_PLACEHOLDER, CONTINUATION_NOTE, PLACEHOLDER, PREVIEW_HINT, UNSUPPORTED_NOTE } = await import('./InputBar')
 const { createPreview } = await import('../attach/preview/usePreview')
 const { AT_HINT } = await import('../completion/CompletionPopup')
 const { TOKEN_CHAR: T } = await import('../attach/types')
@@ -923,5 +923,87 @@ describe('InputBar: мини-просмотр значков и `@` с груп�
     fireEvent(document, new Event('selectionchange'))
     expect(s.container.querySelector('.pop')).toBeNull()
     expect(s.container.querySelector('.in-mode')).not.toBeNull()
+  })
+})
+
+describe('InputBar: правка отправленного сообщения', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    invoke.mockResolvedValue([])
+    resetHistory()
+  })
+  const tok = (id: string) => ({ id, kind: 'file' as const, label: `${id}.tsx`, path: `/w/${id}.tsx` })
+  const claude = (s: ReturnType<typeof setup>) => {
+    s.set('claude')
+    s.key('Enter')
+  }
+  const noQueue = () => ({ recall: vi.fn(() => null), sendNext: vi.fn(() => false), dismissHint: vi.fn(() => false) })
+
+  it('load — текст со значками в строку (режим Claude); snapshot/restore возвращают черновик и режим', () => {
+    const s = setup()
+    s.set('черновик')
+    const snap = s.ref.current!.snapshot()
+    expect(snap).toEqual({ doc: { text: 'черновик', tokens: [] }, claude: false })
+    act(() => void s.ref.current!.load({ text: `глянь ${T}`, tokens: [tok('a')] }))
+    expect(s.ta.value).toBe(`глянь ${T}`)
+    expect(s.ed.querySelector('.tk')!.textContent).toBe('a.tsx')
+    expect(s.container.querySelector('.in-mode')).not.toBeNull()
+    act(() => s.ref.current!.restore(snap))
+    expect(s.ta.value).toBe('черновик')
+    expect(s.container.querySelector('.in-mode')).toBeNull()
+  })
+
+  it('↵ в режиме правки — onSubmit со значками, строка не чистится, onAsk не вызывается; esc — onCancel', () => {
+    const onSubmit = vi.fn()
+    const onCancel = vi.fn()
+    const s = setup({ edit: { onSubmit, onCancel } })
+    expect(s.container.querySelector('.in-hint')!.textContent).toBe(EDIT_HINT)
+    act(() => void s.ref.current!.load({ text: `так ${T}`, tokens: [tok('a')] }))
+    s.key('Enter')
+    expect(onSubmit).toHaveBeenCalledWith(`так ${T}`, [tok('a')])
+    expect(s.p.onAsk).not.toHaveBeenCalled()
+    s.key('Escape')
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    // ⌘↵ — тоже отправка правки.
+    s.key('Enter', { metaKey: true })
+    expect(onSubmit).toHaveBeenCalledTimes(2)
+  })
+
+  it('пустая строка в режиме правки: ↵ не шлёт очередь, ↑ не забирает из неё', () => {
+    const q = noQueue()
+    const s = setup({ edit: { onSubmit: vi.fn(), onCancel: vi.fn() }, queue: q })
+    s.key('Enter')
+    s.key('ArrowUp')
+    expect(q.sendNext).not.toHaveBeenCalled()
+    expect(q.recall).not.toHaveBeenCalled()
+  })
+
+  it('↑ в пустой строке режима Claude: очередь пуста — изменить последнее; в очереди есть — как раньше', () => {
+    const onEditLast = vi.fn(() => true)
+    const q = noQueue()
+    const s = setup({ onEditLast, queue: q })
+    // В оболочке ↑ — история, не правка.
+    s.key('ArrowUp')
+    expect(onEditLast).not.toHaveBeenCalled()
+    claude(s)
+    s.key('ArrowUp')
+    expect(q.recall).toHaveBeenCalled()
+    expect(onEditLast).toHaveBeenCalledTimes(1)
+    q.recall.mockReturnValueOnce('из очереди' as never)
+    s.key('ArrowUp')
+    expect(s.ta.value).toBe('из очереди')
+    expect(onEditLast).toHaveBeenCalledTimes(1)
+  })
+
+  it('E в пустой строке — изменить выбранное; не выбрано — обычная буква', () => {
+    const onEditSelected = vi.fn().mockReturnValueOnce(true).mockReturnValue(false)
+    const s = setup({ onEditSelected })
+    const ev = s.key('e', { code: 'KeyE' })
+    expect(onEditSelected).toHaveBeenCalledTimes(1)
+    expect(ev).toBe(false)
+    expect(s.key('e', { code: 'KeyE' })).toBe(true)
+    s.set('x')
+    s.key('e', { code: 'KeyE' })
+    expect(onEditSelected).toHaveBeenCalledTimes(2)
   })
 })

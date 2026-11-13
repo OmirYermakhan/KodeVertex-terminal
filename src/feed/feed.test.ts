@@ -85,6 +85,10 @@ describe('moveSelection', () => {
     expect(moveSelection(items, null, 'down')).toEqual({ id: null, leave: true })
   })
   it('пустая лента', () => expect(moveSelection([], null, 'up')).toEqual({ id: null, leave: false }))
+  it('also: ещё выбираемые элементы (сообщения «Вы», которые можно изменить)', () => {
+    expect(moveSelection(items, 'b', 'up', (it) => it.id === 'c')).toEqual({ id: 'c', leave: false })
+    expect(moveSelection(items, 'c', 'up', (it) => it.id === 'c')).toEqual({ id: 'a', leave: false })
+  })
   it('ответы Claude тоже выбираются (для ⌘L); идущий ответ — нет', () => {
     const ans = (id: string, streaming: boolean): FeedItem => ({ kind: 'claude', id, item: { type: 'assistant', agentId: 'main', text: 'ок', streaming } })
     const list: FeedItem[] = [blk('a'), ans('m1', false), ans('m2', true)]
