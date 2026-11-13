@@ -106,8 +106,13 @@ function rectOf(r: Range): DOMRect | null {
   return typeof r.getBoundingClientRect === 'function' ? r.getBoundingClientRect() : null
 }
 
+/** Событие «развернуть свёрнутое» — на .ans-body.clipped, когда к нему ведёт поиск. */
+export const REVEAL_EVENT = 'kv-reveal'
+
 /** Прокрутить viewport так, чтобы совпадение было видно (с запасом сверху). */
 export function scrollToRange(r: Range, viewport: HTMLElement): void {
+  // Совпадение в свёрнутом длинном ответе — сначала развернуть его (AssistantCard слушает REVEAL_EVENT).
+  r.startContainer.parentElement?.closest('.ans-body.clipped')?.dispatchEvent(new Event(REVEAL_EVENT))
   const rect = rectOf(r)
   if (!rect || (rect.width === 0 && rect.height === 0)) {
     r.startContainer.parentElement?.scrollIntoView?.({ block: 'center' })
