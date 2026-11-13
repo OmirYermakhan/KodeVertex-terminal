@@ -250,7 +250,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 
 /* Карточки Claude (макет 04 .you/.card/.act, макет 02 вариант B .sum/.diff) */
 .feed .who { font-family: var(--font-code); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 6px; line-height: normal; }
-.you { box-sizing: border-box; margin: 0 0 12px auto; max-width: 60%; background: var(--you); border-radius: 10px 10px 2px 10px; padding: 9px 14px; font-family: var(--font-text); font-size: calc(var(--size-text) - 1.5px); line-height: normal; color: var(--strong); white-space: pre-wrap; overflow-wrap: anywhere; }
+.you { box-sizing: border-box; width: fit-content; min-width: 64px; margin: 0 0 12px auto; max-width: 60%; background: var(--you); border-radius: 10px 10px 2px 10px; padding: 9px 14px; font-family: var(--font-text); font-size: calc(var(--size-text) - 1.5px); line-height: normal; color: var(--strong); white-space: pre-wrap; overflow-wrap: anywhere; }
 .you .who { color: color-mix(in srgb, var(--accText) 45%, var(--strong)); text-align: right; white-space: normal; }
 .card { position: relative; box-sizing: border-box; background: var(--panel); border: 1px solid var(--rule); border-left: 2px solid var(--acc); border-radius: 8px; padding: 11px 14px; margin-bottom: 10px; max-width: 76ch; color: var(--text); font-family: var(--font-text); }
 .card .who { color: var(--accText); display: flex; justify-content: space-between; align-items: center; gap: 12px; }
