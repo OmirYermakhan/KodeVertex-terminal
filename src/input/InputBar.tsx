@@ -13,6 +13,7 @@ import { isClaudeExit, isClearCommand, isModelCommand, isShellClear, parseClaude
 import { ModelPicker } from '../claude/ModelPicker'
 import { initialPicker, pickerKey, type ModelChoice, type PickerState } from '../claude/models'
 import { getHistory, historyStep, loadHistory, NAV_START, pushHistory, type HistoryNav } from './history'
+import { ghostSuggestion, nextWord } from './historySearch'
 import { backspace, countTokens, docOf, forwardDelete, insertText, insertTokens, moveCaret, readable, splice, tokenAt, tokenPos, type Edit } from '../attach/doc'
 import { effective, overBudget, pathAttachment, sendBlocked } from '../attach/classify'
 import { attachPaths, pasteClipboardImage, pickFiles, screenshotLabel } from '../attach/api'
@@ -220,6 +221,12 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [])
   /** Курсор у значка: ␣ откроет просмотр (подсказка справа). */
   const [nearTok, setNearTok] = useState(false)
+  /** Курсор в конце строки без выделения — условие подсказки-призрака. */
+  const [caretEnd, setCaretEnd] = useState(true)
+  /** Идёт набор IME — подсказка-призрак не показывается. */
+  const [composing, setComposing] = useState(false)
+  /** Текст, на котором подсказку-призрак скрыли по esc: до правки строки не показываем. */
+  const [ghostHidden, setGhostHidden] = useState<string | null>(null)
   const props = useRef(p)
   useEffect(() => {
     props.current = p
@@ -633,7 +640,9 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     const el = edRef.current
     if (!el) return
     const v = docRef.current.text
-    const cursor = (document.activeElement === el ? getSelection(el)?.end : null) ?? v.length
+    const s = document.activeElement === el ? getSelection(el) : null
+    const cursor = s?.end ?? v.length
+    setCaretEnd(cursor === v.length && (!s || s.start === s.end))
     const q = props.current
     if (q.answer) return setAt(null)
     if (q.hints && !q.disabled && !q.continuation) hintsRef.current.update(v, cursor)
@@ -753,6 +762,24 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         report()
       }
       return
+    }
+    // Подсказка-призрак: → принимает всю, ⌥→ — следующее слово, esc скрывает до правки строки.
+    if (ghost && sel.start === sel.end && sel.end === v.length) {
+      const take = e.key === 'ArrowRight' && plain ? ghost : e.key === 'ArrowRight' && only('alt') ? nextWord(ghost) : null
+      if (take !== null) {
+        e.preventDefault()
+        const next = v + take
+        nav.current = NAV_START
+        setLine(next, next.length)
+        completionRef.current.update(next, next.length, false)
+        hintsRef.current.update(next, next.length, false)
+        return
+      }
+      if (e.key === 'Escape' && plain) {
+        e.preventDefault()
+        setGhostHidden(v)
+        return
+      }
     }
     // ←/→: значок — как одна буква.
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && plain) {
@@ -960,6 +987,13 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [open, ctx, buffer, lineStart])
 
   const empty = doc.text === ''
+  // Подсказка-призрак из истории: только оболочка, курсор в конце, без открытых выборок и IME.
+  const ghost =
+    !claudeMode && focused && caretEnd && !composing && !p.disabled && !p.answer && !p.edit && !p.continuation &&
+    !picker && !(open && pathsOn) && !(hints.state.open && p.hints) && !atShown &&
+    doc.tokens.length === 0 && doc.text !== ghostHidden
+      ? ghostSuggestion(getHistory(), doc.text)
+      : null
   const placeholder = p.answer ? ANSWER_PLACEHOLDER : p.edit ? EDIT_PLACEHOLDER : claudeMode ? CLAUDE_PLACEHOLDER : PLACEHOLDER
   return (
     <div className="input-wrap" ref={wrapRef}>
@@ -1039,6 +1073,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             autoCapitalize="off"
             autoCorrect="off"
             onInput={onInput}
+            onCompositionStart={() => setComposing(true)}
+            onCompositionEnd={() => setComposing(false)}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
             onCopy={(e) => onCopy(e, false)}
@@ -1094,6 +1130,12 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             <span className="ph" aria-hidden="true">
               {placeholder}
               {focused && !p.disabled && <span className="caret" />}
+            </span>
+          )}
+          {ghost && (
+            <span className="in-ghost" aria-hidden="true">
+              <span className="in-ghost-pre">{doc.text}</span>
+              <span className="in-ghost-rest">{ghost}</span>
             </span>
           )}
           <span className="in-measure" ref={measureRef} aria-hidden="true" />

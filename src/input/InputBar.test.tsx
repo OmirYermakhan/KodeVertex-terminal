@@ -1088,3 +1088,49 @@ describe('InputBar: /exit закрывает Claude', () => {
     expect(onExitClaude).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('InputBar: подсказка-призрак', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    invoke.mockResolvedValue([])
+    resetHistory(['git status', 'git checkout main'])
+  })
+  const ghost = (c: HTMLElement) => c.querySelector('.in-ghost-rest')?.textContent ?? null
+
+  it('остаток свежей записи истории после курсора; → принимает всё', () => {
+    const { container, set, key, ta } = setup()
+    set('git c')
+    expect(ghost(container)).toBe('heckout main')
+    key('ArrowRight')
+    expect(ta.value).toBe('git checkout main')
+    expect(ghost(container)).toBeNull()
+  })
+
+  it('⌥→ — следующее слово; набор обновляет; esc скрывает до правки', () => {
+    const { container, set, key, ta } = setup()
+    set('gi')
+    key('ArrowRight', { altKey: true })
+    expect(ta.value).toBe('git')
+    set('git s')
+    expect(ghost(container)).toBe('tatus')
+    key('Escape')
+    expect(ghost(container)).toBeNull()
+    set('git st')
+    expect(ghost(container)).toBe('atus')
+  })
+
+  it('нет на пустой строке, курсор не в конце, в режиме Claude, во время IME', () => {
+    const { container, set, ed, ref } = setup()
+    set('')
+    expect(ghost(container)).toBeNull()
+    set('git c', 2)
+    expect(ghost(container)).toBeNull()
+    set('git c')
+    fireEvent.compositionStart(ed)
+    expect(ghost(container)).toBeNull()
+    fireEvent.compositionEnd(ed)
+    expect(ghost(container)).toBe('heckout main')
+    act(() => void ref.current!.insertTokens([], { claude: true }))
+    expect(ghost(container)).toBeNull()
+  })
+})
