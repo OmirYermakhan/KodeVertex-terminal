@@ -27,6 +27,11 @@ export interface Settings {
   notifyLongCommands: boolean
   /** Режим разрешений Claude: применяется к следующей запущенной сессии. */
   claudePermissionMode: ClaudePermissionMode
+  /**
+   * Подсказка следующего сообщения в режиме Claude (`claude --prompt-suggestions`): после хода —
+   * серым в пустом поле. Включение — со следующего запуска сессии, выключение прячет сразу.
+   */
+  claudePromptSuggestions: boolean
 }
 
 export const DEFAULTS: Settings = {
@@ -43,6 +48,7 @@ export const DEFAULTS: Settings = {
   notifySubagents: false,
   notifyLongCommands: true,
   claudePermissionMode: 'acceptEdits',
+  claudePromptSuggestions: true,
 }
 
 const THEME_IDS: ThemeId[] = ['kv', 'warm', 'cold', 'light', 'as']
@@ -90,6 +96,7 @@ export function normalizeSettings(raw: unknown): Settings {
     claudePermissionMode: CLAUDE_PERMISSION_MODES.includes(r.claudePermissionMode as ClaudePermissionMode)
       ? (r.claudePermissionMode as ClaudePermissionMode)
       : DEFAULTS.claudePermissionMode,
+    claudePromptSuggestions: bool(r.claudePromptSuggestions, DEFAULTS.claudePromptSuggestions),
   }
 }
 

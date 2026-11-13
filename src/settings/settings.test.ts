@@ -5,7 +5,7 @@ import { applyTheme } from '../theme/applyTheme'
 
 describe('settings', () => {
   it('defaults', () => {
-    expect(DEFAULTS).toEqual({ theme: 'as', textFont: 'Inter', codeFont: 'JetBrains Mono', textSize: 16, codeSize: 13, lineHeight: 1.7, ligatures: true, pathCompletions: true, notifySystem: true, notifySound: true, notifySubagents: false, notifyLongCommands: true, claudePermissionMode: 'acceptEdits' })
+    expect(DEFAULTS).toEqual({ theme: 'as', textFont: 'Inter', codeFont: 'JetBrains Mono', textSize: 16, codeSize: 13, lineHeight: 1.7, ligatures: true, pathCompletions: true, notifySystem: true, notifySound: true, notifySubagents: false, notifyLongCommands: true, claudePermissionMode: 'acceptEdits', claudePromptSuggestions: true })
     expect(normalizeSettings(undefined)).toEqual(DEFAULTS)
     expect(normalizeSettings('мусор')).toEqual(DEFAULTS)
   })
@@ -15,6 +15,11 @@ describe('settings', () => {
     expect(normalizeSettings({ claudePermissionMode: 'bypassPermissions' }).claudePermissionMode).toBe('bypassPermissions')
     expect(normalizeSettings({ claudePermissionMode: 'plan' }).claudePermissionMode).toBe('acceptEdits')
     expect(normalizeSettings({ claudePermissionMode: 1 }).claudePermissionMode).toBe('acceptEdits')
+  })
+  it('подсказка следующего сообщения: по умолчанию вкл., только boolean', () => {
+    expect(normalizeSettings({}).claudePromptSuggestions).toBe(true)
+    expect(normalizeSettings({ claudePromptSuggestions: false }).claudePromptSuggestions).toBe(false)
+    expect(normalizeSettings({ claudePromptSuggestions: 'no' }).claudePromptSuggestions).toBe(true)
   })
   it('maps legacy SF Mono to the ui-monospace keyword', () => {
     expect(normalizeSettings({ codeFont: 'SF Mono' }).codeFont).toBe('ui-monospace')

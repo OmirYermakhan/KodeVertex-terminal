@@ -124,6 +124,34 @@ export interface ClaudeState {
   epoch: number
   /** Точки правки сообщений «Вы»: индекс элемента → точка. */
   edits: Record<number, EditPoint>
+  /**
+   * Подсказка следующего сообщения (`prompt_suggestion` после хода, `--prompt-suggestions`):
+   * after — время конца хода, к которому она относится. null — нет (новый ход, отправка, убрана).
+   */
+  suggestion?: Suggestion | null
+  /** Время последнего `result` (конца хода); подсказка относится к нему. */
+  turnEndAt?: number
+}
+
+export interface Suggestion {
+  text: string
+  after: number
+}
+
+/** Подсказка длиннее не показывается (CLI сам отсекает от 100 символов). */
+const SUGGESTION_MAX = 200
+
+/** `prompt_suggestion`: только между ходами (ничего не идёт), одна строка. */
+function onSuggestion(s: ClaudeState, ev: Rec): ClaudeState {
+  const text = strOr(ev.suggestion).trim()
+  if (!text || text.includes('\n') || text.length > SUGGESTION_MAX) return s
+  if (s.busy || s.pending > 0 || s.turnEndAt === undefined) return s
+  return { ...s, suggestion: { text, after: s.turnEndAt } }
+}
+
+/** Подсказку убрали (набор, esc, вставка). */
+export function dropSuggestion(s: ClaudeState): ClaudeState {
+  return s.suggestion ? { ...s, suggestion: null } : s
 }
 
 const MAIN = 'main'
@@ -174,7 +202,7 @@ export function initialClaude(): ClaudeState {
 
 /** Новая сессия (другой каталог, --resume не удался): прежние сообщения больше не правятся. */
 export function newSession(s: ClaudeState): ClaudeState {
-  return { ...s, sessionId: null, chain: null, epoch: s.epoch + 1 }
+  return { ...s, sessionId: null, chain: null, epoch: s.epoch + 1, suggestion: null }
 }
 
 /**
@@ -221,6 +249,7 @@ export function userSent(s: ClaudeState, text: string, now: number, tokens?: Att
     busy: true,
     pending: s.pending + 1,
     currentAgentId: MAIN,
+    suggestion: null,
     items: [...s.items, tokens && tokens.length > 0 ? { type: 'user', text, tokens } : { type: 'user', text }],
   }
   return patchAgent(next, MAIN, { status: 'running', startedAt: now, endedAt: null, now: 'Думает' })
@@ -449,6 +478,9 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
     busy: pending > 0,
     costUsd: cost,
     contextMax,
+    // Подсказка прежнего хода устарела; новая придёт после этого result.
+    suggestion: null,
+    turnEndAt: now,
     sessionId: strOr(ev.session_id) || s.sessionId,
     currentAgentId: pending > 0 ? MAIN : null,
     agents: s.agents.map((a) =>
@@ -688,6 +720,8 @@ export function reduceClaude(s: ClaudeState, line: string | object, now: number)
         return onControl(s, ev)
       case 'control_request':
         return onControlRequest(s, ev, now)
+      case 'prompt_suggestion':
+        return onSuggestion(s, ev)
       case 'control_cancel_request':
         return typeof ev.request_id === 'string' ? cancelPrompts(s, ev.request_id) : s
       default:

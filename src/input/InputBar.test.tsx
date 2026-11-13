@@ -1197,3 +1197,133 @@ describe('InputBar: поиск ⌃R по истории', () => {
     expect(p.onAsk).toHaveBeenCalledWith('почему тест падает?')
   })
 })
+
+describe('подсказка следующего сообщения (режим Claude)', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    invoke.mockResolvedValue([])
+    resetHistory()
+  })
+
+  type Props = Parameters<typeof InputBar>[0]
+  const sugg = (text = 'спасибо, до завтра', after = Date.now() + 60_000) => ({ text, after })
+  function mount(over: Partial<Props> = {}) {
+    const onDismissSuggestion = vi.fn()
+    const queue = { recall: vi.fn(() => null), sendNext: vi.fn(() => false), dismissHint: vi.fn(() => false) }
+    const base = { initialClaudeMode: true, suggestion: sugg(), onDismissSuggestion, queue, ...over }
+    const r = setup(base)
+    const shown = () => r.container.querySelector('.in-sugg')?.textContent ?? null
+    const rerender = (o: Partial<Props>) => r.rerender(<InputBar ref={r.ref} {...r.p} {...base} {...o} />)
+    return { ...r, onDismissSuggestion, queue, shown, rerender }
+  }
+
+  it('серым в пустом поле вместо плейсхолдера, курсор — в начале (перед текстом)', () => {
+    const { container, ref, shown } = mount()
+    expect(shown()).toBe('спасибо, до завтра')
+    expect(container.querySelector('.input .ph:not(.in-sugg)')).toBeNull()
+    expect(container.querySelector('.in-sugg .in-ghost-rest')!.textContent).toBe('спасибо, до завтра')
+    act(() => ref.current!.focus())
+    expect(container.querySelector('.in-sugg .caret')).not.toBeNull()
+  })
+
+  it('в фокусе первая буква — внутри курсора (видна, инвертирована), остальное серым', () => {
+    const { container, ref } = mount()
+    act(() => ref.current!.focus())
+    expect(container.querySelector('.in-sugg .caret')!.textContent).toBe('с')
+    expect(container.querySelector('.in-sugg .in-ghost-rest')!.textContent).toBe('пасибо, до завтра')
+    expect(container.querySelector('.in-sugg')!.textContent).toBe('спасибо, до завтра')
+  })
+
+  it('программная смена строки (restore после отмены правки, load) — не набор: подсказку не глушит', () => {
+    const { ref, shown, rerender, onDismissSuggestion } = mount({ suggestion: null })
+    const turnEnd = Date.now() - 1000
+    act(() => ref.current!.restore({ doc: { text: '', tokens: [] }, claude: true }))
+    rerender({ suggestion: sugg('спасибо', turnEnd) })
+    expect(shown()).toBe('спасибо')
+    expect(onDismissSuggestion).not.toHaveBeenCalled()
+  })
+
+  it('в оболочке не показывается', () => {
+    expect(mount({ initialClaudeMode: false }).shown()).toBeNull()
+  })
+
+  it('при ответе на вопрос и при правке сообщения не показывается', () => {
+    const { shown, rerender } = mount()
+    expect(shown()).not.toBeNull()
+    rerender({ answer: { onSubmit: vi.fn(), onCancel: vi.fn() } })
+    expect(shown()).toBeNull()
+    rerender({ answer: null, edit: { onSubmit: vi.fn(), onCancel: vi.fn() } })
+    expect(shown()).toBeNull()
+    rerender({ edit: null, suggestion: null })
+    expect(shown()).toBeNull()
+  })
+
+  it('→ принимает целиком в поле, не отправляя', () => {
+    const { key, ta, p, shown, onDismissSuggestion } = mount()
+    key('ArrowRight')
+    expect(ta.value).toBe('спасибо, до завтра')
+    expect(p.onAsk).not.toHaveBeenCalled()
+    expect(onDismissSuggestion).toHaveBeenCalled()
+    expect(shown()).toBeNull()
+  })
+
+  it('⇥ принимает целиком в поле, не отправляя; ↵ после принятия — отправляет', () => {
+    const { key, ta, p } = mount()
+    key('Tab')
+    expect(ta.value).toBe('спасибо, до завтра')
+    expect(p.onAsk).not.toHaveBeenCalled()
+    key('Enter')
+    expect(p.onAsk).toHaveBeenCalledWith('спасибо, до завтра')
+  })
+
+  it('↵ на пустом поле с подсказкой — как без неё: подсказка не уходит', () => {
+    const { key, ta, p, queue, shown } = mount()
+    key('Enter')
+    expect(p.onAsk).not.toHaveBeenCalled()
+    expect(queue.sendNext).toHaveBeenCalled()
+    expect(ta.value).toBe('')
+    expect(shown()).toBe('спасибо, до завтра')
+  })
+
+  it('набор убирает подсказку', () => {
+    const { set, shown, onDismissSuggestion } = mount()
+    set('н')
+    expect(shown()).toBeNull()
+    expect(onDismissSuggestion).toHaveBeenCalled()
+  })
+
+  it('esc убирает подсказку, режим Claude остаётся', () => {
+    const { key, container, onDismissSuggestion } = mount()
+    key('Escape')
+    expect(onDismissSuggestion).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('.in-mode')).not.toBeNull()
+  })
+
+  it('вставка убирает подсказку', () => {
+    const { ed, onDismissSuggestion } = mount()
+    fireEvent.paste(ed, { clipboardData: { getData: () => 'текст', types: ['text/plain'], items: [] } })
+    expect(onDismissSuggestion).toHaveBeenCalled()
+  })
+
+  it('гонка: подсказка пришла, когда строку уже начали набирать, — игнор, даже если поле снова пусто', () => {
+    const { set, shown, rerender, onDismissSuggestion } = mount({ suggestion: null })
+    const turnEnd = Date.now() - 1000
+    set('сейчас спрошу')
+    set('')
+    rerender({ suggestion: sugg('спасибо', turnEnd) })
+    expect(onDismissSuggestion).toHaveBeenCalled()
+    // Набирают прямо сейчас — тоже игнор.
+    onDismissSuggestion.mockClear()
+    set('пишу')
+    rerender({ suggestion: sugg('спасибо') })
+    expect(onDismissSuggestion).toHaveBeenCalled()
+    expect(shown()).toBeNull()
+  })
+
+  it('подсказка после конца хода без набора — показывается', () => {
+    const { shown, rerender, onDismissSuggestion } = mount({ suggestion: null })
+    rerender({ suggestion: sugg('добавь тесты', Date.now()) })
+    expect(shown()).toBe('добавь тесты')
+    expect(onDismissSuggestion).not.toHaveBeenCalled()
+  })
+})
