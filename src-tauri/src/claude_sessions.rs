@@ -8,7 +8,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -116,19 +116,22 @@ pub fn valid_id(id: &str) -> bool {
   !id.is_empty() && id.len() <= 100 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
-/// Строки файла с позиции `from` (с середины файла — первая, неполная, пропускается), не больше
+/// Строки файла с позиции `from` (с середины строки — первая, неполная, пропускается), не больше
 /// `max` байт; строки длиннее MAX_LINE не отдаются. f → false — хватит.
 fn each_line(path: &Path, from: u64, max: u64, mut f: impl FnMut(&[u8]) -> bool) -> std::io::Result<()> {
   let mut file = File::open(path)?;
+  // from посреди строки (перед ним не `\n`) — первая строка неполная.
+  let mut skip_first = false;
   if from > 0 {
-    file.seek(SeekFrom::Start(from))?;
+    file.seek(SeekFrom::Start(from - 1))?;
+    let mut prev = [0u8; 1];
+    file.read_exact(&mut prev)?;
+    skip_first = prev[0] != b'\n';
   }
   let mut r = BufReader::with_capacity(64 * 1024, file);
   let mut read: u64 = 0;
   let mut line: Vec<u8> = Vec::new();
   let mut too_long = false;
-  // С середины файла первая строка неполная.
-  let mut skip_first = from > 0;
   loop {
     if read >= max {
       return Ok(());
@@ -371,7 +374,8 @@ pub fn read_history(root: &Path, cwd: &str, id: &str) -> Result<SessionHistory, 
   let path = project_dirs(root, cwd)
     .into_iter()
     .map(|d| d.join(format!("{id}.jsonl")))
-    .find(|p| p.is_file())
+    // Символическая ссылка вместо файла не читается (как и в списке).
+    .find(|p| fs::symlink_metadata(p).is_ok_and(|m| m.is_file()))
     .ok_or("разговор не найден")?;
   let len = fs::metadata(&path).map_err(|e| e.to_string())?.len();
   let from = len.saturating_sub(MAX_SCAN);
@@ -596,6 +600,31 @@ mod tests {
     })
     .unwrap();
     assert_eq!(tail, vec![Some("три".to_string())]);
+    // from ровно на начале строки — она целая и не пропускается.
+    let mut exact = Vec::new();
+    each_line(&p, len - (user("три").len() as u64 + 1), 1 << 20, |l| {
+      exact.push(message_of(l).map(|m| m.text));
+      true
+    })
+    .unwrap();
+    assert_eq!(exact, vec![Some("три".to_string())]);
+    let mut two = Vec::new();
+    each_line(&p, len - (user("три").len() as u64 + user("два").len() as u64 + 2), 1 << 20, |l| {
+      two.push(message_of(l).map(|m| m.text));
+      true
+    })
+    .unwrap();
+    assert_eq!(two, vec![Some("два".to_string()), Some("три".to_string())]);
+  }
+
+  #[test]
+  fn history_rejects_symlinked_file() {
+    let (t, dir, cwd) = setup();
+    let other = t.path().join("elsewhere.jsonl");
+    fs::write(&other, format!("{}\n", user("чужой файл"))).unwrap();
+    std::os::unix::fs::symlink(&other, dir.join("link.jsonl")).unwrap();
+    assert!(list_sessions(t.path(), cwd).is_empty());
+    assert!(read_history(t.path(), cwd, "link").is_err());
   }
 
   #[test]
@@ -634,7 +663,7 @@ mod tests {
 
   #[test]
   fn valid_ids() {
-    assert!(valid_id("1ee32776-628a-4981-914a-adcd257ba14d"));
+    assert!(valid_id("00000000-0000-4000-8000-000000000001"));
     assert!(!valid_id("a/b"));
     assert!(!valid_id("a.b"));
   }

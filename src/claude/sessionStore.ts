@@ -475,27 +475,40 @@ export async function listSessions(paneId: string, paneCwd: string | undefined):
   return { rows, current: get(paneId).state.sessionId }
 }
 
+/** Номер последнего `/resume` панели: история, дочитанная к более раннему, не применяется. */
+const resumeSeqs = new Map<string, number>()
+
 /**
- * `/resume` ↵: прежний процесс останавливается (как `/clear`), его история читается из файла
- * разговора и ложится в ленту карточками, процесс запускается заново с `--resume <id>`.
- * Модель и усилие из `/model` остаются. false — каталог неизвестен.
+ * `/resume` ↵: сначала читается история разговора; не прочиталась — текущий разговор остаётся,
+ * в ленте карточка ошибки. Прочиталась — прежний процесс останавливается (как `/clear`),
+ * onReplace(n) прячет в ленте элементы до n, история ложится карточками, процесс запускается
+ * заново с `--resume <id>`. Два `/resume` подряд — применяется последний. Модель и усилие из
+ * `/model` остаются. false — каталог неизвестен или чтение не удалось / устарело.
  */
-export async function resumeClaude(paneId: string, paneCwd: string | undefined, s: SessionInfo): Promise<boolean> {
-  const cwd = switchCwd(paneId, paneCwd)
+export async function resumeClaude(
+  paneId: string,
+  paneCwd: string | undefined,
+  s: SessionInfo,
+  onReplace?: (from: number) => void,
+): Promise<boolean> {
+  const seq = (resumeSeqs.get(paneId) ?? 0) + 1
+  resumeSeqs.set(paneId, seq)
+  const cwd = paneCwd ?? get(paneId).cwd
   if (cwd === null) {
     patchState(paneId, (x) => failed(x, NO_CWD, Date.now()))
     return false
   }
-  clearClaude(paneId)
   let history: SessionHistory
   try {
     history = await invoke<SessionHistory>('claude_session_history', { cwd, id: s.id })
   } catch (e) {
-    addError(paneId, `Не удалось прочитать разговор: ${errText(e)}`)
-    return true
+    if (resumeSeqs.get(paneId) === seq) addError(paneId, `Не удалось прочитать разговор: ${errText(e)}`)
+    return false
   }
-  // Пока читали, могли начать другое (новый вопрос, ещё один /resume): не перебиваем.
-  if (procs.has(paneId) || get(paneId).state.sessionId !== null || get(paneId).cwd !== cwd) return true
+  if (resumeSeqs.get(paneId) !== seq) return false
+  switchCwd(paneId, cwd)
+  onReplace?.(get(paneId).state.items.length)
+  clearClaude(paneId)
   patchState(paneId, (x) => ({
     ...x,
     sessionId: s.id,

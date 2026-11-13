@@ -713,7 +713,9 @@ describe('resumeClaude (/resume)', () => {
     enterClaude('p', '/w')
     await askClaude('p', '/w', 'текущий')
     const before = items('p').length
-    expect(await resumeClaude('p', '/w', session)).toBe(true)
+    const onReplace = vi.fn()
+    expect(await resumeClaude('p', '/w', session, onReplace)).toBe(true)
+    expect(onReplace).toHaveBeenCalledWith(before)
     expect(calls('claude_stop')).toEqual([['claude_stop', { id: 'proc-1' }]])
     expect(calls('claude_session_history')[0][1]).toEqual({ cwd: '/w', id: 'sess-1' })
     expect(items('p').slice(before)).toEqual([
@@ -733,11 +735,40 @@ describe('resumeClaude (/resume)', () => {
     expect(items('p').slice(n)).toEqual([{ type: 'user', text: 'дальше' }])
   })
 
-  it('историю не прочитать — карточка ошибки, процесс не запускается', async () => {
-    invoke.mockImplementation((cmd: string) => (cmd === 'claude_session_history' ? Promise.reject(new Error('разговор не найден')) : Promise.resolve(undefined)))
-    await resumeClaude('p', '/w', session)
+  it('историю не прочитать — текущий разговор остаётся (процесс, сессия, лента), карточка ошибки', async () => {
+    invoke.mockImplementation((cmd: string) =>
+      cmd === 'claude_session_history' ? Promise.reject(new Error('разговор не найден')) : Promise.resolve(cmd === 'claude_start' ? 'proc-1' : undefined),
+    )
+    enterClaude('p', '/w')
+    await askClaude('p', '/w', 'текущий')
+    useClaudeSessions.setState((st) => ({ sessions: { ...st.sessions, p: { ...st.sessions.p, state: { ...st.sessions.p.state, sessionId: 'cur' } } } }))
+    const before = items('p')
+    const onReplace = vi.fn()
+    expect(await resumeClaude('p', '/w', session, onReplace)).toBe(false)
+    expect(onReplace).not.toHaveBeenCalled()
+    expect(calls('claude_stop')).toHaveLength(0)
+    expect(useClaudeSessions.getState().sessions.p.state.sessionId).toBe('cur')
+    expect(items('p').slice(0, before.length)).toEqual(before)
     expect(items('p').at(-1)).toEqual({ type: 'error', text: 'Не удалось прочитать разговор: разговор не найден' })
-    expect(calls('claude_start')).toHaveLength(0)
+    expect(calls('claude_start')).toHaveLength(1)
+  })
+
+  it('два /resume подряд — применяется последний, хоть первый и дочитался позже', async () => {
+    const pending: Record<string, (v: unknown) => void> = {}
+    invoke.mockImplementation((cmd: string, a: { id?: string }) =>
+      cmd === 'claude_session_history' ? new Promise((r) => (pending[a.id!] = r)) : Promise.resolve(cmd === 'claude_start' ? 'proc-1' : undefined),
+    )
+    const first = resumeClaude('p', '/w', { ...session, id: 'old-1', title: 'Первый' })
+    const second = resumeClaude('p', '/w', { ...session, id: 'new-2', title: 'Второй' })
+    pending['new-2'](history)
+    expect(await second).toBe(true)
+    pending['old-1'](history)
+    expect(await first).toBe(false)
+    await flush()
+    expect(useClaudeSessions.getState().sessions.p.state.sessionId).toBe('new-2')
+    expect(calls('claude_start')).toHaveLength(1)
+    expect(calls('claude_start')[0][1]).toMatchObject({ resume: 'new-2' })
+    expect(items('p').filter((i) => i.type === 'note')).toEqual([{ type: 'note', text: 'Разговор продолжен · Второй' }])
   })
 
   it('каталог неизвестен — false и карточка ошибки', async () => {

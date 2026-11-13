@@ -848,16 +848,17 @@ export function TerminalPane(p: TerminalPaneProps) {
     return enterClaude(p.paneId, cwdRef.current)
   }, [p.paneId])
   const onExitClaude = useCallback(() => exitClaude(p.paneId), [p.paneId])
-  // `/resume`: прошлые разговоры каталога панели; выбранный — с чистой ленты (как `/clear`), его история — карточками.
+  // `/resume`: прошлые разговоры каталога панели; выбранный — с чистой ленты (как `/clear`), его история —
+  // карточками. Лента чистится, только когда история прочитана (иначе текущий разговор остаётся).
   const onListSessions = useCallback(() => listSessions(p.paneId, cwdRef.current), [p.paneId])
   const onResume = useCallback(
     (s: SessionInfo) => {
       if (!claudeCwdKnown(p.paneId, cwdRef.current)) return false
-      const n = useClaudeSessions.getState().sessions[p.paneId]?.state.items.length ?? 0
-      claudeFrom.current = n
-      setItems((it) => it.filter((x) => (x.kind === 'shell' ? x.running : claudeIndex(x.id) >= n)))
-      setSelected(null)
-      void resumeClaude(p.paneId, cwdRef.current, s)
+      void resumeClaude(p.paneId, cwdRef.current, s, (n) => {
+        claudeFrom.current = n
+        setItems((it) => it.filter((x) => (x.kind === 'shell' ? x.running : claudeIndex(x.id) >= n)))
+        setSelected(null)
+      })
       return true
     },
     [p.paneId],
