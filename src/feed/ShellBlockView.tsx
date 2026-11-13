@@ -84,7 +84,18 @@ export function HoverActions({
   )
 }
 
+/** Подпись строки с выводом оболочки в простое (сообщения о фоновых заданиях). */
+export const NOTICE_LABEL = 'фоновая задача'
+
 export const ShellBlockView = memo(function ShellBlockView({ block, selected, live, onAttach, onCopy }: ShellBlockViewProps) {
+  if (block.notice !== undefined) {
+    return (
+      <div className="blk-notice" data-block-id={block.id}>
+        <span className="lbl">{NOTICE_LABEL}</span>
+        <span className="txt">{block.notice}</span>
+      </div>
+    )
+  }
   const failed = block.exitCode !== null && block.exitCode !== 0
   const cls = ['blk', selected && 'sel', failed && 'err', block.running && 'run'].filter(Boolean).join(' ')
   return (

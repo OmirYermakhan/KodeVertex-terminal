@@ -271,6 +271,11 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .blk .out { white-space: pre-wrap; overflow-wrap: anywhere; font-variant-ligatures: var(--liga); }
 .blk-more { font: inherit; font-size: 11px; color: var(--accText); background: transparent; border: 1px solid var(--rule); border-radius: 6px; padding: 2px 10px; margin-top: 6px; cursor: pointer; }
 .blk-more:hover { border-color: var(--acc); }
+/* Вывод оболочки в простое (`[1]  + done  sleep 1`): тихая строка без рамки. */
+.blk-notice { display: flex; gap: 8px; align-items: baseline; max-width: 76ch; margin: -4px 0 10px; padding: 0 13px; font-family: var(--font-code); font-size: 11px; line-height: 1.6; color: var(--muted); }
+.blk-notice .lbl { flex: none; }
+.blk-notice .lbl::after { content: ' ·'; }
+.blk-notice .txt { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
 /* Живой xterm: в running-блоке — по содержимому (высоту задаёт TerminalPane); при alt screen — поверх панели. */
 .live { overflow: hidden; }
 .live-host { width: 100%; }

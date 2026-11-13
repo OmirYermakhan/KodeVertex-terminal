@@ -20,7 +20,7 @@ import { isLocalHost, parseOsc7Url, unmark } from './osc'
 import { useHome } from '../status/useGitInfo'
 import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
-import { applyShell, claudeIndex, claudeItemId, commandBytes, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
+import { applyShell, claudeIndex, claudeItemId, commandBytes, firstUnfinished, idleNotice, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
 import { editClaude, dismissQueueHint, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
 import { aliasOf } from '../claude/models'
@@ -57,6 +57,8 @@ const STICK_PX = 24
 const DRAG_MIN_PX = 4
 /** После ↵ строка ввода ждёт ответа оболочки (133;C или 133;A) не дольше этого. */
 const AWAIT_SHELL_MS = 2000
+/** Вывод в простое собирается в строку «фоновая задача», когда оболочка замолчала на столько. */
+const IDLE_NOTICE_MS = 150
 
 export interface TerminalPaneProps {
   paneId: string
@@ -98,6 +100,38 @@ function contentLines(term: Terminal): number {
     if (buf.getLine(i)?.translateToString(true).trim()) return i + 1
   }
   return 0
+}
+
+/** Начало простоя (133;A): строка буфера, колонка курсора и текст строки до неё. */
+type IdleMark = { line: number; col: number; prefix: string }
+
+function idleMark(term: Terminal): IdleMark {
+  const buf = term.buffer.active
+  const line = buf.baseY + buf.cursorY
+  const col = buf.cursorX
+  return { line, col, prefix: buf.getLine(line)?.translateToString(false, 0, col) ?? '' }
+}
+
+/**
+ * Что оболочка напечатала в простое после метки: законченные строки до строки курсора. Строка курсора —
+ * строка ZLE (там перерисовывается приглашение), её не берём. Возвращает текст и метку для следующего раза.
+ */
+function idleOutput(term: Terminal, from: IdleMark): { text: string; next: IdleMark } {
+  const buf = term.buffer.active
+  const cur = buf.baseY + buf.cursorY
+  const next = { line: cur, col: 0, prefix: '' }
+  // Буфер очищен или прокрутка обрезала начало — старая метка недействительна.
+  if (from.line > cur) return { text: '', next }
+  let text = ''
+  for (let i = from.line; i < cur; i++) {
+    const l = buf.getLine(i)
+    if (!l) continue
+    // Первая строка — с колонки приглашения, если её начало не переписано (иначе целиком).
+    const col = i === from.line && from.col > 0 && l.translateToString(false, 0, from.col) === from.prefix ? from.col : 0
+    if (i > from.line && !l.isWrapped) text += '\n'
+    text += l.translateToString(true, col)
+  }
+  return { text, next }
 }
 
 /** Конец команды: вывод из буфера xterm → HTML блока (только из SerializeAddon). */
@@ -217,6 +251,10 @@ export function TerminalPane(p: TerminalPaneProps) {
   const sentRef = useRef<string | null>(null)
   /** Строка принята ZLE (133;I), но команда не запустилась (ещё нет C): её вывод — отдельный блок. */
   const acceptedRef = useRef<string | null>(null)
+  /** Оболочка в простое (после 133;A, до отправки команды): откуда читать её вывод, см. idleOutput. */
+  const idleRef = useRef<IdleMark | null>(null)
+  /** Собрать вывод простоя в строку «фоновая задача» (ставится эффектом xterm). */
+  const flushIdleRef = useRef<() => void>(() => {})
 
   // Claude-сессия панели (стор по paneId): её элементы — в той же ленте, по времени появления.
   const claude = useClaudeSessions((st) => st.sessions[p.paneId])
@@ -298,6 +336,22 @@ export function TerminalPane(p: TerminalPaneProps) {
       const { html, lines } = frozen()
       if (lines > 0) setItems((it) => applyShell(it, { t: 'stray', command, cwd: cwdRef.current ?? '', at: Date.now(), html, lines }))
     }
+    // Вывод в простое — сообщения zsh о фоновых заданиях (`[1]  + done  sleep 1`): строкой «фоновая задача».
+    let idleTimer: ReturnType<typeof setTimeout> | undefined
+    const flushIdle = () => {
+      clearTimeout(idleTimer)
+      const from = idleRef.current
+      if (!from || runningRef.current || term.buffer.active.type === 'alternate') return
+      const { text, next } = idleOutput(term, from)
+      idleRef.current = next
+      const notice = idleNotice(text)
+      if (notice !== null) setItems((it) => applyShell(it, { t: 'notice', text: notice, cwd: cwdRef.current ?? '', at: Date.now() }))
+    }
+    flushIdleRef.current = flushIdle
+    const endIdle = () => {
+      clearTimeout(idleTimer)
+      idleRef.current = null
+    }
     const endBlock = (exitCode: number | null) => {
       const at = Date.now()
       runningRef.current = false
@@ -319,6 +373,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       if (ev.t === 'accepted') {
         // Во время команды (vared и т. п.) — это не наша строка ввода.
         if (runningRef.current) return true
+        endIdle()
         // Эхо принятой строки стираем: дальше в xterm только то, что напечатает оболочка.
         term.reset()
         acceptedRef.current = sentRef.current
@@ -326,22 +381,33 @@ export function TerminalPane(p: TerminalPaneProps) {
         return true
       }
       if (ev.t === 'continue') {
+        endIdle()
         setContinuation(true)
         setAwaitingShell(false)
         return true
       }
-      // Приглашение во время команды (ssh на хост со своей интеграцией) — не наше: блок не трогаем.
-      if (ev.t === 'prompt' && runningRef.current) return true
+      // Подписанное приглашение посреди команды — снова наш zsh: `exec zsh`, `omz reload` или вложенный
+      // zsh (метку они получают из окружения команды). 133;D такой команде не придёт — блок кончается
+      // с неизвестным кодом. Чужое (ssh на хост со своей интеграцией) без метки сюда не доходит.
+      // В alt screen (tmux, screen) приглашение рисует программа поверх — блок не трогаем.
+      if (ev.t === 'prompt' && runningRef.current) {
+        if (term.buffer.active.type === 'alternate') return true
+        endBlock(null)
+      }
       setContinuation(false)
       setAwaitingShell(false)
       if (ev.t === 'prompt') {
         // Строка принята, но команда не запустилась (ошибка разбора): её вывод — блоком.
         if (acceptedRef.current !== null) flushStray(acceptedRef.current)
         acceptedRef.current = null
+        // Приглашение снова (⌃C в простое и т. п.): что было напечатано до него — собираем.
+        flushIdle()
+        idleRef.current = idleMark(term)
         return true
       }
       const at = Date.now()
       if (ev.t === 'start') {
+        endIdle()
         acceptedRef.current = null
         // Стираем эхо набранной строки ZLE — в живом терминале только вывод команды.
         term.reset()
@@ -364,6 +430,10 @@ export function TerminalPane(p: TerminalPaneProps) {
     })
     term.onWriteParsed(() => {
       if (runningRef.current) setLivePx(liveContentHeight(term))
+      else if (idleRef.current) {
+        clearTimeout(idleTimer)
+        idleTimer = setTimeout(flushIdle, IDLE_NOTICE_MS)
+      }
     })
 
     term.attachCustomKeyEventHandler((e) => {
@@ -441,6 +511,8 @@ export function TerminalPane(p: TerminalPaneProps) {
     return () => {
       disposed = true
       clearTimeout(resizeTimer)
+      clearTimeout(idleTimer)
+      flushIdleRef.current = () => {}
       ro.disconnect()
       feedRo.disconnect()
       host.removeEventListener('paste', onPaste, true)
@@ -636,6 +708,9 @@ export function TerminalPane(p: TerminalPaneProps) {
     (cmd: string) => {
       const h = handleRef.current
       if (!h) return false
+      // Напечатанное в простое — до эха команды; дальше вывод уже её.
+      flushIdleRef.current()
+      idleRef.current = null
       sentRef.current = cmd
       setAwaitingShell(true)
       h.write(commandBytes(cmd))

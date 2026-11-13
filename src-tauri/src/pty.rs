@@ -105,6 +105,11 @@ impl PtyManager {
         cmd.env_remove(k);
       }
     }
+    // Приложение, запущенное из tmux/screen: наша оболочка не внутри них (а с этими
+    // переменными интеграция zsh решила бы, что терминал чужой).
+    for k in ["TMUX", "TMUX_PANE", "STY"] {
+      cmd.env_remove(k);
+    }
     let orig_zdotdir = std::env::var("ZDOTDIR").ok();
     for (k, v) in shell::session_env(&opts.zdotdir, orig_zdotdir).into_iter().chain(opts.env) {
       cmd.env(k, v);
@@ -732,6 +737,159 @@ pub(crate) mod tests {
     m.kill(&id).unwrap();
   }
 
+  /// Команда строкой ввода; ждёт `want` после неё.
+  fn run_pasted(m: &PtyManager, id: &str, out: &Output, cmd: &str, want: &str) -> usize {
+    let from = out.len();
+    m.write(id, paste_cmd(cmd).as_bytes()).unwrap();
+    assert!(out.wait_for(want.as_bytes(), from), "нет {want:?} после {cmd:?}, вывод: {:?}", out.text());
+    from
+  }
+
+  /// `echo hi` после `exec …` — обычный законченный блок: C, вывод hi, D;0, A.
+  fn assert_echo_block(m: &PtyManager, id: &str, out: &Output, mk: &str) {
+    let from = run_pasted(m, id, out, "echo hi", &osc(mk, &["D;0", "A"]));
+    let c = find_from(out, &osc(mk, &[&format!("C;{}", b64("echo hi"))]), from).expect("нет 133;C");
+    let hi = find_from(out, "hi\r\n", c).expect("нет вывода hi");
+    let d = find_from(out, &osc(mk, &["D;0"]), hi).expect("нет 133;D;0");
+    assert!(c < hi && hi < d, "вывод: {:?}", out.text());
+  }
+
+  #[test]
+  fn exec_zsh_keeps_integration() {
+    let home = temp_home();
+    std::fs::write(home.path().join(".zshrc"), "alias kvtest='echo KV_OK'\n").unwrap();
+    let m = PtyManager::default();
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), 0));
+    for cmd in ["exec zsh", "exec -l zsh"] {
+      // Новая оболочка подписывает приглашение той же меткой; 133;D у `exec` не бывает.
+      let from = run_pasted(&m, &id, &out, cmd, &osc(&mk, &[&format!("C;{}", b64(cmd))]));
+      let c = find_from(&out, &osc(&mk, &[&format!("C;{}", b64(cmd))]), from).unwrap();
+      assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), c), "нет приглашения после {cmd:?}: {:?}", out.text());
+      assert!(find_from(&out, "\x1b]133;D;", c).is_none(), "вывод: {:?}", out.text());
+      assert_echo_block(&m, &id, &out, &mk);
+      // Пользовательский .zshrc прочитан один раз, ZDOTDIR у пользователя прежний.
+      run_pasted(&m, &id, &out, "kvtest", "KV_OK");
+      run_pasted(&m, &id, &out, "echo \"ZD=${ZDOTDIR-unset};\"", "ZD=unset;");
+      #[cfg(target_os = "macos")]
+      run_pasted(&m, &id, &out, "echo \"HF=$HISTFILE;\"", &format!("HF={}/.zsh_history;", home.path().display()));
+    }
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
+  fn exec_zsh_keeps_user_zdotdir() {
+    let home = temp_home();
+    let zd = home.path().join("zd");
+    std::fs::create_dir(&zd).unwrap();
+    // Как часто бывает: ~/.zshenv переносит конфиг в свой ZDOTDIR.
+    let zd_str = zd.to_string_lossy().into_owned();
+    std::fs::write(home.path().join(".zshenv"), format!("export ZDOTDIR='{zd_str}'\n")).unwrap();
+    std::fs::write(zd.join(".zshrc"), "print -r RC_READ\nalias kvtest='echo KV_OK'\n").unwrap();
+    let m = PtyManager::default();
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), 0));
+    let from = run_pasted(&m, &id, &out, "exec zsh", &osc(&mk, &[&format!("C;{}", b64("exec zsh"))]));
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), from + 1));
+    assert_echo_block(&m, &id, &out, &mk);
+    run_pasted(&m, &id, &out, "kvtest", "KV_OK");
+    run_pasted(&m, &id, &out, "echo \"ZD=$ZDOTDIR;\"", &format!("ZD={zd_str};"));
+    assert_eq!(out.text().matches("RC_READ").count(), 2, "по разу на запуск: {:?}", out.text());
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
+  fn nested_zsh_signs_markers_and_outer_shell_continues() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), 0));
+    let level = |out: &Output| {
+      let from = run_pasted(&m, &id, out, "echo \"L\"\"V=$SHLVL;\"", &osc(&mk, &["D;0", "A"]));
+      out.wait_number("LV=", from).expect("нет SHLVL")
+    };
+    let outer = level(&out);
+    let from = run_pasted(&m, &id, &out, "zsh", &osc(&mk, &[&format!("C;{}", b64("zsh"))]));
+    // Вложенная оболочка — с интеграцией: подписанное приглашение без 133;D внешней.
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), from + 1), "вывод: {:?}", out.text());
+    assert_eq!(level(&out), outer + 1);
+    // Выход вложенной: её `exit` заканчивает 133;D внешней, дальше всё как обычно.
+    run_pasted(&m, &id, &out, "exit", &osc(&mk, &["D;0", "A"]));
+    assert_eq!(level(&out), outer);
+    assert_echo_block(&m, &id, &out, &mk);
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
+  fn bash_from_zsh_has_no_markers() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1"), ("BASH_SILENCE_DEPRECATION_WARNING", "1")]));
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), 0));
+    let from = run_pasted(&m, &id, &out, "bash --norc --noprofile", &osc(&mk, &[&format!("C;{}", b64("bash --norc --noprofile"))]));
+    run(&m, &id, &out, "echo \"B=$BASH_VERSION\" | cut -c1-2\n", "B=");
+    m.write(&id, b"exit\n").unwrap();
+    assert!(out.wait_for(osc(&mk, &["D;0", "A"]).as_bytes(), from), "вывод: {:?}", out.text());
+    // Внутри bash маркеров не было.
+    let c = find_from(&out, "\x1b]133;C;", from).unwrap();
+    let d = find_from(&out, &osc(&mk, &["D;0"]), c).unwrap();
+    assert!(find_from(&out, "\x1b]133;A", c).is_some_and(|a| a > d), "вывод: {:?}", out.text());
+    assert_echo_block(&m, &id, &out, &mk);
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
+  fn foreign_prompt_marker_is_unsigned() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), 0));
+    // Чужой 133;A посреди команды (программа, ssh на хост со своей интеграцией) — без метки:
+    // терминал его игнорирует (unmark), блок кончается своим 133;D.
+    let from = run_pasted(&m, &id, &out, "printf '\\e]133;A\\a'; echo after", &osc(&mk, &["D;0", "A"]));
+    let foreign = find_from(&out, "\x1b]133;A\x07", from).expect("нет чужого маркера");
+    let after = find_from(&out, "after\r\n", foreign).expect("нет вывода after");
+    let d = find_from(&out, &osc(&mk, &["D;0"]), after).expect("нет 133;D;0");
+    assert!(foreign < after && after < d);
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
+  fn scripts_and_foreign_terminals_get_user_zdotdir() {
+    let home = temp_home();
+    std::fs::write(home.path().join(".zshenv"), "typeset -g ENV_READ=1\n").unwrap();
+    std::fs::write(
+      home.path().join("s.zsh"),
+      "print -r \"NI=${ZDOTDIR-unset};${KODEVERTEX_MARK-unset};${_kv_mark-unset};$ENV_READ;\"\n",
+    )
+    .unwrap();
+    let m = PtyManager::default();
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), 0));
+    // Скрипт zsh: .zshenv пользователя прочитан, ZDOTDIR и метка — не наши.
+    run_pasted(&m, &id, &out, "zsh s.zsh", "NI=unset;unset;unset;1;");
+    // Интерактивный zsh внутри tmux — без интеграции (обычное приглашение, маркеров нет).
+    run_pasted(&m, &id, &out, "TMUX=x zsh -i -c 'print -r \"T=${_kv_mark-none};\"'", "T=none;");
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
+  fn background_job_notice_is_printed_while_idle() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), 0));
+    let from = run_pasted(&m, &id, &out, "sleep 0.2 &", &osc(&mk, &["D;0", "A"]));
+    let prompt = osc(&mk, &["D;0", "A"]);
+    let a = find_from(&out, &prompt, from).unwrap() + prompt.len();
+    // Задание кончается в простое: zsh печатает «done» после приглашения, до следующей команды.
+    assert!(out.wait_for(b"done", a), "вывод: {:?}", out.text());
+    let done = find_from(&out, "done", a).unwrap();
+    assert!(strip_escapes(&out.text()[a..]).contains("sleep 0.2"), "вывод: {:?}", out.text());
+    assert!(find_from(&out, "\x1b]133;", a).is_none_or(|i| i > done), "вывод: {:?}", out.text());
+    m.kill(&id).unwrap();
+  }
+
   /// Убирает управляющие последовательности: OSC (до BEL или ESC \\), CSI, прочие двухбайтовые ESC.
   fn strip_escapes(s: &str) -> String {
     let mut out = String::new();
@@ -841,17 +999,22 @@ pub(crate) mod tests {
   }
 
   #[test]
-  fn mark_is_hidden_from_commands() {
+  fn mark_reaches_commands_only_while_they_run() {
     let home = temp_home();
-    // Пользовательский .zshenv тоже не видит метку в окружении.
+    // Пользовательский .zshenv метку в окружении не видит.
     std::fs::write(home.path().join(".zshenv"), "echo \"ZE=${KODEVERTEX_MARK-unset};\"\n").unwrap();
     let m = PtyManager::default();
     let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
     assert!(out.text().contains("ZE=unset;"), "вывод: {:?}", out.text());
-    run(&m, &id, &out, "echo \"E=${KODEVERTEX_MARK-unset};\"\n", "E=unset;");
-    // Ни дочерний процесс, ни его окружение метку не получают.
-    run(&m, &id, &out, "sh -c 'echo \"S=${KODEVERTEX_MARK-unset}${_kv_mark-unset};\"'\n", "S=unsetunset;");
-    run(&m, &id, &out, "env | grep -c \"$_kv_mark\" | sed 's/^/N=/;s/$/;/'\n", "N=0;");
+    // Переменная оболочки с меткой не экспортируется.
+    run(&m, &id, &out, "sh -c 'echo \"S=${_kv_mark-unset};\"'\n", "S=unset;");
+    // Окружение команды — с меткой: так `exec zsh` и вложенный zsh подписывают свои маркеры.
+    run(&m, &id, &out, "sh -c 'echo \"M=$KODEVERTEX_MARK;\"'\n", &format!("M={mk};"));
+    // В простое метки в окружении нет: её не получат процессы, запущенные хуками и виджетами.
+    run(&m, &id, &out, "print -r \"I=${(t)KODEVERTEX_MARK};\"\n", "I=scalar-export;");
+    let from = out.len();
+    m.write(&id, b"precmd_functions+=(_t_idle); _t_idle() { print -r \"P=${KODEVERTEX_MARK-unset};\" }\n").unwrap();
+    assert!(out.wait_for(b"P=unset;", from), "вывод: {:?}", out.text());
     // Сама оболочка метку знает: маркеры её содержат.
     assert_eq!(mk.len(), 32);
     assert!(mk.bytes().all(|b| b.is_ascii_hexdigit()));

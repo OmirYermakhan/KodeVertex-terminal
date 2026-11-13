@@ -1174,7 +1174,7 @@ describe('TerminalPane', () => {
       expect(slot.style.height).toBe(`${Math.ceil(3 * cell)}px`)
     })
 
-    it('приглашение во время команды (ssh с интеграцией) не закрывает блок; OSC 7 после него не принимается', async () => {
+    it('приглашение во время команды (ssh с интеграцией, без нашей метки) не закрывает блок; OSC 7 после него не принимается', async () => {
       const onCwd = vi.fn()
       render(<TerminalPane {...props()} onCwd={onCwd} focused initialCwd="/w" />)
       spawns[0].resolve()
@@ -1182,7 +1182,8 @@ describe('TerminalPane', () => {
       const term = terms[0]
       act(() => void oscHandler(term, 7)('file://mac/a'))
       osc133(term, 'C;' + b64('ssh srv'))
-      osc133(term, 'A')
+      act(() => void rawOscHandler(term, 133)('A'))
+      act(() => void rawOscHandler(term, 133)('A;kv=remote'))
       const blk = document.querySelector('.blk:not(.feed-park .blk)')!
       expect(blk).toHaveClass('run')
       expect(textarea()).toHaveAttribute('aria-disabled', 'true')
@@ -1224,6 +1225,75 @@ describe('TerminalPane', () => {
       expect([...document.querySelectorAll('.blk .cmd')].map((e) => e.textContent)).toEqual(['cat evil.txt'])
       act(() => void oscHandler(term, 7)('file:///ok'))
       expect(onCwd.mock.calls.map((c) => c[0])).toEqual(['/ok'])
+    })
+
+    it('`exec zsh`: подписанное приглашение посреди команды заканчивает блок с неизвестным кодом; чужое — нет', async () => {
+      const { term } = await mounted()
+      osc133(term, 'C;' + b64('exec zsh'))
+      // Чужой 133;A без метки (ssh на хост со своей интеграцией) блок не заканчивает.
+      act(() => void rawOscHandler(term, 133)('A'))
+      expect(document.querySelectorAll('.blk.run')).toHaveLength(1)
+      // В alt screen (tmux) приглашение рисует программа — тоже нет.
+      term.buffer.active.type = 'alternate'
+      osc133(term, 'A')
+      expect(document.querySelectorAll('.blk.run')).toHaveLength(1)
+      term.buffer.active.type = 'normal'
+      // Новая оболочка подписывает приглашение той же меткой: блок закончен, не ошибка.
+      term.lines = ['Last login']
+      osc133(term, 'A')
+      expect(document.querySelector('.blk.run')).toBeNull()
+      const blk = document.querySelector('.blk:not(.feed-park .blk)')!
+      expect(blk.querySelector('.cmd')!.textContent).toBe('exec zsh')
+      expect(blk).not.toHaveClass('err')
+      expect(blk.querySelector('.exit')).toBeNull()
+      expect(textarea()).not.toHaveAttribute('aria-disabled')
+      // Дальше — обычные блоки.
+      osc133(term, 'C;' + b64('echo hi'))
+      term.lines = ['hi']
+      osc133(term, 'D;0')
+      expect([...document.querySelectorAll('.blk:not(.feed-park .blk) .cmd')].map((e) => e.textContent)).toEqual(['exec zsh', 'echo hi'])
+    })
+
+    it('вывод в простое (фоновое задание) — строка «фоновая задача»; перерисовка приглашения и строка ZLE — нет', async () => {
+      const { term } = await mounted()
+      const buf = term.buffer.active
+      const parsed = () => act(() => (term.onWriteParsed.mock.calls[0][0] as () => void)())
+      const notices = () => [...document.querySelectorAll('.blk-notice')].map((e) => e.textContent)
+      osc133(term, 'C;' + b64('sleep 1 &'))
+      term.lines = ['[1] 4242', '']
+      buf.cursorY = 1
+      buf.cursorX = 0
+      osc133(term, 'D;0')
+      osc133(term, 'A')
+      // Только перерисовка приглашения (строка ZLE под курсором) — ничего.
+      term.lines = ['[1] 4242', '   ']
+      parsed()
+      await act(async () => await flush(200))
+      expect(notices()).toEqual([])
+      // zsh печатает сообщение о задании над строкой ZLE.
+      term.lines = ['[1] 4242', '[1]  + done       sleep 1', '']
+      buf.cursorY = 2
+      parsed()
+      await act(async () => await flush(200))
+      expect(notices()).toEqual(['фоновая задача[1]  + done       sleep 1'])
+      expect(document.querySelector('.blk-notice .lbl')!.textContent).toBe('фоновая задача')
+      // Уже собранное не повторяется; новое перед отправкой команды собирается сразу.
+      term.lines = ['[1] 4242', '[1]  + done       sleep 1', '[2]  + done       sleep 2', '']
+      buf.cursorY = 3
+      parsed()
+      type('ls')
+      keyIn('Enter')
+      expect(spawns[0].handle.write).toHaveBeenCalled()
+      expect(notices()).toEqual(['фоновая задача[1]  + done       sleep 1', 'фоновая задача[2]  + done       sleep 2'])
+      // После отправки — эхо и вывод команды, не «фоновая задача».
+      term.lines = ['[1] 4242', '[1]  + done       sleep 1', '[2]  + done       sleep 2', 'ls', '']
+      buf.cursorY = 4
+      parsed()
+      await act(async () => await flush(200))
+      expect(notices()).toHaveLength(2)
+      // ⌘↑ выбирает блок команды, а не строку задания.
+      act(() => runPaneCommand('p', 'blockPrev'))
+      expect(document.querySelector('.blk.sel .cmd')!.textContent).toBe('sleep 1 &')
     })
 
     it('маркеры до запуска сессии (метка ещё неизвестна) игнорируются', async () => {
