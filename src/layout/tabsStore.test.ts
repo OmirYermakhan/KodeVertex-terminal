@@ -33,6 +33,29 @@ describe('tabsStore', () => {
     expect(active().focused).toBe(first)
   })
 
+  it('closePane (✕) закрывает именно эту панель, фокус остаётся на своей', () => {
+    const first = active().focused
+    useTabs.getState().split('row')
+    const second = active().focused
+    useTabs.getState().split('col')
+    const third = active().focused
+    useTabs.getState().closePane(first)
+    expect(leaves(active().tree)).toEqual([second, third])
+    expect(active().focused).toBe(third)
+  })
+
+  it('closePane последней панели закрывает вкладку; последней вкладки — оставляет новую пустую', () => {
+    useTabs.getState().newTab()
+    const [t1, t2] = useTabs.getState().tabs
+    useTabs.getState().closePane(t2.focused)
+    expect(useTabs.getState().tabs.map((t) => t.id)).toEqual([t1.id])
+    useTabs.getState().closePane(t1.focused)
+    const s = useTabs.getState()
+    expect(s.tabs).toHaveLength(1)
+    expect(s.tabs[0].id).not.toBe(t1.id)
+    expect(s.active).toBe(s.tabs[0].id)
+  })
+
   it('closing_last_pane_closes_tab', () => {
     useTabs.getState().newTab()
     const [t1, t2] = useTabs.getState().tabs

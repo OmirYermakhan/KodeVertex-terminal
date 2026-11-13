@@ -223,6 +223,10 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 
 /* Панель: лента блоков (макет 04-main-window, .feed/.blk) */
 .pane { position: relative; display: flex; flex-direction: column; height: 100%; box-sizing: border-box; background: var(--bg); }
+/* ✕ панели в сплите: справа вверху, виден при наведении на панель (поверх полноэкранной программы тоже). */
+.pane-x { position: absolute; top: 6px; right: 8px; z-index: 12; width: 20px; height: 20px; padding: 0; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 11px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity 0.12s; }
+.pane-slot:hover .pane-x, .pane-x:focus-visible { opacity: 1; }
+.pane-x:hover { color: var(--del); background: color-mix(in srgb, var(--del) 12%, transparent); }
 .feed { flex: 1; min-height: 0; overflow: auto; padding: 16px 22px; position: relative; box-sizing: border-box; }
 .blk { position: relative; box-sizing: border-box; border: 1px solid transparent; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-family: var(--font-code); font-size: var(--size-code); line-height: 1.7; max-width: 76ch; color: var(--text); }
 .blk .cmd { color: var(--strong); }

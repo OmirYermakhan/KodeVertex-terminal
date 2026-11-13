@@ -970,6 +970,9 @@ export function TerminalPane(p: TerminalPaneProps) {
       ref={paneRef}
       data-pane-id={p.paneId}
       onFocus={() => callbacks.current.onFocus()}
+      // Панель — фокусная и по щелчку, а не только по фокусу элемента: в WebKit щелчок по кнопке,
+      // по тексту ленты или выделение мышью фокус не переносят, и ⌘W закрыл бы прежнюю панель.
+      onPointerDownCapture={() => callbacks.current.onFocus()}
       onPointerDown={onPanePointerDown}
       // Клик по ленте возвращает ввод туда, где он идёт: в строку ввода, а пока идёт команда — в xterm.
       onMouseUp={(e) => {
