@@ -2,7 +2,7 @@
 // чтобы его читали лента панели, панель агентов и статус-бар.
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { create } from 'zustand'
-import { canEdit, cancelPrompts, clearSession, dropSuggestion, decidePermission, finishQuestion, gotoStep, initialClaude, newProcess, newSession, questionSteps, recordAnswer, reduceClaude, replaceFrom, userSent, type ClaudeState } from './reducer'
+import { canEdit, cancelPrompts, freezeTodos, clearSession, dropSuggestion, decidePermission, finishQuestion, gotoStep, initialClaude, newProcess, newSession, questionSteps, recordAnswer, reduceClaude, replaceFrom, userSent, type ClaudeState } from './reducer'
 import { allowResponse, alwaysResponse, answerResponse, denyResponse, parsePermissionRequest } from './questions'
 import type { FeedClaudeItem, PermissionDecision } from './reducer'
 import { GET_SETTINGS, effortRequest, modelNote, persistedModel, setModelRequest, type ModelChoice } from './models'
@@ -253,6 +253,12 @@ function start(paneId: string): Proc {
     })
   procs.set(paneId, proc)
   return proc
+}
+
+/** ⌃L: Claude-элементы до from ушли из ленты — их планы больше не обновляются на месте. */
+export function feedCleared(paneId: string, from: number): void {
+  if (!(paneId in useClaudeSessions.getState().sessions)) return
+  patchState(paneId, (s) => freezeTodos(s, from))
 }
 
 /** Подсказку следующего сообщения убрали (набор, esc, вставка): до следующего хода её нет. */

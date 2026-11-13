@@ -3,6 +3,7 @@
 import { actionTitle, modelLabel, nowLabel } from './labels'
 import { parsePermissionRequest, type Question } from './questions'
 import type { Attachment } from '../attach/types'
+import { ORIGINAL_MAX, parseHunks, type FileDiff } from './diff'
 
 export { actionTitle, modelLabel, nowLabel }
 
@@ -20,12 +21,17 @@ export type FeedClaudeItem =
       tool: string
       title: string
       detail: string
-      diff?: { before: string; after: string; path: string }
+      diff?: FileDiff
       status: 'running' | 'done' | 'error'
       result?: string
     }
   | { type: 'summary'; text: string; durationMs: number; costUsd: number; isError: boolean }
   | { type: 'error'; text: string }
+  /**
+   * План агента (TodoWrite): одна карточка на агента, каждый следующий TodoWrite обновляет её
+   * на месте, а не добавляет новую.
+   */
+  | { type: 'todo'; agentId: string; toolUseId: string; todos: Todo[]; /** Ушла из ленты (⌃L, /clear): больше не обновляется — следующий TodoWrite добавит новую. */ frozen?: boolean }
   /** Тихая моноширинная строка ленты (например, «Модель: Fable 5.2 · усилие high»). */
   | { type: 'note'; text: string }
   /** Вопрос агента с вариантами (AskUserQuestion): ответы по шагам, всё отвечено — done. */
@@ -65,6 +71,49 @@ export type FeedClaudeItem =
   | { type: 'replaced'; items: FeedClaudeItem[]; count: number }
   /** Место элемента, ушедшего в «Прежний вариант» (индексы элементов не сдвигаются). */
   | { type: 'gone' }
+
+export type TodoStatus = 'pending' | 'in_progress' | 'completed'
+export interface Todo {
+  content: string
+  status: TodoStatus
+  /** Форма «в процессе» («Пишу тесты»), если агент её дал. */
+  activeForm?: string
+}
+
+const TODO_STATUS = new Set<string>(['pending', 'in_progress', 'completed'])
+
+/** Пункты TodoWrite: без текста — пропускаем, неизвестный статус — «не начат». */
+function parseTodos(v: unknown[]): Todo[] {
+  const out: Todo[] = []
+  for (const t of v) {
+    if (!isRec(t)) continue
+    const content = strOr(t.content).trim()
+    if (!content) continue
+    const status = (TODO_STATUS.has(strOr(t.status)) ? t.status : 'pending') as TodoStatus
+    const active = strOr(t.activeForm).trim()
+    out.push(active ? { content, status, activeForm: active } : { content, status })
+  }
+  return out
+}
+
+/** План агента в ленте: есть карточка — обновить на месте, нет — добавить в конец. */
+function upsertTodo(s: ClaudeState, aid: string, toolUseId: string, todos: Todo[]): ClaudeState {
+  const idx = s.items.findIndex((it) => it.type === 'todo' && it.agentId === aid && !it.frozen)
+  const item: FeedClaudeItem = { type: 'todo', agentId: aid, toolUseId, todos }
+  if (idx < 0) return { ...s, items: [...s.items, item] }
+  const items = s.items.slice()
+  items[idx] = item
+  return { ...s, items }
+}
+
+/**
+ * Лента очищена (⌃L, /clear): карточки плана с индексом < from не видны — их больше не обновляем,
+ * следующий TodoWrite покажет план новой карточкой внизу.
+ */
+export function freezeTodos(s: ClaudeState, from: number): ClaudeState {
+  if (!s.items.some((it, i) => i < from && it.type === 'todo' && !it.frozen)) return s
+  return { ...s, items: s.items.map((it, i) => (i < from && it.type === 'todo' && !it.frozen ? { ...it, frozen: true } : it)) }
+}
 
 export type PermissionDecision = 'allow' | 'always' | 'deny'
 
@@ -224,6 +273,7 @@ export function clearSession(s: ClaudeState): ClaudeState {
   const items = s.items.map((it): FeedClaudeItem => {
     if (it.type === 'assistant' && it.streaming) return { ...it, streaming: false }
     if (it.type === 'action' && it.status === 'running') return { ...it, status: 'error' }
+    if (it.type === 'todo' && !it.frozen) return { ...it, frozen: true }
     return it
   })
   return {
@@ -318,19 +368,38 @@ function onDelta(s: ClaudeState, aid: string, text: string, now: number): Claude
   return next
 }
 
-function diffOf(tool: string, i: Rec): { before: string; after: string; path: string } | undefined {
+function diffOf(tool: string, i: Rec): FileDiff | undefined {
   const path = strOr(i.file_path)
   if (tool === 'Edit') return { before: strOr(i.old_string), after: strOr(i.new_string), path }
   if (tool === 'Write') return { before: '', after: strOr(i.content), path }
   if (tool === 'MultiEdit' && Array.isArray(i.edits)) {
-    const edits = i.edits.filter(isRec)
+    const parts = i.edits.filter(isRec).map((e) => ({ before: strOr(e.old_string), after: strOr(e.new_string) }))
     return {
-      before: edits.map((e) => strOr(e.old_string)).join('\n'),
-      after: edits.map((e) => strOr(e.new_string)).join('\n'),
+      before: parts.map((e) => e.before).join('\n'),
+      after: parts.map((e) => e.after).join('\n'),
       path,
+      ...(parts.length > 1 ? { parts } : {}),
     }
   }
   return undefined
+}
+
+/**
+ * Результат правки файла (`tool_use_result` события user): structuredPatch — куски с настоящими
+ * номерами строк, originalFile — файл до правки (храним, только если небольшой), type create — новый файл.
+ */
+function withPatch(diff: FileDiff, r: unknown, single: boolean): FileDiff {
+  if (!isRec(r)) return diff
+  // tool_use_result — одно на событие: при нескольких tool_result в событии сверяем путь
+  // (в одиночном — нет: /tmp и /private/tmp — один файл).
+  const file = strOr(r.filePath)
+  if (!single && file !== diff.path) return diff
+  if (r.type === 'create') return { ...diff, created: true, ...(typeof r.content === 'string' ? { after: r.content } : {}) }
+  const hunks = parseHunks(r.structuredPatch)
+  if (!hunks || hunks.length === 0) return diff
+  const original = typeof r.originalFile === 'string' && r.originalFile.length <= ORIGINAL_MAX ? r.originalFile : undefined
+  const { parts: _parts, ...rest } = diff
+  return { ...rest, hunks, ...(original !== undefined ? { original } : {}) }
 }
 
 function onToolUse(s: ClaudeState, aid: string, block: Rec, now: number): ClaudeState {
@@ -341,7 +410,9 @@ function onToolUse(s: ClaudeState, aid: string, block: Rec, now: number): Claude
   const label = nowLabel(tool, input)
   let next = s
 
-  if (!next.items.some((it) => it.type === 'action' && it.toolUseId === id)) {
+  if (tool === 'TodoWrite' && Array.isArray(input.todos)) {
+    next = upsertTodo(next, aid, id, parseTodos(input.todos))
+  } else if (!next.items.some((it) => it.type === 'action' && it.toolUseId === id)) {
     const { title, detail } = actionTitle(tool, input)
     const diff = diffOf(tool, input)
     next = {
@@ -419,6 +490,7 @@ function onUser(s: ClaudeState, ev: Rec, now: number): ClaudeState {
   const msg = ev.message
   if (!isRec(msg) || !Array.isArray(msg.content)) return s
   let next = s
+  const single = msg.content.filter((b) => isRec(b) && b.type === 'tool_result').length === 1
   for (const b of msg.content) {
     if (!isRec(b) || b.type !== 'tool_result') continue
     const id = strOr(b.tool_use_id)
@@ -432,8 +504,11 @@ function onUser(s: ClaudeState, ev: Rec, now: number): ClaudeState {
       items: next.items.map((it) => {
         if (it.type === 'action' && it.toolUseId === id) {
           actionAgent = it.agentId
-          return { ...it, status, result } as FeedClaudeItem
+          const diff = it.diff && !isError ? withPatch(it.diff, ev.tool_use_result ?? ev.toolUseResult, single) : it.diff
+          return { ...it, status, result, ...(diff ? { diff } : {}) } as FeedClaudeItem
         }
+        // План (TodoWrite) — своя карточка, не действие: ответ тоже возвращает агента из «ждёт».
+        if (it.type === 'todo' && it.toolUseId === id) actionAgent = it.agentId
         return it
       }),
     }

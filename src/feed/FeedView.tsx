@@ -16,6 +16,8 @@ export interface FeedProps {
   renderLive: (block: ShellBlock) => ReactNode
   /** Агенты сессии — для подписи «Имя · Модель» на карточках. */
   agents?: readonly Agent[]
+  /** Каталог Claude-сессии: пути в карточках правок — относительно него. */
+  cwd?: string | null
   /** Вид Claude-элемента; по умолчанию — карточки ClaudeCard. */
   renderClaude?: (item: ClaudeItem) => ReactNode
   onScroll?: () => void
@@ -67,7 +69,7 @@ export function finishAppear(feed: HTMLElement | null): void {
 }
 
 export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
-  { items, selectedId, renderLive, agents = NO_AGENTS, renderClaude, onScroll, park, onAttach, onCopy, onRepeat, onAsk, onRead, editable, onEdit, editingId, claudeMode = false },
+  { items, selectedId, renderLive, agents = NO_AGENTS, cwd, renderClaude, onScroll, park, onAttach, onCopy, onRepeat, onAsk, onRead, editable, onEdit, editingId, claudeMode = false },
   ref,
 ) {
   const own = useRef<HTMLDivElement | null>(null)
@@ -147,6 +149,7 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
               item={it}
               agent={agentOf(agents, it.item)}
               agents={it.item.type === 'replaced' ? agents : undefined}
+              cwd={cwd}
               selected={it.id === selectedId}
               onAttach={onAttach}
               onCopy={onCopy}

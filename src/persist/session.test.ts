@@ -230,3 +230,56 @@ describe('загрузка и запись', () => {
     expect(calls('session_save')).toHaveLength(1)
   })
 })
+
+describe('карточки правок и планов в файле сессии', () => {
+  it('исходный файл правки (diff.original) не сохраняется — и в «Прежнем варианте» тоже', () => {
+    const action = {
+      type: 'action' as const, agentId: 'main', toolUseId: 'e1', tool: 'Edit', title: 'Изменил файл', detail: '', status: 'done' as const,
+      diff: { path: '/w/a.ts', before: 'a', after: 'b', original: 'x\n'.repeat(1000), hunks: [{ oldStart: 1, newStart: 1, lines: ['-a', '+b'] }] },
+    }
+    const state = { ...initialClaude(), items: [action, { type: 'replaced' as const, count: 1, items: [action] }] }
+    useTabs.setState({ tabs: [tab('t', ['a'])], active: 't' })
+    useClaudeSessions.setState({ sessions: { a: { state, procId: null, cwd: '/w', model: null, effort: null, permissionMode: null, queue: [], paused: false, pauseHint: false } } })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const items = snapshot().panes.a.claude!.state.items as any[]
+    expect(items[0].diff).toEqual({ path: '/w/a.ts', before: '', after: '', hunks: [{ oldStart: 1, newStart: 1, lines: ['-a', '+b'] }] })
+    expect(items[1].items[0].diff.original).toBeUndefined()
+    // Состояние в памяти не тронуто.
+    const mem = useClaudeSessions.getState().sessions.a.state.items[0]
+    expect(mem.type === 'action' && mem.diff?.original).toBeTruthy()
+  })
+
+  it('Write многомегабайтного файла: в файл сессии — только первые строки, с пометкой truncated', () => {
+    const big = 'строка текста\n'.repeat(300_000)
+    const action = {
+      type: 'action' as const, agentId: 'main', toolUseId: 'w1', tool: 'Write', title: 'Изменил файл', detail: '', status: 'done' as const,
+      diff: { path: '/w/big.txt', before: '', after: big, created: true },
+    }
+    useTabs.setState({ tabs: [tab('t', ['a'])], active: 't' })
+    useClaudeSessions.setState({ sessions: { a: { state: { ...initialClaude(), items: [action] }, procId: null, cwd: '/w', model: null, effort: null, permissionMode: null, queue: [], paused: false, pauseHint: false } } })
+    const json = serializeCapped(snapshot())
+    expect(json.length).toBeLessThan(20_000)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const diff = (JSON.parse(json).panes.a.claude.state.items[0] as any).diff
+    expect(diff).toMatchObject({ truncated: true, stat: { add: 300_000, del: 0 } })
+  })
+
+  it('восстановление: испорченный план — на его месте пусто, целый — как был', () => {
+    const good = { type: 'todo', agentId: 'main', toolUseId: 't1', todos: [{ content: 'A', status: 'completed' }] }
+    const bad = [
+      { type: 'todo', agentId: 'main', toolUseId: 't2', todos: 'x' },
+      { type: 'todo', agentId: 'main', toolUseId: 't3', todos: [{ content: 'A', status: 'done' }] },
+      { type: 'todo', agentId: 'main', toolUseId: 't4', todos: [null] },
+      { type: 'todo', toolUseId: 't5', todos: [] },
+    ]
+    applySession({
+      version: SESSION_VERSION,
+      tabs: [tab('t', ['a'], { a: '/w' })],
+      active: 't',
+      panes: { a: { feed: [], claudeFrom: 0, claudeMode: true, claude: { cwd: '/w', model: null, effort: null, closed: false, queue: [], state: { ...initialClaude(), items: [good, ...bad] } } } },
+    })
+    const items = useClaudeSessions.getState().sessions.a.state.items
+    expect(items[0]).toEqual(good)
+    expect(items.slice(1)).toEqual([{ type: 'gone' }, { type: 'gone' }, { type: 'gone' }, { type: 'gone' }])
+  })
+})
