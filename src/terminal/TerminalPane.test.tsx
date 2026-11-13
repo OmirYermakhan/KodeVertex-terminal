@@ -475,6 +475,17 @@ describe('TerminalPane', () => {
         expect(document.querySelector('.feed .you')?.textContent).toContain('что тут?')
       })
 
+      it('подсказка пустой ленты пропадает сразу с входом в режим `claude`, до первого ответа', async () => {
+        claudeOk()
+        await mounted()
+        expect(document.querySelector('.feed .feed-empty')).not.toBeNull()
+        type('claude')
+        keyIn('Enter')
+        await act(async () => await flush())
+        expect(document.querySelector('.feed .feed-empty')).toBeNull()
+        expect(document.querySelector('.feed .card')).toBeNull()
+      })
+
       it('вопрос агента: блок над строкой ввода с фокусом, в ленте — «ждёт ответа»; ответ уходит, блок исчезает', async () => {
         claudeOk()
         await mounted()
@@ -492,8 +503,9 @@ describe('TerminalPane', () => {
         const dock = document.querySelector('.dock')!
         const prompt = dock.querySelector('.aprompt') as HTMLElement
         expect(prompt).not.toBeNull()
-        // Порядок в доке: панель агентов, вопрос, строка ввода.
-        expect([...dock.children].map((c) => c.className.split(' ')[0])).toEqual(['agents', 'aprompt', 'input-wrap'])
+        // Порядок в доке: панель агентов, вопрос (в обёртке сворачивания), строка ввода.
+        expect([...dock.children].map((c) => c.className.split(' ')[0])).toEqual(['agents', 'kv-collapse', 'input-wrap'])
+        expect(prompt.parentElement!.parentElement).toBe(dock)
         expect(document.activeElement).toBe(prompt)
         expect(document.querySelector('.feed .q-wait')?.textContent).toContain('Какую базу?')
         // esc — к вводу, ⌘↓ — обратно к вопросу.

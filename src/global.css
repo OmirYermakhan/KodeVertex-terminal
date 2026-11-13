@@ -655,3 +655,47 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .rd-body .md > :first-child { margin-top: 0; }
 .rd-body .md pre { font-size: max(12px, calc(var(--rd-size, 17px) - 3px)); }
 @container (max-width: 760px) { .rd-toc { display: none; } .rd-body { padding: 24px 18px 30vh; } }
+
+/* Плавные анимации (только opacity / transform / height). При «Уменьшить движение» их нет:
+   всё — внутри no-preference; раскрытие по высоте (src/ui/motion.tsx) проверяет ту же настройку.
+   translate/scale — отдельными свойствами: не спорят с transform выборок (.cp.pal). */
+.kv-collapse { overflow: hidden; }
+.kv-collapse:empty { display: none; }
+.qu-row.leaving { pointer-events: none; }
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes kv-in { from { opacity: 0; translate: 0 4px; } }
+  @keyframes kv-in-q { from { opacity: 0; translate: 0 4px; } }
+  @keyframes kv-pop { from { opacity: 0; scale: 0.98; } }
+  @keyframes kv-out { to { opacity: 0; translate: 8px 0; } }
+  /* Карточка или блок появились (стрим текста их не перемонтирует — дельты без анимации). */
+  .feed > :not(.feed-park):not(.feed-empty) { animation: kv-in 140ms ease-out; }
+  /* Ответ на вопрос: тихая строка «Ждёт ответа» сменилась свёрнутой карточкой. */
+  .feed > .qcard.done { animation-name: kv-in-q; }
+  .feed-empty .ks { animation: kv-in 140ms ease-out; }
+  .qu-row { animation: kv-in 140ms ease-out; }
+  .qu-row.leaving { animation: kv-out 120ms ease-in forwards; }
+  .cp, .pop { animation: kv-pop 100ms ease-out; }
+  .dock > .aprompt { animation: kv-in 140ms ease-out; }
+}
+
+/* Длинный ответ Claude свёрнут (AssistantCard): первые 20 строк, затухание книзу, «Показать всё» — как у блока.
+   Поле слева — под номера списков (маркеры ol выступают за текст, overflow их иначе обрезал бы). */
+.ans-body.clipped { font-size: calc(var(--size-text) - 0.5px); line-height: var(--lh-text); max-height: 20lh; overflow: hidden; padding-left: 14px; margin-left: -14px; -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 4lh), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 4lh), transparent); }
+.ans-more { display: block; font-family: var(--font-code); }
+
+/* Заголовок «❯ команда» прилипает к верху ленты, пока прокручивается длинный вывод блока:
+   фон --bg (у выбранного — его подсветка), прилипшему (.stuck, FeedView.markStuck) — тонкая линия снизу.
+   Линия — тенью: высота заголовка не меняется, вывод не прыгает. Отступы блока перекрыты полями. */
+.blk > .bh { position: sticky; top: -16px; z-index: 1; margin: -8px -12px 0; padding: 8px 12px 0; background: var(--bg); border-radius: 8px 8px 0 0; }
+.blk.err > .bh { margin-left: -11px; padding-left: 11px; }
+.blk.sel > .bh { background: color-mix(in srgb, var(--acc) 6%, var(--bg)); }
+.blk > .bh.stuck { border-radius: 0; box-shadow: 0 1px 0 var(--rule); padding-bottom: 2px; margin-bottom: -2px; }
+
+/* Пустая лента: по центру — карточка клавиш как .ks макета 04 (рамка --rule, радиус 10, фон --panel2,
+   заголовок кодовым шрифтом в --accText, строки --muted 13.5px). */
+.feed-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; pointer-events: none; }
+.ks { box-sizing: border-box; width: 340px; max-width: 100%; border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; background: var(--panel2); font-family: var(--font-text); line-height: normal; pointer-events: auto; }
+.ks h3 { margin: 0 0 8px; font-family: var(--font-code); font-size: 14px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; color: var(--accText); }
+.ks ul { list-style: none; margin: 0; padding: 0; }
+.ks li { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 3px 0; color: var(--muted); font-size: 13.5px; }
+.ks-k { display: flex; gap: 4px; flex: none; }

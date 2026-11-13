@@ -106,8 +106,18 @@ function rectOf(r: Range): DOMRect | null {
   return typeof r.getBoundingClientRect === 'function' ? r.getBoundingClientRect() : null
 }
 
+/** Событие «развернуть свёрнутое» — на .ans-body.clipped, когда к нему ведёт поиск. */
+export const REVEAL_EVENT = 'kv-reveal'
+
+/** Высота заголовка блока (прилипает к верху ленты, FeedView.markStuck); 0 — блоков нет. */
+export function stickyHeaderHeight(viewport: HTMLElement): number {
+  return viewport.querySelector<HTMLElement>('.blk > .bh')?.offsetHeight ?? 0
+}
+
 /** Прокрутить viewport так, чтобы совпадение было видно (с запасом сверху). */
 export function scrollToRange(r: Range, viewport: HTMLElement): void {
+  // Совпадение в свёрнутом длинном ответе — сначала развернуть его (AssistantCard слушает REVEAL_EVENT).
+  r.startContainer.parentElement?.closest('.ans-body.clipped')?.dispatchEvent(new Event(REVEAL_EVENT))
   const rect = rectOf(r)
   if (!rect || (rect.width === 0 && rect.height === 0)) {
     r.startContainer.parentElement?.scrollIntoView?.({ block: 'center' })
@@ -115,7 +125,9 @@ export function scrollToRange(r: Range, viewport: HTMLElement): void {
   }
   const box = viewport.getBoundingClientRect()
   const pad = 24
-  if (rect.top < box.top + pad || rect.bottom > box.bottom - pad) {
+  // Сверху совпадение может закрыть прилипший заголовок блока «❯ команда» — запас не меньше его высоты.
+  const top = Math.max(pad, stickyHeaderHeight(viewport) + 8)
+  if (rect.top < box.top + top || rect.bottom > box.bottom - pad) {
     viewport.scrollTop += rect.top - box.top - viewport.clientHeight / 3
   }
 }
