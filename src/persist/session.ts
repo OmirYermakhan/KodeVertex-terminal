@@ -6,6 +6,7 @@ import { leaves, type PaneNode } from '../layout/paneTree'
 import { useTabs, type Tab } from '../layout/tabsStore'
 import { useClaudeSessions, type PaneClaude, type QueuedMessage } from '../claude/sessionStore'
 import { cancelPrompts, initialClaude, type ClaudeState, type FeedClaudeItem } from '../claude/reducer'
+import { boundDiff } from '../claude/diff'
 import { claudeIndex, claudeItemId, type FeedItem, type ShellBlock } from '../feed/feed'
 
 export const SESSION_VERSION = 1
@@ -199,15 +200,12 @@ function validTab(t: unknown): t is Tab {
 }
 
 /**
- * Элемент для файла сессии: исходный файл правки (diff.original, до 64 КБ на правку) не сохраняется —
- * иначе файл сессии растёт без предела. Восстановленный вид изменений просто не разворачивает
- * свёрнутые строки.
+ * Элемент для файла сессии: правка — без исходного файла и не длиннее того, что показывает вид
+ * (boundDiff), иначе файл сессии растёт без предела. Восстановленный вид изменений не разворачивает
+ * свёрнутые строки, урезанный — заканчивается строкой «… остальные строки не сохранены».
  */
 function saveItem(it: FeedClaudeItem): FeedClaudeItem {
-  if (it.type === 'action' && it.diff?.original !== undefined) {
-    const { original: _original, ...diff } = it.diff
-    return { ...it, diff }
-  }
+  if (it.type === 'action' && it.diff) return { ...it, diff: boundDiff(it.diff) }
   if (it.type === 'replaced') return { ...it, items: it.items.map(saveItem) }
   return it
 }

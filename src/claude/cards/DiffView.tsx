@@ -8,6 +8,8 @@ import { diffParts, diffStat, firstChangedLine, type DiffRow, type FileDiff } fr
 
 /** Строк вида до «Показать всё» (Write большого файла не растягивает ленту). */
 export const DIFF_SHOWN = 80
+/** Конец вида правки, урезанной при сохранении сессии. */
+export const TRUNCATED = '… остальные строки не сохранены'
 
 const MARK = { a: '+', d: '−', n: ' ' } as const
 
@@ -161,6 +163,7 @@ export const DiffView = memo(function DiffView({ diff, cwd }: { diff: FileDiff; 
               Показать ещё {cut} {linesWord(cut)}
             </button>
           )}
+          {diff.truncated && cut === 0 && <div className="dl gap">{TRUNCATED}</div>}
         </div>
       )}
     </div>

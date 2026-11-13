@@ -255,13 +255,13 @@ function start(paneId: string): Proc {
   return proc
 }
 
-/** Подсказку следующего сообщения убрали (набор, esc, вставка): до следующего хода её нет. */
 /** ⌃L: Claude-элементы до from ушли из ленты — их планы больше не обновляются на месте. */
 export function feedCleared(paneId: string, from: number): void {
   if (!(paneId in useClaudeSessions.getState().sessions)) return
   patchState(paneId, (s) => freezeTodos(s, from))
 }
 
+/** Подсказку следующего сообщения убрали (набор, esc, вставка): до следующего хода её нет. */
 export function dismissSuggestion(paneId: string): void {
   if (!useClaudeSessions.getState().sessions[paneId]?.state.suggestion) return
   patchState(paneId, dropSuggestion)

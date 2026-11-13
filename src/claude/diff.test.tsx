@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { diffParts, diffStat, firstChangedLine, lineDiff, parseHunks, type DiffPart, type FileDiff } from './diff'
-import { DIFF_SHOWN, DiffView, shownPath, unchangedLabel } from './cards/DiffView'
+import { PERSIST_LINES, boundDiff, diffParts, diffStat, firstChangedLine, lineDiff, parseHunks, type DiffPart, type FileDiff } from './diff'
+import { DIFF_SHOWN, DiffView, TRUNCATED, shownPath, unchangedLabel } from './cards/DiffView'
 import { initialClaude, reduceClaude } from './reducer'
 
 const invoke = vi.fn((..._a: unknown[]) => Promise.resolve())
@@ -99,6 +99,47 @@ describe('diffParts', () => {
     expect(unchangedLabel(3)).toBe('… 3 строки без изменений')
     expect(unchangedLabel(12)).toBe('… 12 строк без изменений')
     expect(unchangedLabel(null)).toBe('…')
+  })
+})
+
+describe('boundDiff: правка в файле сессии', () => {
+  it('сохраняется не больше, чем показывает вид', () => expect(PERSIST_LINES).toBe(DIFF_SHOWN))
+
+  it('Write большого файла: первые строки, пометка truncated и полные «+A −D»', () => {
+    const d: FileDiff = { path: '/p/big.txt', before: '', after: file(200_000), created: true, original: 'x' }
+    const b = boundDiff(d)
+    expect(b.original).toBeUndefined()
+    expect(b.after.split('\n')).toHaveLength(PERSIST_LINES)
+    expect(b.truncated).toBe(true)
+    expect(diffStat(b)).toEqual({ add: 200_000, del: 0 })
+    expect(JSON.stringify(b).length).toBeLessThan(4096)
+  })
+
+  it('одна огромная строка урезается по символам', () => {
+    const b = boundDiff({ path: '/p/min.js', before: 'a', after: 'x'.repeat(5_000_000) }, 80, 1000)
+    expect(b.before.length + b.after.length).toBeLessThanOrEqual(1000)
+    expect(b.truncated).toBe(true)
+  })
+
+  it('куски: before/after не хранятся, строки кусков — в пределах бюджета', () => {
+    const lines = Array.from({ length: 300 }, (_, i) => `+n${i}`)
+    const d: FileDiff = { path: '/p/a', before: 'old'.repeat(1000), after: 'new'.repeat(1000), hunks: [{ oldStart: 1, newStart: 1, lines }, { oldStart: 900, newStart: 1200, lines: ['-z', '+Z'] }] }
+    const b = boundDiff(d)
+    expect(b.before + b.after).toBe('')
+    expect(b.hunks).toHaveLength(1)
+    expect(b.hunks![0].lines).toHaveLength(PERSIST_LINES)
+    expect(b.stat).toEqual({ add: 301, del: 1 })
+  })
+
+  it('небольшая правка не меняется (кроме исходного файла)', () => {
+    const d: FileDiff = { path: '/p/a', before: 'a\nb', after: 'A\nb' }
+    expect(boundDiff({ ...d, original: 'x' })).toEqual(d)
+  })
+
+  it('урезанный вид заканчивается строкой «остальные строки не сохранены»', () => {
+    render(<DiffView diff={boundDiff({ path: '/p/big.txt', before: '', after: file(500), created: true })} />)
+    expect(screen.getByText(TRUNCATED)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Показать ещё/ })).toBeNull()
   })
 })
 

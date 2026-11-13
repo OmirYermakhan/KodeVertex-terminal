@@ -22,6 +22,10 @@ export interface FileDiff {
   created?: boolean
   /** MultiEdit до результата: правки по отдельности (между ними — неизвестное число строк). */
   parts?: { before: string; after: string }[]
+  /** Текст урезан при сохранении сессии (boundDiff): показываются только первые строки. */
+  truncated?: boolean
+  /** Счётчики «+A −D» полного изменения — у урезанного вида свои не сходятся. */
+  stat?: { add: number; del: number }
 }
 
 export type RowKind = 'a' | 'd' | 'n'
@@ -188,6 +192,7 @@ export function diffParts(d: FileDiff, context = CONTEXT): DiffPart[] {
 
 /** Строк добавлено / удалено. */
 export function diffStat(d: FileDiff): { add: number; del: number } {
+  if (d.stat) return d.stat
   let add = 0
   let del = 0
   for (const x of sequence(d)) {
@@ -219,4 +224,58 @@ export function parseHunks(v: unknown): Hunk[] | null {
     out.push({ oldStart: r.oldStart, newStart: r.newStart, lines: r.lines.filter((l): l is string => typeof l === 'string') })
   }
   return out
+}
+
+/** Сколько строк вида и символов текста правки сохраняется в файле сессии. */
+export const PERSIST_LINES = 80
+export const PERSIST_CHARS = 64 * 1024
+
+/**
+ * Правка для файла сессии: без исходного файла, текст — не больше PERSIST_LINES строк и
+ * PERSIST_CHARS символов (Write большого файла не раздувает session.json). Урезанное помечается
+ * truncated, счётчики «+A −D» — от полного изменения.
+ */
+export function boundDiff(d: FileDiff, maxLines = PERSIST_LINES, maxChars = PERSIST_CHARS): FileDiff {
+  const { original: _original, ...rest } = d
+  let lines = maxLines
+  let chars = maxChars
+  let cut = false
+  const take = (s: string): string => {
+    if (s === '') return ''
+    const all = s.split('\n')
+    const out: string[] = []
+    for (const l of all) {
+      if (lines <= 0 || chars <= 0) break
+      const t = l.length > chars ? l.slice(0, chars) : l
+      out.push(t)
+      lines--
+      chars -= t.length + 1
+      if (t !== l) break
+    }
+    const r = out.join('\n')
+    if (r.length < s.replace(/\n$/, '').length) cut = true
+    return r
+  }
+  let next: FileDiff
+  if (rest.hunks && rest.hunks.length > 0) {
+    // Вид строится из кусков: before/after не нужны.
+    const hunks: Hunk[] = []
+    for (const h of rest.hunks) {
+      if (lines <= 0 || chars <= 0) {
+        cut = true
+        break
+      }
+      const kept = take(h.lines.join('\n'))
+      hunks.push({ ...h, lines: kept === '' ? [] : kept.split('\n') })
+    }
+    next = { ...rest, before: '', after: '', hunks }
+  } else if (rest.parts) {
+    const parts: { before: string; after: string }[] = []
+    for (const p of rest.parts) parts.push({ before: take(p.before), after: take(p.after) })
+    next = { ...rest, before: '', after: '', parts }
+  } else {
+    // Удалённые и добавленные строки идут в виде подряд: бюджет делится между ними по порядку.
+    next = { ...rest, before: take(rest.before), after: take(rest.after) }
+  }
+  return cut ? { ...next, truncated: true, stat: diffStat(d) } : next
 }
