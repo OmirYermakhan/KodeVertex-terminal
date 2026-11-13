@@ -22,13 +22,16 @@ function lastElement(n: HNode): HNode | undefined {
   return undefined
 }
 
+/** Пустые элементы HTML: детей у них не бывает (React падает с #137) — курсор ставится после них. */
+const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'])
+
 /** rehype-плагин: мигающий курсор в конце текста. */
 function rehypeCaret() {
   return (tree: HNode) => {
     let n: HNode = tree
     for (;;) {
       const last = lastElement(n)
-      if (!last) break
+      if (!last || VOID.has(last.tagName ?? '')) break
       n = last
       if (!DESCEND.has(last.tagName ?? '')) break
     }
