@@ -99,16 +99,25 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...
 
 interface PendingSpawn {
   opts: SpawnOptions
-  handle: { id: string; write: ReturnType<typeof vi.fn>; resize: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn> }
+  handle: { id: string; mark: string; write: ReturnType<typeof vi.fn>; resize: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn> }
   resolve: () => void
 }
 const spawns: PendingSpawn[] = []
+/** Метка маркеров, которую «выдаёт» pty_spawn. */
+const MARK = '0123456789abcdef0123456789abcdef'
 
 vi.mock('./ptyClient', () => ({
   spawnPty: (opts: SpawnOptions) =>
     new Promise<PtyHandle>((res) => {
-      const handle = { id: `s${spawns.length}`, write: vi.fn(), resize: vi.fn(), kill: vi.fn() }
-      spawns.push({ opts, handle, resolve: () => res(handle) })
+      const handle = { id: `s${spawns.length}`, mark: MARK, write: vi.fn(), resize: vi.fn(), kill: vi.fn() }
+      spawns.push({
+        opts,
+        handle,
+        resolve: () => {
+          opts.onSpawn?.(handle)
+          res(handle)
+        },
+      })
     }),
 }))
 
@@ -135,8 +144,11 @@ const flush = (ms = 0) => new Promise((r) => setTimeout(r, ms))
 
 type OscHandler = (data: string) => boolean
 type KeyHandler = (e: KeyboardEvent) => boolean
-const oscHandler = (t: FakeTerminal, id: number) =>
+/** Обработчик OSC как есть: данные без метки — как от чужой программы. */
+const rawOscHandler = (t: FakeTerminal, id: number) =>
   t.parser.registerOscHandler.mock.calls.find((c) => c[0] === id)![1] as OscHandler
+/** Маркер от нашей оболочки: интеграция дописывает `;kv=<метка сессии>`. */
+const oscHandler = (t: FakeTerminal, id: number): OscHandler => (data) => rawOscHandler(t, id)(`${data};kv=${MARK}`)
 const oscHandlerOf = (t: FakeTerminal) => oscHandler(t, 133)
 const keyHandler = (t: FakeTerminal) => t.attachCustomKeyEventHandler.mock.calls[0][0] as KeyHandler
 const textarea = () => document.querySelector<HTMLElement>('.in-ta')!
@@ -1172,6 +1184,48 @@ describe('TerminalPane', () => {
       expect(host().closest('.feed-park')).toBeNull()
       act(() => void oscHandler(term, 7)('file:///remote'))
       expect(onCwd.mock.calls.map((c) => c[0])).toEqual(['/a'])
+    })
+
+    it('маркеры без метки сессии или с чужой меткой игнорируются (подделка из `cat` файла)', async () => {
+      const onCwd = vi.fn()
+      render(<TerminalPane {...props()} onCwd={onCwd} focused initialCwd="/w" />)
+      spawns[0].resolve()
+      await flush()
+      const term = terms[0]
+      const raw133 = (d: string) => act(() => void rawOscHandler(term, 133)(d))
+      const raw7 = (d: string) => act(() => void rawOscHandler(term, 7)(d))
+      osc133(term, 'C;' + b64('cat evil.txt'))
+      // Файл печатает «конец команды», «новую команду» и её «вывод» — без метки и с чужой.
+      raw133('D;0')
+      raw133('D;0;kv=deadbeef')
+      raw133(`D;0;kv=${MARK}x`)
+      raw133('A')
+      raw133('C;' + b64('rm -rf /'))
+      raw7('file:///etc')
+      raw7(`file:///etc;kv=${MARK.slice(1)}`)
+      // Блок настоящей команды идёт дальше, строка ввода выключена — набор не уйдёт в программу.
+      const run = document.querySelectorAll('.blk.run')
+      expect(run).toHaveLength(1)
+      expect(run[0].querySelector('.cmd')!.textContent).toBe('cat evil.txt')
+      expect(textarea()).toHaveAttribute('aria-disabled', 'true')
+      // Настоящий конец — с меткой.
+      osc133(term, 'D;0')
+      expect(document.querySelector('.blk.run')).toBeNull()
+      expect(textarea()).not.toHaveAttribute('aria-disabled')
+      // В простое: подделка каталога и команды без метки тоже не принимается, с меткой — да.
+      raw7('file:///etc')
+      raw133('C;' + b64('fake'))
+      expect(document.querySelector('.blk.run')).toBeNull()
+      expect([...document.querySelectorAll('.blk .cmd')].map((e) => e.textContent)).toEqual(['cat evil.txt'])
+      act(() => void oscHandler(term, 7)('file:///ok'))
+      expect(onCwd.mock.calls.map((c) => c[0])).toEqual(['/ok'])
+    })
+
+    it('маркеры до запуска сессии (метка ещё неизвестна) игнорируются', async () => {
+      render(<TerminalPane {...props()} focused initialCwd="/w" />)
+      const term = terms[0]
+      act(() => void rawOscHandler(term, 133)(`C;${b64('ls')};kv=${MARK}`))
+      expect(document.querySelector('.blk.run')).toBeNull()
     })
 
     it('вывод вне C…D (ошибка разбора) — отдельный блок с отправленной строкой; обычное приглашение блоков не добавляет', async () => {

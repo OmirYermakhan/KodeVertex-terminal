@@ -16,16 +16,18 @@ autoload -Uz add-zsh-hook
 # 133;A — начало приглашения, 133;C;<base64 команды> — старт, 133;D;<код> — конец,
 # 133;A;k=s — вторичное приглашение (PS2): команда не закончена, ZLE ждёт продолжения,
 # 133;I — ZLE приняла строку.
+# Последний параметр каждого маркера — `kv=<метка сессии>` (из .zshenv): маркеры без неё
+# терминал игнорирует, их мог напечатать кто угодно (`cat` файла, программа, ssh).
 if [[ -n "$KV_BLOCKS" ]]; then
   typeset -g _kv_cmd_ran=
   _kv_blocks_precmd() {
     local ret=$?
     emulate -L zsh
     if [[ -n "$_kv_cmd_ran" ]]; then
-      printf '\e]133;D;%s\a' "$ret"
+      printf '\e]133;D;%s;kv=%s\a' "$ret" "$_kv_mark"
       _kv_cmd_ran=
     fi
-    printf '\e]133;A\a'
+    printf '\e]133;A;kv=%s\a' "$_kv_mark"
   }
   _kv_blocks_preexec() {
     emulate -L zsh
@@ -33,12 +35,12 @@ if [[ -n "$KV_BLOCKS" ]]; then
     # base64 может переносить строки на 76 символах — склеиваем.
     local b64
     b64=$(print -rn -- "$1" | command base64 | command tr -d '\n')
-    printf '\e]133;C;%s\a' "$b64"
+    printf '\e]133;C;%s;kv=%s\a' "$b64" "$_kv_mark"
   }
   _kv_blocks_hide_prompt() {
     PROMPT=''
     # Вместо текста PS2 — только маркер: строка ввода покажет подсказку «Команда не закончена».
-    PROMPT2=$'%{\e]133;A;k=s\a%}'
+    PROMPT2=$'%{\e]133;A;k=s;kv='"$_kv_mark"$'\a%}'
     RPROMPT=''
     PROMPT_EOL_MARK=''
   }
@@ -59,7 +61,7 @@ if [[ -n "$KV_BLOCKS" ]]; then
   # 133;I — ZLE приняла строку (после её эха): терминал стирает эхо; вывод до 133;C или 133;A
   # (ошибка разбора и т. п.) становится отдельным блоком, а не теряется.
   _kv_blocks_line_finish() {
-    print -rn -- $'\e]133;I\a'
+    print -rn -- $'\e]133;I;kv='"$_kv_mark"$'\a'
   }
   autoload -Uz add-zle-hook-widget
   add-zle-hook-widget line-finish _kv_blocks_line_finish
@@ -73,6 +75,7 @@ if [[ -n "$KV_BLOCKS" ]]; then
 fi
 
 # Сообщаем терминалу текущий каталог (OSC 7) перед каждым приглашением.
+# После URL — `;kv=<метка>`: `;` в пути закодирован как %3B, так что разбор однозначен.
 _kv_osc7() {
   emulate -L zsh
   # Полное кодирование пути по RFC 3986: побайтово, на чистом zsh.
@@ -87,6 +90,6 @@ _kv_osc7() {
       out+=$c
     fi
   done
-  printf '\e]7;file://%s%s\a' "$HOST" "$out"
+  printf '\e]7;file://%s%s;kv=%s\a' "$HOST" "$out" "$_kv_mark"
 }
 add-zsh-hook precmd _kv_osc7

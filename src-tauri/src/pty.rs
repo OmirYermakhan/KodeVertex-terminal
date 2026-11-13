@@ -48,6 +48,30 @@ struct Session {
 
 type Sessions = Arc<Mutex<HashMap<String, Session>>>;
 
+/// Переменная окружения, через которую оболочка получает метку маркеров. Интеграция zsh
+/// сразу переносит её в неэкспортируемую переменную и снимает с окружения: команды её не видят.
+pub const MARK_ENV: &str = "KODEVERTEX_MARK";
+
+/// Запущенная сессия: id и метка маркеров OSC 133/7.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Spawned {
+  pub id: String,
+  /// Случайная метка сессии (CSPRNG). Маркеры без неё — чужие (`cat` файла, ssh, программа)
+  /// и терминалом игнорируются.
+  pub mark: String,
+}
+
+/// Новая метка маркеров: 128 бит из CSPRNG ОС (uuid v4 берёт их из getrandom), 32 hex-символа.
+fn new_mark() -> String {
+  uuid::Uuid::new_v4().simple().to_string()
+}
+
+/// Оболочка — zsh: только наша интеграция знает метку. Другой оболочке её не даём —
+/// иначе переменная осталась бы в окружении всех команд.
+fn is_zsh(shell: &str) -> bool {
+  std::path::Path::new(shell).file_name().and_then(|n| n.to_str()).is_some_and(|n| n.contains("zsh"))
+}
+
 #[derive(Default)]
 pub struct PtyManager {
   sessions: Sessions,
@@ -67,12 +91,13 @@ impl PtyManager {
     opts: SpawnOpts,
     on_data: impl Fn(Vec<u8>) + Send + 'static,
     on_exit: impl Fn(Option<u32>) + Send + 'static,
-  ) -> Result<String, String> {
+  ) -> Result<Spawned, String> {
     let pair = native_pty_system()
       .openpty(PtySize { rows: opts.rows, cols: opts.cols, pixel_width: 0, pixel_height: 0 })
       .map_err(|e| e.to_string())?;
 
-    let mut cmd = CommandBuilder::new(shell::login_shell(&opts.env));
+    let login = shell::login_shell(&opts.env);
+    let mut cmd = CommandBuilder::new(&login);
     cmd.arg("-l");
     // Служебные переменные Claude Code из окружения приложения оболочке не нужны.
     for (k, _) in std::env::vars_os() {
@@ -83,6 +108,13 @@ impl PtyManager {
     let orig_zdotdir = std::env::var("ZDOTDIR").ok();
     for (k, v) in shell::session_env(&opts.zdotdir, orig_zdotdir).into_iter().chain(opts.env) {
       cmd.env(k, v);
+    }
+    let mark = new_mark();
+    // Ставится после opts.env: метку нельзя подменить переопределениями.
+    if is_zsh(&login) {
+      cmd.env(MARK_ENV, &mark);
+    } else {
+      cmd.env_remove(MARK_ENV);
     }
     let cwd = opts.cwd.filter(|p| p.is_dir()).or_else(dirs::home_dir);
     if let Some(cwd) = cwd {
@@ -143,7 +175,7 @@ impl PtyManager {
       on_exit(code);
     })?;
 
-    Ok(id)
+    Ok(Spawned { id, mark })
   }
 
   /// Ставит данные в очередь записи; не блокируется, даже если ребёнок не читает ввод.
@@ -296,7 +328,7 @@ pub fn pty_spawn(
   rows: u16,
   on_data: Channel<InvokeResponseBody>,
   on_exit: Channel<Option<u32>>,
-) -> Result<String, String> {
+) -> Result<Spawned, String> {
   let opts = SpawnOpts {
     cwd: cwd.map(PathBuf::from),
     cols,
@@ -438,21 +470,27 @@ pub(crate) mod tests {
   pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
 
   /// Запускает zsh и ждёт первого приглашения (OSC 7 из precmd).
-  fn start(m: &PtyManager, o: SpawnOpts) -> (String, Output, mpsc::Receiver<Option<u32>>) {
+  /// Возвращает id, вывод, канал выхода и метку маркеров сессии.
+  fn start(m: &PtyManager, o: SpawnOpts) -> (String, Output, mpsc::Receiver<Option<u32>>, String) {
     let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     start_unlocked(m, o)
   }
 
-  fn start_unlocked(m: &PtyManager, o: SpawnOpts) -> (String, Output, mpsc::Receiver<Option<u32>>) {
+  fn start_unlocked(m: &PtyManager, o: SpawnOpts) -> (String, Output, mpsc::Receiver<Option<u32>>, String) {
     let out = Output::default();
     let (tx, rx) = mpsc::channel();
-    let id = m
+    let Spawned { id, mark } = m
       .spawn(o, out.sink(), move |code| {
         let _ = tx.send(code);
       })
       .expect("spawn");
     assert!(out.wait_for(OSC7, 0), "нет приглашения zsh, вывод: {:?}", out.text());
-    (id, out, rx)
+    (id, out, rx, mark)
+  }
+
+  /// Маркеры OSC 133 подряд в формате интеграции: `ESC ] 133 ; <тело> ; kv=<метка> BEL`.
+  fn osc(mark: &str, bodies: &[&str]) -> String {
+    bodies.iter().map(|b| format!("\x1b]133;{b};kv={mark}\x07")).collect()
   }
 
   fn run(m: &PtyManager, id: &str, out: &Output, cmd: &str, expect: &str) {
@@ -469,7 +507,7 @@ pub(crate) mod tests {
   fn pty_utf8_passthrough() {
     let home = temp_home();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[]));
+    let (id, out, _rx, _mk) = start(&m, opts(home.path(), &[]));
     // Строка склеивается оболочкой, поэтому в эхе ввода её нет — только в выводе.
     run(&m, &id, &out, "echo \"При\"\"вет 👋\"\n", "Привет 👋");
     m.kill(&id).unwrap();
@@ -480,7 +518,7 @@ pub(crate) mod tests {
     let home = temp_home();
     std::fs::write(home.path().join(".zshrc"), "alias kvtest='echo KV_OK'\n").unwrap();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[]));
+    let (id, out, _rx, _mk) = start(&m, opts(home.path(), &[]));
     run(&m, &id, &out, "kvtest\n", "KV_OK");
     // Без исходного ZDOTDIR после .zlogin переменная снята.
     run(&m, &id, &out, "echo \"ZD=${ZDOTDIR-unset};\"\n", "ZD=unset;");
@@ -498,7 +536,7 @@ pub(crate) mod tests {
     std::fs::write(zd.join(".zshrc"), "alias kvtest='echo KV_OK'\n").unwrap();
     let zd_str = zd.to_string_lossy().into_owned();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_ORIG_ZDOTDIR", &zd_str)]));
+    let (id, out, _rx, _mk) = start(&m, opts(home.path(), &[("KV_ORIG_ZDOTDIR", &zd_str)]));
     run(&m, &id, &out, "kvtest\n", "KV_OK");
     // После .zlogin у пользователя снова его собственный ZDOTDIR.
     run(&m, &id, &out, "echo \"ZD=$ZDOTDIR;\"\n", &format!("ZD={zd_str};"));
@@ -509,7 +547,7 @@ pub(crate) mod tests {
   fn pty_emits_osc7() {
     let home = temp_home();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[]));
+    let (id, out, _rx, _mk) = start(&m, opts(home.path(), &[]));
     assert!(out.wait_for(OSC7, 0));
     m.kill(&id).unwrap();
   }
@@ -518,11 +556,11 @@ pub(crate) mod tests {
   fn bracketed_paste_runs_as_one_command() {
     let home = temp_home();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
-    assert!(out.wait_for(b"\x1b]133;A\x07", 0));
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), 0));
     // Так строка ввода отправляет команду: табуляция внутри — литерал, а не дополнение.
     // base64("echo a\tb") = ZWNobyBhCWI=
-    run(&m, &id, &out, "\x1b[200~echo a\tb\x1b[201~\r", "\x1b]133;C;ZWNobyBhCWI=\x07");
+    run(&m, &id, &out, "\x1b[200~echo a\tb\x1b[201~\r", &osc(&mk, &["C;ZWNobyBhCWI="]));
     m.kill(&id).unwrap();
   }
 
@@ -550,21 +588,21 @@ pub(crate) mod tests {
     let home = temp_home();
     std::fs::write(home.path().join(".zshrc"), "setopt hist_verify\n").unwrap();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
-    assert!(out.wait_for(b"\x1b]133;A\x07", 0));
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), 0));
     let from = out.len();
     m.write(&id, paste_cmd("echo one").as_bytes()).unwrap();
-    assert!(out.wait_for(b"\x1b]133;D;0\x07\x1b]133;A\x07", from), "вывод: {:?}", out.text());
+    assert!(out.wait_for(osc(&mk, &["D;0", "A"]).as_bytes(), from), "вывод: {:?}", out.text());
     // `!!` сразу выполняется (без hist_verify раскрытие вернулось бы в буфер ZLE).
     let from = out.len();
     m.write(&id, paste_cmd("!!").as_bytes()).unwrap();
-    let want = format!("\x1b]133;C;{}\x07", b64("echo one"));
+    let want = osc(&mk, &[&format!("C;{}", b64("echo one"))]);
     assert!(out.wait_for(want.as_bytes(), from), "вывод: {:?}", out.text());
-    assert!(out.wait_for(b"\x1b]133;A\x07", from), "вывод: {:?}", out.text());
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), from), "вывод: {:?}", out.text());
     // Следующая команда не склеивается с остатком.
     let from = out.len();
     m.write(&id, paste_cmd("echo two").as_bytes()).unwrap();
-    let want = format!("\x1b]133;C;{}\x07", b64("echo two"));
+    let want = osc(&mk, &[&format!("C;{}", b64("echo two"))]);
     assert!(out.wait_for(want.as_bytes(), from), "вывод: {:?}", out.text());
     m.kill(&id).unwrap();
   }
@@ -574,11 +612,11 @@ pub(crate) mod tests {
     let home = temp_home();
     std::fs::write(home.path().join(".zshrc"), "setopt correct correct_all\n").unwrap();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
-    assert!(out.wait_for(b"\x1b]133;A\x07", 0));
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), 0));
     let from = out.len();
     m.write(&id, paste_cmd("ecoh hi").as_bytes()).unwrap();
-    let want = format!("\x1b]133;C;{}\x07", b64("ecoh hi"));
+    let want = osc(&mk, &[&format!("C;{}", b64("ecoh hi"))]);
     assert!(out.wait_for(want.as_bytes(), from), "вывод: {:?}", out.text());
     assert!(!out.text()[from..].contains("[nyae]"), "вывод: {:?}", out.text());
     m.kill(&id).unwrap();
@@ -589,9 +627,9 @@ pub(crate) mod tests {
     let home = temp_home();
     std::fs::write(home.path().join(".zshrc"), "unset zle_bracketed_paste\nbindkey -r '^[[200~'\n").unwrap();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
-    assert!(out.wait_for(b"\x1b]133;A\x07", 0));
-    run(&m, &id, &out, &paste_cmd("echo a\tb"), "\x1b]133;C;ZWNobyBhCWI=\x07");
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), 0));
+    run(&m, &id, &out, &paste_cmd("echo a\tb"), &osc(&mk, &["C;ZWNobyBhCWI="]));
     m.kill(&id).unwrap();
   }
 
@@ -599,21 +637,21 @@ pub(crate) mod tests {
   fn line_finish_marker_precedes_command_and_parse_errors() {
     let home = temp_home();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
-    assert!(out.wait_for(b"\x1b]133;A\x07", 0));
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), 0));
     let from = out.len();
     m.write(&id, paste_cmd("echo hi").as_bytes()).unwrap();
-    assert!(out.wait_for(b"\x1b]133;D;0\x07", from), "вывод: {:?}", out.text());
-    let i = find_from(&out, "\x1b]133;I\x07", from).expect("нет 133;I");
+    assert!(out.wait_for(osc(&mk, &["D;0"]).as_bytes(), from), "вывод: {:?}", out.text());
+    let i = find_from(&out, &osc(&mk, &["I"]), from).expect("нет 133;I");
     let c = find_from(&out, "\x1b]133;C;", from).expect("нет 133;C");
     assert!(i < c);
     // Ошибка разбора: команда не запускается (нет C), но вывод идёт после I и до A.
     let from = out.len();
     m.write(&id, paste_cmd("ls )").as_bytes()).unwrap();
-    assert!(out.wait_for(b"\x1b]133;A\x07", from), "вывод: {:?}", out.text());
-    let i = find_from(&out, "\x1b]133;I\x07", from).expect("нет 133;I");
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), from), "вывод: {:?}", out.text());
+    let i = find_from(&out, &osc(&mk, &["I"]), from).expect("нет 133;I");
     let err = find_from(&out, "parse error", i).expect("нет ошибки разбора после I");
-    let a = find_from(&out, "\x1b]133;A\x07", err).expect("нет 133;A после ошибки");
+    let a = find_from(&out, &osc(&mk, &["A"]), err).expect("нет 133;A после ошибки");
     assert!(i < err && err < a);
     assert!(find_from(&out, "\x1b]133;C;", from).is_none());
     m.kill(&id).unwrap();
@@ -623,14 +661,14 @@ pub(crate) mod tests {
   fn continuation_prompt_emits_marker_and_ctrl_c_resets() {
     let home = temp_home();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
-    assert!(out.wait_for(b"\x1b]133;A\x07", 0));
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), 0));
     let from = out.len();
-    run(&m, &id, &out, "\x1b[200~echo \"abc\x1b[201~\r", "\x1b]133;A;k=s\x07");
+    run(&m, &id, &out, "\x1b[200~echo \"abc\x1b[201~\r", &osc(&mk, &["A;k=s"]));
     // ⌃C сбрасывает незаконченную строку: новое основное приглашение.
     m.write(&id, b"\x03").unwrap();
     let after = out.len();
-    assert!(out.wait_for(b"\x1b]133;A\x07", after), "вывод: {:?}", out.text());
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), after), "вывод: {:?}", out.text());
     assert!(find_from(&out, "\x1b]133;C;", from).is_none(), "команда не должна была запуститься");
     m.kill(&id).unwrap();
   }
@@ -639,13 +677,13 @@ pub(crate) mod tests {
   fn osc7_percent_encodes() {
     let home = temp_home();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[]));
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[]));
     run(
       &m,
       &id,
       &out,
       "mkdir -p '100%done/при вет' && cd '100%done/при вет'\n",
-      "/100%25done/%D0%BF%D1%80%D0%B8%20%D0%B2%D0%B5%D1%82\x07",
+      &format!("/100%25done/%D0%BF%D1%80%D0%B8%20%D0%B2%D0%B5%D1%82;kv={mk}\x07"),
     );
     m.kill(&id).unwrap();
   }
@@ -655,13 +693,13 @@ pub(crate) mod tests {
     let home = temp_home();
     std::fs::write(home.path().join(".zshrc"), "setopt KSH_ARRAYS\n").unwrap();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[]));
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[]));
     run(
       &m,
       &id,
       &out,
       "mkdir -p '100%done/при вет' && cd '100%done/при вет'\n",
-      "/100%25done/%D0%BF%D1%80%D0%B8%20%D0%B2%D0%B5%D1%82\x07",
+      &format!("/100%25done/%D0%BF%D1%80%D0%B8%20%D0%B2%D0%B5%D1%82;kv={mk}\x07"),
     );
     m.kill(&id).unwrap();
   }
@@ -679,18 +717,18 @@ pub(crate) mod tests {
   fn blocks_mode_emits_osc133() {
     let home = temp_home();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
     let from = out.len();
     m.write(&id, b"echo hi\n").unwrap();
-    assert!(out.wait_for(b"\x1b]133;D;0\x07\x1b]133;A\x07", from), "вывод: {:?}", out.text());
-    let c = find_from(&out, "\x1b]133;C;ZWNobyBoaQ==\x07", from).expect("нет 133;C");
+    assert!(out.wait_for(osc(&mk, &["D;0", "A"]).as_bytes(), from), "вывод: {:?}", out.text());
+    let c = find_from(&out, &osc(&mk, &["C;ZWNobyBoaQ=="]), from).expect("нет 133;C");
     let hi = find_from(&out, "hi\r\n", c).expect("нет вывода hi");
-    let d = find_from(&out, "\x1b]133;D;0\x07", hi).expect("нет 133;D;0");
-    let a = find_from(&out, "\x1b]133;A\x07", d).expect("нет 133;A");
+    let d = find_from(&out, &osc(&mk, &["D;0"]), hi).expect("нет 133;D;0");
+    let a = find_from(&out, &osc(&mk, &["A"]), d).expect("нет 133;A");
     assert!(c < hi && hi < d && d < a);
     let from = out.len();
     m.write(&id, b"false\n").unwrap();
-    assert!(out.wait_for(b"\x1b]133;D;1\x07", from), "вывод: {:?}", out.text());
+    assert!(out.wait_for(osc(&mk, &["D;1"]).as_bytes(), from), "вывод: {:?}", out.text());
     m.kill(&id).unwrap();
   }
 
@@ -752,15 +790,16 @@ pub(crate) mod tests {
   fn blocks_mode_long_multiline_command_roundtrips() {
     let home = temp_home();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
     let l1 = format!("echo \"{}", "a".repeat(40));
     let l2 = format!("{}\"", "б".repeat(30));
     let from = out.len();
     m.write(&id, format!("{l1}\n{l2}\n").as_bytes()).unwrap();
-    assert!(out.wait_for(b"\x1b]133;A\x07", from + 1));
+    assert!(out.wait_for(osc(&mk, &["A"]).as_bytes(), from + 1));
     let text = out.text();
     let start_i = text[from..].find("\x1b]133;C;").expect("нет 133;C") + from + "\x1b]133;C;".len();
-    let end_i = text[start_i..].find('\x07').expect("нет BEL") + start_i;
+    // Нагрузка — до параметра метки `;kv=`.
+    let end_i = text[start_i..].find(';').expect("нет метки") + start_i;
     let payload = &text[start_i..end_i];
     assert!(!payload.contains(['\n', '\r']), "перевод строки в нагрузке: {payload:?}");
     assert_eq!(String::from_utf8(b64_decode(payload)).unwrap(), format!("{l1}\n{l2}"));
@@ -771,14 +810,14 @@ pub(crate) mod tests {
   fn blocks_mode_hides_prompt() {
     let home = temp_home();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
     let from = out.len();
     m.write(&id, b"echo hi\n").unwrap();
-    assert!(out.wait_for(b"\x1b]133;D;0\x07", from));
-    assert!(out.wait_for(b"\x1b]133;D;0\x07\x1b]133;A\x07", from));
+    assert!(out.wait_for(osc(&mk, &["D;0"]).as_bytes(), from));
+    assert!(out.wait_for(osc(&mk, &["D;0", "A"]).as_bytes(), from));
     std::thread::sleep(Duration::from_millis(500));
     let text = out.text();
-    let tail = &text[text.rfind("\x1b]133;A\x07").expect("нет 133;A")..];
+    let tail = &text[text.rfind(&osc(&mk, &["A"])).expect("нет 133;A")..];
     let visible = strip_escapes(tail);
     assert!(!visible.contains(['%', '$', '❯']), "виден prompt: {visible:?}");
     m.kill(&id).unwrap();
@@ -788,7 +827,7 @@ pub(crate) mod tests {
   fn session_env_scrubs_claude_vars() {
     let home = temp_home();
     let m = PtyManager::default();
-    let (id, out, _rx) = {
+    let (id, out, _rx, _mk) = {
       let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
       unsafe { std::env::set_var("CLAUDE_CODE_CHILD_SESSION", "1") };
       unsafe { std::env::set_var("CLAUDECODE", "1") };
@@ -802,10 +841,49 @@ pub(crate) mod tests {
   }
 
   #[test]
+  fn mark_is_hidden_from_commands() {
+    let home = temp_home();
+    // Пользовательский .zshenv тоже не видит метку в окружении.
+    std::fs::write(home.path().join(".zshenv"), "echo \"ZE=${KODEVERTEX_MARK-unset};\"\n").unwrap();
+    let m = PtyManager::default();
+    let (id, out, _rx, mk) = start(&m, opts(home.path(), &[("KV_BLOCKS", "1")]));
+    assert!(out.text().contains("ZE=unset;"), "вывод: {:?}", out.text());
+    run(&m, &id, &out, "echo \"E=${KODEVERTEX_MARK-unset};\"\n", "E=unset;");
+    // Ни дочерний процесс, ни его окружение метку не получают.
+    run(&m, &id, &out, "sh -c 'echo \"S=${KODEVERTEX_MARK-unset}${_kv_mark-unset};\"'\n", "S=unsetunset;");
+    run(&m, &id, &out, "env | grep -c \"$_kv_mark\" | sed 's/^/N=/;s/$/;/'\n", "N=0;");
+    // Сама оболочка метку знает: маркеры её содержат.
+    assert_eq!(mk.len(), 32);
+    assert!(mk.bytes().all(|b| b.is_ascii_hexdigit()));
+    assert!(out.text().contains(&osc(&mk, &["A"])));
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
+  fn each_session_gets_its_own_mark() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (a, _out_a, _rx_a, mk_a) = start(&m, opts(home.path(), &[]));
+    let (b, _out_b, _rx_b, mk_b) = start(&m, opts(home.path(), &[(MARK_ENV, "подмена")]));
+    assert_ne!(mk_a, mk_b);
+    assert_ne!(mk_b, "подмена", "переопределение окружения не меняет метку");
+    m.kill(&a).unwrap();
+    m.kill(&b).unwrap();
+  }
+
+  #[test]
+  fn mark_only_for_zsh() {
+    assert!(is_zsh("/bin/zsh"));
+    assert!(is_zsh("/opt/homebrew/bin/zsh"));
+    assert!(!is_zsh("/bin/bash"));
+    assert!(!is_zsh("/usr/local/bin/fish"));
+  }
+
+  #[test]
   fn pty_resize_reaches_child() {
     let home = temp_home();
     let m = PtyManager::default();
-    let (id, out, _rx) = start(&m, opts(home.path(), &[]));
+    let (id, out, _rx, _mk) = start(&m, opts(home.path(), &[]));
     m.resize(&id, 100, 30).unwrap();
     run(&m, &id, &out, "stty size\n", "30 100");
     m.kill(&id).unwrap();
@@ -817,13 +895,13 @@ pub(crate) mod tests {
     let m = PtyManager::default();
 
     // Выход по `exit`: событие приходит, сессия больше не принимает ввод.
-    let (id, _out, rx) = start(&m, opts(home.path(), &[]));
+    let (id, _out, rx, _mk) = start(&m, opts(home.path(), &[]));
     m.write(&id, b"exit\n").unwrap();
     rx.recv_timeout(EXIT_TIMEOUT).expect("on_exit после exit");
     assert!(m.write(&id, b"echo\n").is_err());
 
     // kill у живой сессии: событие приходит, процесс убран (не зомби).
-    let (id, _out, rx) = start(&m, opts(home.path(), &[]));
+    let (id, _out, rx, _mk) = start(&m, opts(home.path(), &[]));
     let pid = m.pid(&id).expect("pid");
     m.kill(&id).unwrap();
     rx.recv_timeout(EXIT_TIMEOUT).expect("on_exit после kill");
@@ -858,7 +936,7 @@ pub(crate) mod tests {
   fn pty_kill_hangs_up_foreground_spares_nohup_jobs_and_releases_reader() {
     let home = temp_home();
     let m = PtyManager::default();
-    let (id, out, rx) = start(&m, opts(home.path(), &[]));
+    let (id, out, rx, _mk) = start(&m, opts(home.path(), &[]));
     // Фоновое задание, которое игнорирует SIGHUP и держит слейв открытым.
     let from = out.len();
     m.write(&id, b"(trap '' HUP; exec sleep 300) & echo \"B\"\"G=$!;\"\n").unwrap();
@@ -886,12 +964,12 @@ pub(crate) mod tests {
     assert!(m.kill("нет-такой").is_ok());
 
     let home = temp_home();
-    let (id, _out, rx) = start(&m, opts(home.path(), &[]));
+    let (id, _out, rx, _mk) = start(&m, opts(home.path(), &[]));
     m.write(&id, b"exit\n").unwrap();
     rx.recv_timeout(EXIT_TIMEOUT).expect("on_exit после exit");
     assert!(m.kill(&id).is_ok(), "kill после обычного exit должен быть no-op");
     // Повторный kill уже убитой сессии — тоже не ошибка.
-    let (id, _out, rx) = start(&m, opts(home.path(), &[]));
+    let (id, _out, rx, _mk) = start(&m, opts(home.path(), &[]));
     m.kill(&id).unwrap();
     rx.recv_timeout(EXIT_TIMEOUT).expect("on_exit после kill");
     assert!(m.kill(&id).is_ok());
@@ -901,7 +979,7 @@ pub(crate) mod tests {
   fn pty_reader_released_after_exit_with_disowned_job() {
     let home = temp_home();
     let m = PtyManager::default();
-    let (id, out, rx) = start(&m, opts(home.path(), &[]));
+    let (id, out, rx, _mk) = start(&m, opts(home.path(), &[]));
     // Отвязанное задание держит слейв, поэтому EOF на мастере после exit не придёт.
     let from = out.len();
     m.write(&id, b"(trap '' HUP; exec sleep 300) &! echo \"B\"\"G=$!;\"\n").unwrap();

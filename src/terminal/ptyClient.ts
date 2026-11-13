@@ -2,6 +2,8 @@ import { Channel, invoke } from '@tauri-apps/api/core'
 
 export interface PtyHandle {
   id: string
+  /** Метка маркеров OSC 133/7 этой сессии: маркеры без неё — не от нашей оболочки. */
+  mark: string
   write(s: string): void
   resize(c: number, r: number): void
   kill(): void
@@ -13,6 +15,17 @@ export interface SpawnOptions {
   rows: number
   onData: (b: Uint8Array) => void
   onExit: (code: number | null) => void
+  /**
+   * Сессия запущена, метка известна. Вызывается до первого onData: вывод, пришедший раньше
+   * ответа pty_spawn, придерживается до этого момента — иначе первые маркеры (приглашение,
+   * OSC 7) пришли бы, когда метку ещё не с чем сравнить.
+   */
+  onSpawn?: (h: PtyHandle) => void
+}
+
+interface SpawnResult {
+  id: string
+  mark: string
 }
 
 // Raw InvokeResponseBody arrives as ArrayBuffer; tolerate typed arrays and JSON arrays too.
@@ -29,20 +42,34 @@ function report(cmd: string) {
 }
 
 export async function spawnPty(o: SpawnOptions): Promise<PtyHandle> {
-  const onData = new Channel<unknown>((m) => o.onData(toBytes(m)))
-  const onExit = new Channel<number | null>((code) => o.onExit(code ?? null))
-  const id = await invoke<string>('pty_spawn', {
-    cwd: o.cwd,
-    cols: o.cols,
-    rows: o.rows,
-    onData,
-    onExit,
+  // До ответа pty_spawn вывод и выход копятся по порядку и отдаются после onSpawn.
+  let pending: (() => void)[] | null = []
+  const deliver = (f: () => void) => (pending ? pending.push(f) : f())
+  const onData = new Channel<unknown>((m) => {
+    const b = toBytes(m)
+    deliver(() => o.onData(b))
   })
+  const onExit = new Channel<number | null>((code) => deliver(() => o.onExit(code ?? null)))
+  let res: SpawnResult
+  try {
+    res = await invoke<SpawnResult>('pty_spawn', {
+      cwd: o.cwd,
+      cols: o.cols,
+      rows: o.rows,
+      onData,
+      onExit,
+    })
+  } catch (e) {
+    pending = null
+    throw e
+  }
+  const { id, mark } = res
   // pty_write is an async command: concurrent invokes may be reordered on the Rust side,
   // so each write waits for the previous one.
   let writes: Promise<unknown> = Promise.resolve()
-  return {
+  const handle: PtyHandle = {
     id,
+    mark,
     write(data) {
       writes = writes.then(() => invoke('pty_write', { id, data })).catch(report('pty_write'))
     },
@@ -53,4 +80,9 @@ export async function spawnPty(o: SpawnOptions): Promise<PtyHandle> {
       invoke('pty_kill', { id }).catch(report('pty_kill'))
     },
   }
+  o.onSpawn?.(handle)
+  const queued = pending
+  pending = null
+  for (const f of queued) f()
+  return handle
 }

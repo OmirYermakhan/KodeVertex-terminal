@@ -36,7 +36,10 @@ export type ParsedOsc133 =
 /** Замороженный блок длиннее этого числа строк сворачивается. */
 export const COLLAPSE_LINES = 2000
 
-/** Полезная нагрузка OSC 133 (после "133;"): 'A' | 'A;k=s' | 'I' | 'C;<base64>' | 'D;<код>'. */
+/**
+ * Полезная нагрузка OSC 133 (после "133;"): 'A' | 'A;k=s' | 'I' | 'C;<base64>' | 'D;<код>'.
+ * Уже без метки сессии: оболочка шлёт `<нагрузка>;kv=<метка>`, её проверяет и снимает `unmark`.
+ */
 export function parseOsc133(data: string): ParsedOsc133 | null {
   if (data === 'A') return { t: 'prompt' }
   if (data === 'I') return { t: 'accepted' }
