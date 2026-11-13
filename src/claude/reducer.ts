@@ -27,6 +27,11 @@ export type FeedClaudeItem =
     }
   | { type: 'summary'; text: string; durationMs: number; costUsd: number; isError: boolean }
   | { type: 'error'; text: string }
+  /**
+   * План агента (TodoWrite): одна карточка на агента, каждый следующий TodoWrite обновляет её
+   * на месте, а не добавляет новую.
+   */
+  | { type: 'todo'; agentId: string; toolUseId: string; todos: Todo[] }
   /** Тихая моноширинная строка ленты (например, «Модель: Fable 5.2 · усилие high»). */
   | { type: 'note'; text: string }
   /** Вопрос агента с вариантами (AskUserQuestion): ответы по шагам, всё отвечено — done. */
@@ -66,6 +71,40 @@ export type FeedClaudeItem =
   | { type: 'replaced'; items: FeedClaudeItem[]; count: number }
   /** Место элемента, ушедшего в «Прежний вариант» (индексы элементов не сдвигаются). */
   | { type: 'gone' }
+
+export type TodoStatus = 'pending' | 'in_progress' | 'completed'
+export interface Todo {
+  content: string
+  status: TodoStatus
+  /** Форма «в процессе» («Пишу тесты»), если агент её дал. */
+  activeForm?: string
+}
+
+const TODO_STATUS = new Set<string>(['pending', 'in_progress', 'completed'])
+
+/** Пункты TodoWrite: без текста — пропускаем, неизвестный статус — «не начат». */
+function parseTodos(v: unknown[]): Todo[] {
+  const out: Todo[] = []
+  for (const t of v) {
+    if (!isRec(t)) continue
+    const content = strOr(t.content).trim()
+    if (!content) continue
+    const status = (TODO_STATUS.has(strOr(t.status)) ? t.status : 'pending') as TodoStatus
+    const active = strOr(t.activeForm).trim()
+    out.push(active ? { content, status, activeForm: active } : { content, status })
+  }
+  return out
+}
+
+/** План агента в ленте: есть карточка — обновить на месте, нет — добавить в конец. */
+function upsertTodo(s: ClaudeState, aid: string, toolUseId: string, todos: Todo[]): ClaudeState {
+  const idx = s.items.findIndex((it) => it.type === 'todo' && it.agentId === aid)
+  const item: FeedClaudeItem = { type: 'todo', agentId: aid, toolUseId, todos }
+  if (idx < 0) return { ...s, items: [...s.items, item] }
+  const items = s.items.slice()
+  items[idx] = item
+  return { ...s, items }
+}
 
 export type PermissionDecision = 'allow' | 'always' | 'deny'
 
@@ -347,7 +386,9 @@ function onToolUse(s: ClaudeState, aid: string, block: Rec, now: number): Claude
   const label = nowLabel(tool, input)
   let next = s
 
-  if (!next.items.some((it) => it.type === 'action' && it.toolUseId === id)) {
+  if (tool === 'TodoWrite' && Array.isArray(input.todos)) {
+    next = upsertTodo(next, aid, id, parseTodos(input.todos))
+  } else if (!next.items.some((it) => it.type === 'action' && it.toolUseId === id)) {
     const { title, detail } = actionTitle(tool, input)
     const diff = diffOf(tool, input)
     next = {

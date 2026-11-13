@@ -376,6 +376,16 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .diff .d { color: var(--del); }
 .diff .n { color: var(--com); }
 .diff-more { display: block; }
+/* План агента (TodoWrite): рамка и подпись как у .act, но сплошная — карточка обновляется на месте.
+   Текущий пункт — --accText, сделанные — приглушены и зачёркнуты. */
+.plan { box-sizing: border-box; border: 1px solid var(--rule); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; max-width: 100ch; font-family: var(--font-code); font-size: calc(var(--size-code) - 0.5px); line-height: normal; color: var(--text); }
+.plan .who { color: var(--info); }
+.plan-list { list-style: none; margin: 0; padding: 0; max-width: 76ch; font-family: var(--font-text); font-size: calc(var(--size-text) - 1.5px); line-height: var(--lh-text); }
+.plan-i { display: flex; gap: 8px; align-items: baseline; }
+.plan-box { flex: none; width: 1.2em; font-family: var(--font-code); color: var(--muted); }
+.plan-t { min-width: 0; overflow-wrap: anywhere; }
+.plan-i.in_progress .plan-box, .plan-i.in_progress .plan-t { color: var(--accText); }
+.plan-i.completed .plan-t { color: var(--muted); text-decoration: line-through; }
 /* Вид изменений файла (Edit/Write/MultiEdit): заголовок «путь +A −D» и кнопки, ниже — .diff макета 02
    с колонками номеров «было/стало»; строки +/− — тонированный фон --add/--del, код — подсветка hljs. */
 .dv { margin-top: 2px; }

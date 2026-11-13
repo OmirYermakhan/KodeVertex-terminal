@@ -8,6 +8,7 @@ import { PermissionCard } from './PermissionCard'
 import { QuestionCard } from './QuestionCard'
 import { SessionNote } from './SessionNote'
 import { SummaryCard } from './SummaryCard'
+import { TodoCard } from './TodoCard'
 import { UserBubble } from './UserBubble'
 
 export const OLD_VARIANT = '↺ Прежний вариант'
@@ -86,6 +87,8 @@ export const ClaudeCard = memo(function ClaudeCard({
       return <SessionNote id={item.id} cwd={it.cwd} mode={it.mode} />
     case 'replaced':
       return <ReplacedRow id={item.id} items={it.items} count={it.count} agents={agents} />
+    case 'todo':
+      return <TodoCard id={item.id} todos={it.todos} />
     case 'gone':
       return null
     case 'note':
