@@ -1,6 +1,6 @@
 import { createRef } from 'react'
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PAUSE_HINT, QUEUE_KEYS, QueuePanel, type QueuePanelHandle } from './QueuePanel'
 
 const queue = [
@@ -54,5 +54,33 @@ describe('QueuePanel', () => {
     act(() => ref.current!.focus())
     fireEvent.keyDown(container.querySelector('.queue')!, { key: 'Delete' })
     expect(onExit).toHaveBeenCalled()
+  })
+
+  describe('уход последней строки', () => {
+    afterEach(() => {
+      delete (HTMLElement.prototype as unknown as { animate?: unknown }).animate
+      vi.useRealTimers()
+    })
+
+    it('очередь опустела — панель ещё миг уходит с последней строкой, затем пропадает', () => {
+      vi.useFakeTimers()
+      // Web Animations в jsdom нет: без них уход сразу (как при «Уменьшить движение»).
+      ;(HTMLElement.prototype as unknown as { animate: unknown }).animate = () => ({ cancel() {} })
+      const props = { paused: false, onRemove: vi.fn(), onExit: vi.fn() }
+      const { container, rerender } = render(<QueuePanel queue={[queue[0]]} {...props} />)
+      rerender(<QueuePanel queue={[]} {...props} />)
+      const box = container.querySelector('.queue')!
+      expect(box.classList.contains('leaving')).toBe(true)
+      expect(box.getAttribute('aria-hidden')).toBe('true')
+      expect(box.querySelector('.dh b')!.textContent).toBe('1')
+      expect(box.querySelector('.qu-row.leaving')!.textContent).toContain('добавь тесты')
+      act(() => void vi.advanceTimersByTime(130))
+      expect(container.querySelector('.queue')).toBeNull()
+    })
+
+    it('пустая очередь без ухода — ничего не рисуется', () => {
+      const { container } = render(<QueuePanel queue={[]} paused={false} onRemove={vi.fn()} onExit={vi.fn()} />)
+      expect(container.querySelector('.queue')).toBeNull()
+    })
   })
 })

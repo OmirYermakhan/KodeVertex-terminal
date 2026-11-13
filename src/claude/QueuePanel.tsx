@@ -75,11 +75,23 @@ export const QueuePanel = forwardRef<QueuePanelHandle, QueuePanelProps>(function
   const n = p.queue.length
   // Убранная строка ещё миг уходит (анимация в global.css), потом пропадает.
   const rows = usePresence(p.queue, (m) => m.id)
+  // Панель смонтирована и при пустой очереди (TerminalPane): так уход последней строки доигрывается —
+  // уходит вся панель (заголовок с прежним числом), затем ничего не рисуется.
+  if (rows.length === 0) return null
+  const leaving = n === 0
   return (
-    <div className="queue" ref={boxRef} tabIndex={-1} role="listbox" aria-label="Очередь сообщений" onKeyDown={onKeyDown}>
+    <div
+      className={leaving ? 'queue leaving' : 'queue'}
+      ref={boxRef}
+      tabIndex={-1}
+      role={leaving ? undefined : 'listbox'}
+      aria-label={leaving ? undefined : 'Очередь сообщений'}
+      aria-hidden={leaving || undefined}
+      onKeyDown={onKeyDown}
+    >
       <div className="dh">
         <span>
-          В очереди · <b>{n}</b>
+          В очереди · <b>{leaving ? rows.length : n}</b>
           {p.paused && <span className="qu-pause"> · {PAUSE_HINT}</span>}
         </span>
         <span className="keys">{QUEUE_KEYS}</span>

@@ -664,12 +664,13 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
    translate/scale — отдельными свойствами: не спорят с transform выборок (.cp.pal). */
 .kv-collapse { overflow: hidden; }
 .kv-collapse:empty { display: none; }
-.qu-row.leaving { pointer-events: none; }
+.qu-row.leaving, .queue.leaving { pointer-events: none; }
 @media (prefers-reduced-motion: no-preference) {
   @keyframes kv-in { from { opacity: 0; translate: 0 4px; } }
   @keyframes kv-in-q { from { opacity: 0; translate: 0 4px; } }
   @keyframes kv-pop { from { opacity: 0; scale: 0.98; } }
   @keyframes kv-out { to { opacity: 0; translate: 8px 0; } }
+  @keyframes kv-out-fade { to { opacity: 0; } }
   /* Карточка или блок появились (стрим текста их не перемонтирует — дельты без анимации). */
   .feed > :not(.feed-park):not(.feed-empty) { animation: kv-in 140ms ease-out; }
   /* Ответ на вопрос: тихая строка «Ждёт ответа» сменилась свёрнутой карточкой. */
@@ -677,6 +678,9 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
   .feed-empty .ks { animation: kv-in 140ms ease-out; }
   .qu-row { animation: kv-in 140ms ease-out; }
   .qu-row.leaving { animation: kv-out 120ms ease-in forwards; }
+  /* Ушла последняя строка — уходит вся панель очереди (строка внутри — вместе с ней). */
+  .queue.leaving { animation: kv-out-fade 120ms ease-in forwards; }
+  .queue.leaving .qu-row.leaving { animation: none; }
   .cp, .pop { animation: kv-pop 100ms ease-out; }
   .dock > .aprompt { animation: kv-in 140ms ease-out; }
 }

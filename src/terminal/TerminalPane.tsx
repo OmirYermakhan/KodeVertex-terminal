@@ -1163,7 +1163,8 @@ export function TerminalPane(p: TerminalPaneProps) {
           />
           </ErrorBoundary>
         )}
-        {queueShown && (
+        {/* Смонтирована и при пустой очереди: уход последней строки анимируется (QueuePanel рисует null). */}
+        {!alt && (
           <ErrorBoundary name="очередь сообщений">
           <QueuePanel
             ref={queueRef}
