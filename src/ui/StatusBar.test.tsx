@@ -115,3 +115,14 @@ describe('StatusBar: смена модели', () => {
     expect(container.textContent).toContain('модель Fable 5.2')
   })
 })
+
+describe('стоимость сессии в статус-баре', () => {
+  it('«$0.42» при ненулевой стоимости, без сегмента при нуле', () => {
+    const now = new Date(2026, 0, 1, 14, 32)
+    const { rerender } = render(<StatusBar git={null} now={now} claude={{ ...initialClaude(), costUsd: 0.42 }} />)
+    expect(screen.getByText('$0.42')).toBeTruthy()
+    rerender(<StatusBar git={null} now={now} claude={initialClaude()} />)
+    expect(screen.queryByText(/^\$/)).toBeNull()
+  })
+})
+

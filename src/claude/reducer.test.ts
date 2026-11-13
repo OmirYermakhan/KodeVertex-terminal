@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import raw from './fixtures/bash-ls.jsonl?raw'
-import { canEdit, editInfo, lastEditable, messagesLabel, newSession, replaceFrom, actionTitle, cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaude, pendingPrompt, pendingQuestion, recordAnswer, modelLabel, nowLabel, reduceClaude, userSent, dropSuggestion, clearSession } from './reducer'
+import { canEdit, editInfo, lastEditable, messagesLabel, newSession, replaceFrom, actionTitle, cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaude, pendingPrompt, pendingQuestion, recordAnswer, modelLabel, nowLabel, reduceClaude, userSent, dropSuggestion, clearSession, newProcess } from './reducer'
 import type { ClaudeState } from './reducer'
 
 const lines = raw
@@ -419,5 +419,42 @@ describe('подсказка следующего сообщения (prompt_sug
     const again = reduceClaude(userSent(s, 'x', 1000), result, 1200)
     expect(again.suggestion).toBeNull()
     expect(again.turnEndAt).toBe(1200)
+  })
+})
+
+describe('стоимость хода и сессии', () => {
+  const res = (total: number, ms = 1000) => ({ type: 'result', result: 'ok', duration_ms: ms, total_cost_usd: total })
+  const reply = (text: string) => assistant([{ type: 'text', text }])
+  const turn = (s: ClaudeState, text: string, total: number, ms?: number) => run(userSent(s, 'q', 0), [reply(text), res(total, ms)])
+
+  it('ход стоит разницу нарастающих итогов; цена и время — в последнем ответе хода', () => {
+    let s = turn(initialClaude(), 'a', 0.1, 2000)
+    s = turn(s, 'b', 0.25, 3000)
+    expect(s.costUsd).toBeCloseTo(0.25)
+    const sums = s.items.filter((i) => i.type === 'summary')
+    expect((sums[1] as { costUsd: number }).costUsd).toBeCloseTo(0.15)
+    const last = s.items.filter((i) => i.type === 'assistant').at(-1) as { turn?: { durationMs: number; costUsd: number } }
+    expect(last.turn?.durationMs).toBe(3000)
+    expect(last.turn?.costUsd).toBeCloseTo(0.15)
+  })
+
+  it('перезапуск процесса (--resume, правка) складывает итоги, а не теряет их', () => {
+    let s = turn(initialClaude(), 'a', 0.3)
+    s = newProcess(s)
+    s = turn(s, 'b', 0.05)
+    expect(s.costUsd).toBeCloseTo(0.35)
+    const sum = s.items.filter((i) => i.type === 'summary').at(-1) as { costUsd: number }
+    expect(sum.costUsd).toBeCloseTo(0.05)
+  })
+
+  it('восстановленная сессия (только costUsd) продолжает счёт после запуска процесса', () => {
+    const s = newProcess({ ...initialClaude(), costUsd: 0.42 })
+    expect(turn(s, 'a', 0.08).costUsd).toBeCloseTo(0.5)
+  })
+
+  it('/clear обнуляет итог', () => {
+    const s = clearSession(newProcess(turn(initialClaude(), 'a', 0.3)))
+    expect(s.costUsd).toBe(0)
+    expect(turn(newProcess(s), 'b', 0.02).costUsd).toBeCloseTo(0.02)
   })
 })

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { projectName, useHome, type GitInfo } from '../status/useGitInfo'
 import { modelLabel, type ClaudeState } from '../claude/reducer'
 import { tokensLabel } from '../claude/AgentsPanel'
+import { formatCost } from '../claude/cards/SummaryCard'
 
 /** Доля контекста, после которой полоска желтеет. */
 export const CONTEXT_WARN = 0.8
@@ -81,6 +82,11 @@ export default function StatusBar(p: {
           {/* Как в макете: «84k» и «/200k» — отдельные элементы сегмента (с тем же зазором). */}
           <b>{tokensLabel(c.contextUsed)}</b>
           {`/${tokensLabel(c.contextMax)}`}
+        </div>
+      )}
+      {c && c.costUsd > 0 && (
+        <div className="sg" title="Стоимость сессии">
+          <b>{formatCost(c.costUsd)}</b>
         </div>
       )}
       <div className="sg right">{hhmm(now)}</div>
