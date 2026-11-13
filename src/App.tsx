@@ -8,6 +8,7 @@ import PaneView from './ui/PaneView'
 import TabBar from './ui/TabBar'
 import StatusBar from './ui/StatusBar'
 import SettingsPanel from './ui/SettingsPanel'
+import CommandPalette from './palette/CommandPalette'
 import { useUi } from './ui/uiStore'
 import { useGitInfo } from './status/useGitInfo'
 import Toasts from './notify/Toasts'
@@ -36,6 +37,7 @@ export default function App() {
     return claudeOpen(p) ? p.permissionMode : undefined
   })
   const settingsOpen = useUi((s) => s.settingsOpen)
+  const paletteOpen = useUi((s) => s.paletteOpen)
   const attachments = useAttachCount((s) => (focusedPane ? (s.counts[focusedPane] ?? 0) : 0))
 
   useEffect(() => {
@@ -63,6 +65,8 @@ export default function App() {
       if (e.repeat && !REPEATABLE.has(a)) return
       // Пока открыты настройки, остальные действия не должны менять вкладки за окном.
       if (useUi.getState().settingsOpen && a !== 'openSettings') return
+      // Палитра ⌘P: клавиши — её строке; ⌘P закрывает её.
+      if (useUi.getState().paletteOpen && a !== 'palette') return
       runAction(a)
     }
     window.addEventListener('keydown', onKey, { capture: true })
@@ -92,6 +96,7 @@ export default function App() {
         <StatusBar cwd={cwd} git={git} claude={claude} attachments={attachments} permissionMode={permissionMode} />
       </div>
       <Toasts />
+      {paletteOpen && <CommandPalette onClose={() => useUi.getState().setPaletteOpen(false)} />}
       <SettingsPanel open={settingsOpen} onClose={() => useUi.getState().setSettingsOpen(false)} />
     </div>
   )

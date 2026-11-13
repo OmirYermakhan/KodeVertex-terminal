@@ -153,6 +153,10 @@ export interface InputBarHandle {
   restore(s: InputSnapshot): void
   /** Текст со значками — в строку для правки (режим Claude, курсор в конце). false — строка неактивна. */
   load(d: Doc): boolean
+  /** ⌘P «Режим Claude»: включить (как `claude` ↵) или выключить (как esc на пустой строке). */
+  toggleClaude(): void
+  /** ⌘P «/model»: карточка выбора модели, как после `/model` ↵ (набранное в строке остаётся). */
+  openModelPicker(): void
 }
 
 export interface InputSnapshot {
@@ -550,6 +554,25 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       setClaudeMode(snap.claude)
       nav.current = NAV_START
       setDoc(snap.doc, snap.doc.text.length)
+    },
+    toggleClaude: () => {
+      const q = props.current
+      if (q.disabled || q.answer || q.edit) return
+      completionRef.current.close()
+      hintsRef.current.reset()
+      setAt(null)
+      if (claudeRef.current) setClaudeMode(false)
+      else if (q.onEnterClaude()) setClaudeMode(true)
+      edRef.current?.focus()
+    },
+    openModelPicker: () => {
+      const q = props.current
+      if (q.disabled || !q.onChooseModel) return
+      const info = q.modelInfo?.() ?? { current: null, effort: null }
+      completionRef.current.close()
+      hintsRef.current.close()
+      setPickerState(initialPicker(info.current, info.effort))
+      edRef.current?.focus()
     },
     load: (d) => {
       if (props.current.disabled) return false

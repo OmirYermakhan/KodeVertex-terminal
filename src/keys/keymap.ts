@@ -5,7 +5,7 @@ export type Action =
   | 'prevTab' | 'nextTab'
   | 'fontBigger' | 'fontSmaller' | 'fontReset' | 'openSettings'
   | 'blockPrev' | 'blockNext' | 'blockCopy' | 'blockAttach' | 'blockRead'
-  | 'toggleAgents'
+  | 'toggleAgents' | 'find' | 'palette'
 
 export interface Binding {
   action: Action
@@ -51,6 +51,10 @@ export const KEYMAP: Binding[] = [
   // ⌘R: выбранный (или последний) ответ — в режиме чтения.
   cmd('blockRead', 'KeyR'),
   cmd('toggleAgents', 'KeyJ'),
+  // ⌘F: поиск в ленте фокусной панели.
+  cmd('find', 'KeyF'),
+  // ⌘P: палитра команд.
+  cmd('palette', 'KeyP'),
 ]
 
 export function matchKey(

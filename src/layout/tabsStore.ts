@@ -24,6 +24,8 @@ interface TabsState {
   activateIndex(i: number): void
   split(axis: 'row' | 'col'): void
   closeFocused(): void
+  /** ✕ на панели: закрыть именно её (последняя панель — вкладку, последняя вкладка — заменить новой). */
+  closePane(paneId: string): void
   paneExited(paneId: string): void
   focusDir(dir: Dir): void
   focus(paneId: string): void
@@ -108,6 +110,11 @@ export const useTabs = create<TabsState>((set) => ({
     set((s) => {
       const tab = s.tabs.find((t) => t.id === s.active)
       return tab ? removePane(s, tab, tab.focused) : {}
+    }),
+  closePane: (paneId) =>
+    set((s) => {
+      const tab = s.tabs.find((t) => leaves(t.tree).includes(paneId))
+      return tab ? removePane(s, tab, paneId) : {}
     }),
   paneExited: (paneId) =>
     set((s) => {

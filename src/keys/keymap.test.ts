@@ -20,6 +20,10 @@ describe('matchKey', () => {
     expect(matchKey(ev({ code: 'KeyT', metaKey: true }))).toBe('newTab')
     expect(matchKey(ev({ code: 'KeyW', metaKey: true }))).toBe('closePane')
   })
+  it('⌘F — поиск в ленте (и в русской раскладке)', () => {
+    expect(matchKey(ev({ code: 'KeyF', key: 'а', metaKey: true }))).toBe('find')
+    expect(matchKey(ev({ code: 'KeyF', ctrlKey: true }))).toBeNull()
+  })
   it('focus with alt+cmd+arrows', () => {
     expect(matchKey(ev({ code: 'ArrowLeft', metaKey: true, altKey: true }))).toBe('focusLeft')
     expect(matchKey(ev({ code: 'ArrowRight', metaKey: true, altKey: true }))).toBe('focusRight')

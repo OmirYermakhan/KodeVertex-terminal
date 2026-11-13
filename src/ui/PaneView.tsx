@@ -22,13 +22,15 @@ function dividers(t: PaneNode, rect: Rect = { x: 0, y: 0, w: 1, h: 1 }, path: ('
 
 const pct = (v: number) => `${v * 100}%`
 
+export const CLOSE_PANE_TITLE = 'Закрыть панель (⌘W)'
+
 /**
  * Панели рисуются плоским списком с абсолютным позиционированием (ключ — id панели),
  * поэтому при сплитах и закрытии соседей React не перемонтирует TerminalPane и PTY живёт.
  */
 export default function PaneView({ tab, visible }: { tab: Tab; visible: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null)
-  const { focus, setCwd, paneExited, setRatio } = useTabs.getState()
+  const { focus, setCwd, paneExited, setRatio, closePane } = useTabs.getState()
   const rects = layoutRects(tab.tree)
   const stopDrag = useRef<(() => void) | null>(null)
   useEffect(() => () => stopDrag.current?.(), [])
@@ -68,6 +70,7 @@ export default function PaneView({ tab, visible }: { tab: Tab; visible: boolean 
         <div
           key={id}
           data-testid={`pane-${id}`}
+          className={split ? 'pane-slot split' : 'pane-slot'}
           style={{
             position: 'absolute',
             left: pct(r.x),
@@ -87,6 +90,19 @@ export default function PaneView({ tab, visible }: { tab: Tab; visible: boolean 
             onExit={() => paneExited(id)}
             onFocus={() => focus(id)}
           />
+          {split && (
+            <button
+              type="button"
+              className="pane-x"
+              title={CLOSE_PANE_TITLE}
+              aria-label={CLOSE_PANE_TITLE}
+              // Фокус не уходит из панели, в которой он был.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => closePane(id)}
+            >
+              ✕
+            </button>
+          )}
         </div>
       ))}
       {dividers(tab.tree).map((d) => {

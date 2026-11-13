@@ -35,7 +35,8 @@ import { AgentsPanel, type AgentsPanelHandle } from '../claude/AgentsPanel'
 import { blockText, cleanSerializedHtml } from '../feed/blockHtml'
 import { Feed } from '../feed/FeedView'
 import { LiveTerminal } from '../feed/LiveTerminal'
-import { registerPaneCommands, type BlockAction } from '../feed/paneCommands'
+import { registerPaneCommands, type PaneAction } from '../feed/paneCommands'
+import { FindBar, type FindBarHandle } from '../feed/FindBar'
 import { feedAttachment } from '../attach/fromFeed'
 import { DROP_TITLE, DROP_TITLE_SHELL, DROP_TITLE_SHELL_MANY, dropSubline, registerDropTarget, setAttachCount, useDrop } from '../attach/dragDrop'
 import { DROP_PATH, Token } from '../attach/tokenView'
@@ -472,14 +473,19 @@ export function TerminalPane(p: TerminalPaneProps) {
 
   /** Куда идёт ввод: пока команда идёт или открыт alt screen — в xterm, иначе в строку ввода. */
   const focusActive = useCallback(() => {
-    if (!callbacks.current.focused || useUi.getState().settingsOpen) return
+    // Открыты настройки или палитра ⌘P — фокус у них (палитра вернёт его сама).
+    const ui = useUi.getState()
+    if (!callbacks.current.focused || ui.settingsOpen || ui.paletteOpen) return
     if (runningRef.current || altRef.current) termRef.current?.focus()
     else inputRef.current?.focus()
   }, [])
 
+  /** Кнопка мыши нажата в панели: фокус не переносим до отпускания (иначе сорвётся выделение текста). */
+  const pointerDown = useRef(false)
   // Фокус — при смене фокусной панели и после закрытия настроек.
   useEffect(() => {
-    if (p.focused && !settingsOpen) focusActive()
+    // Щелчок в панели сделал её фокусной: фокус поставит onMouseUp, если текст не выделяли.
+    if (p.focused && !settingsOpen && !pointerDown.current) focusActive()
   }, [p.focused, settingsOpen, focusActive])
 
   // Команда закончилась (строка ввода снова активна) — фокус в неё, если он был в панели или нигде.
@@ -488,7 +494,8 @@ export function TerminalPane(p: TerminalPaneProps) {
     if (running || alt || awaiting) return
     const active = document.activeElement
     const nothingFocused = !active || active === document.body
-    if (nothingFocused || paneRef.current?.contains(active)) focusActive()
+    // Строка поиска (⌘F) фокус не теряет: в ней ещё набирают.
+    if (nothingFocused || (paneRef.current?.contains(active) && !active?.closest?.('.find'))) focusActive()
   }, [running, alt, awaiting, focusActive])
 
   // Панель агентов исчезла (⌘J или сессии больше нет), пока фокус был в ней (элемент уже удалён) — вернуть ввод.
@@ -543,14 +550,14 @@ export function TerminalPane(p: TerminalPaneProps) {
       setCustom(null)
       const active = document.activeElement
       if (!active || active === document.body || (paneRef.current?.contains(active) && !inputRef.current?.hasFocus())) {
-        if (!active?.closest?.('.agents, .queue')) focusActive()
+        if (!active?.closest?.('.agents, .queue, .find')) focusActive()
       }
       return
     }
     if (!callbacks.current.focused || runningRef.current || altRef.current) return
-    if (useUi.getState().settingsOpen || inputRef.current?.pickerOpen()) return
+    if (useUi.getState().settingsOpen || useUi.getState().paletteOpen || inputRef.current?.pickerOpen()) return
     const active = document.activeElement
-    if (active?.closest?.('.agents')) return
+    if (active?.closest?.('.agents, .find')) return
     if (inputRef.current?.isEmpty() ?? true) promptRef.current?.focus()
   }, [promptId, focusActive])
   const onDecideP = useCallback(
@@ -899,11 +906,29 @@ export function TerminalPane(p: TerminalPaneProps) {
     el?.scrollIntoView?.({ block: 'nearest' })
   }, [selected])
 
+  // ⌘F — поиск в ленте; esc/✕ — закрыть, ввод — туда, где он идёт.
+  const [findOpen, setFindOpen] = useState(false)
+  const findRef = useRef<FindBarHandle>(null)
+  const closeFind = useCallback(() => {
+    setFindOpen(false)
+    focusActive()
+  }, [focusActive])
+
   useEffect(
     () =>
-      registerPaneCommands(p.paneId, (a: BlockAction) => {
-        // Полноэкранная программа: лента скрыта, выбирать нечего.
+      registerPaneCommands(p.paneId, (a: PaneAction) => {
+        // Полноэкранная программа: лента скрыта, выбирать и искать нечего.
         if (altRef.current) return
+        // Палитра ⌘P: ⌃L, режим Claude, `/model` — как из строки ввода.
+        if (a === 'clearFeed') return onClearFeed()
+        if (a === 'claudeToggle') return inputRef.current?.toggleClaude()
+        if (a === 'chooseModel') return inputRef.current?.openModelPicker()
+        // ⌘F: строка поиска; уже открыта — фокус в неё.
+        if (a === 'find') {
+          if (findRef.current) findRef.current.focus()
+          else setFindOpen(true)
+          return
+        }
         if (a === 'blockCopy') {
           copyItem(selectedRef.current)
           return
@@ -948,8 +973,8 @@ export function TerminalPane(p: TerminalPaneProps) {
         setSelected(m.id)
         // ⌘↓ с последнего блока или из строки ввода — фокус в панель агентов (если она показана).
         if (m.leave) agentsRef.current?.focus()
-      }),
-    [p.paneId, focusPrompt, attachItem, copyItem],
+      }, () => ({ claude: inputRef.current?.claudeMode() ?? false })),
+    [p.paneId, focusPrompt, attachItem, copyItem, onClearFeed],
   )
 
   const readerItem = readerId ? items.find((it) => it.id === readerId) : undefined
@@ -970,11 +995,24 @@ export function TerminalPane(p: TerminalPaneProps) {
       ref={paneRef}
       data-pane-id={p.paneId}
       onFocus={() => callbacks.current.onFocus()}
+      // Панель — фокусная и по щелчку, а не только по фокусу элемента: в WebKit щелчок по кнопке,
+      // по тексту ленты или выделение мышью фокус не переносят, и ⌘W закрыл бы прежнюю панель.
+      onPointerDownCapture={() => {
+        pointerDown.current = true
+        const up = () => {
+          pointerDown.current = false
+          window.removeEventListener('pointerup', up, true)
+          window.removeEventListener('pointercancel', up, true)
+        }
+        window.addEventListener('pointerup', up, true)
+        window.addEventListener('pointercancel', up, true)
+        callbacks.current.onFocus()
+      }}
       onPointerDown={onPanePointerDown}
       // Клик по ленте возвращает ввод туда, где он идёт: в строку ввода, а пока идёт команда — в xterm.
       onMouseUp={(e) => {
         // Кнопки ленты («Показать всё» и т. п.), само поле и выделение текста не трогаем.
-        if ((e.target as Element).closest?.('button, a, input, textarea, select, .input, .agents, .aprompt, .queue')) return
+        if ((e.target as Element).closest?.('button, a, input, textarea, select, .input, .agents, .aprompt, .queue, .find')) return
         if (window.getSelection()?.isCollapsed ?? true) {
           if (runningRef.current || altRef.current) termRef.current?.focus()
           else inputRef.current?.focus()
@@ -1004,6 +1042,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         }
       />
       </PreviewContext.Provider>
+      {findOpen && !alt && <FindBar ref={findRef} paneId={p.paneId} feedRef={feedRef} onClose={closeFind} />}
       <div className="dock">
         {claudeOpen(claude) && !agentsHidden && (
           <ErrorBoundary name="панель агентов">
