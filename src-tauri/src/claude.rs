@@ -58,26 +58,39 @@ fn trim_tail(buf: &mut Vec<u8>) {
 /// Уровни усилия, которые принимает `claude --effort`.
 pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
-/// Параметры запуска процесса `claude`: продолжение сессии, модель и усилие сессии.
+/// Режимы разрешений, которые приложение передаёт `claude --permission-mode`.
+pub const PERMISSION_MODES: [&str; 3] = ["default", "acceptEdits", "bypassPermissions"];
+/// Режим по умолчанию: правки файлов без вопросов, команды и сеть — с разрешения пользователя.
+pub const DEFAULT_PERMISSION_MODE: &str = "acceptEdits";
+
+/// Режим из настроек: только из списка; нет, пусто или неизвестно — `acceptEdits`.
+pub fn permission_mode(m: Option<&str>) -> &'static str {
+  m.and_then(|m| PERMISSION_MODES.iter().find(|&&k| k == m)).copied().unwrap_or(DEFAULT_PERMISSION_MODE)
+}
+
+/// Параметры запуска процесса `claude`: продолжение сессии, модель, усилие и режим разрешений.
 #[derive(Default, Clone, Debug)]
 pub struct Launch {
   pub resume: Option<String>,
   /// Псевдоним (`opus`, `fable`, `default`) или полное имя модели.
   pub model: Option<String>,
   pub effort: Option<String>,
+  /// `default` | `acceptEdits` | `bypassPermissions` (см. `permission_mode`).
+  pub permission_mode: Option<String>,
 }
 
-/// Аргументы `claude` после обязательных: `--model`, `--effort`, `--resume`.
-/// Пустые значения и неизвестное усилие пропускаются.
+/// Аргументы `claude` после обязательных: `--permission-mode`, `--model`, `--effort`, `--resume`.
+/// Пустые значения, значения с `-` в начале и неизвестное усилие пропускаются; неизвестный режим —
+/// `acceptEdits`.
 pub fn launch_args(l: &Launch) -> Vec<String> {
-  let mut a = Vec::new();
+  let mut a = vec!["--permission-mode".to_string(), permission_mode(l.permission_mode.as_deref()).to_string()];
   if let Some(m) = l.model.as_deref().map(str::trim).filter(|m| !m.is_empty() && !m.starts_with('-')) {
     a.extend(["--model".to_string(), m.to_string()]);
   }
   if let Some(e) = l.effort.as_deref().filter(|e| EFFORTS.contains(e)) {
     a.extend(["--effort".to_string(), e.to_string()]);
   }
-  if let Some(r) = l.resume.as_deref().filter(|r| !r.is_empty()) {
+  if let Some(r) = l.resume.as_deref().filter(|r| !r.is_empty() && !r.starts_with('-')) {
     a.extend(["--resume".to_string(), r.to_string()]);
   }
   a
@@ -119,8 +132,6 @@ impl ClaudeManager {
       "stream-json",
       "--verbose",
       "--include-partial-messages",
-      "--permission-mode",
-      "bypassPermissions",
       // Запросы разрешений (вопросы AskUserQuestion) — управляющими запросами в stdout.
       "--permission-prompt-tool",
       "stdio",
@@ -132,6 +143,7 @@ impl ClaudeManager {
         cmd.env_remove(k);
       }
     }
+    // Режим разрешений (`--permission-mode`) — в launch_args, из настроек.
     // С bypassPermissions запуск «где-то ещё» (например, в `/` у приложения из Dock) недопустим.
     if !cwd.is_dir() {
       return Err(format!("Каталог {} не существует", cwd.display()));
@@ -400,6 +412,7 @@ pub async fn claude_start(
   resume: Option<String>,
   model: Option<String>,
   effort: Option<String>,
+  permission_mode: Option<String>,
   on_line: Channel<String>,
   on_exit: Channel<ClaudeExit>,
 ) -> Result<String, String> {
@@ -407,7 +420,7 @@ pub async fn claude_start(
   manager.start(
     &program,
     Path::new(&cwd),
-    Launch { resume, model, effort },
+    Launch { resume, model, effort, permission_mode },
     move |line| {
       let _ = on_line.send(line);
     },
@@ -603,7 +616,7 @@ mod tests {
     let (_d, p) = script("printf '{\"args\":\"%s\"}\\n' \"$*\"");
     let m = ClaudeManager::default();
     let (ltx, lrx) = mpsc::channel();
-    m.start(&p, Path::new("/"), Launch { resume: Some("abc-123".into()), model: Some("fable".into()), effort: Some("high".into()) }, move |l| {
+    m.start(&p, Path::new("/"), Launch { resume: Some("abc-123".into()), model: Some("fable".into()), effort: Some("high".into()), permission_mode: Some("default".into()) }, move |l| {
       let _ = ltx.send(l);
     }, |_, _| {})
     .unwrap();
@@ -611,17 +624,49 @@ mod tests {
     let a = v["args"].as_str().unwrap();
     assert_eq!(
       a,
-      "-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-mode bypassPermissions --permission-prompt-tool stdio --model fable --effort high --resume abc-123"
+      "-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompt-tool stdio --permission-mode default --model fable --effort high --resume abc-123"
     );
   }
 
   #[test]
   fn launch_args_skip_empty_and_unknown() {
-    assert!(launch_args(&Launch::default()).is_empty());
-    let l = Launch { resume: Some(String::new()), model: Some("--evil".into()), effort: Some("huge".into()) };
-    assert!(launch_args(&l).is_empty());
-    let l = Launch { resume: None, model: Some("default".into()), effort: Some("max".into()) };
-    assert_eq!(launch_args(&l), ["--model", "default", "--effort", "max"]);
+    assert_eq!(launch_args(&Launch::default()), ["--permission-mode", "acceptEdits"]);
+    let l = Launch { resume: Some(String::new()), model: Some("--evil".into()), effort: Some("huge".into()), permission_mode: None };
+    assert_eq!(launch_args(&l), ["--permission-mode", "acceptEdits"]);
+    let l = Launch { resume: None, model: Some("default".into()), effort: Some("max".into()), permission_mode: None };
+    assert_eq!(launch_args(&l), ["--permission-mode", "acceptEdits", "--model", "default", "--effort", "max"]);
+  }
+
+  #[test]
+  fn launch_args_reject_resume_that_looks_like_flag() {
+    let l = Launch { resume: Some("--dangerously-skip-permissions".into()), ..Launch::default() };
+    assert_eq!(launch_args(&l), ["--permission-mode", "acceptEdits"]);
+    let l = Launch { resume: Some("-p".into()), ..Launch::default() };
+    assert!(!launch_args(&l).contains(&"--resume".to_string()));
+    let l = Launch { resume: Some("abc-123".into()), ..Launch::default() };
+    assert_eq!(launch_args(&l)[2..], ["--resume", "abc-123"]);
+  }
+
+  #[test]
+  fn permission_mode_is_whitelisted() {
+    assert_eq!(permission_mode(None), "acceptEdits");
+    assert_eq!(permission_mode(Some("")), "acceptEdits");
+    assert_eq!(permission_mode(Some("plan")), "acceptEdits");
+    assert_eq!(permission_mode(Some("BypassPermissions")), "acceptEdits");
+    assert_eq!(permission_mode(Some("--dangerously-skip-permissions")), "acceptEdits");
+    for m in PERMISSION_MODES {
+      assert_eq!(permission_mode(Some(m)), m);
+    }
+  }
+
+  #[test]
+  fn launch_args_carry_chosen_mode() {
+    for m in PERMISSION_MODES {
+      let l = Launch { permission_mode: Some(m.into()), ..Launch::default() };
+      assert_eq!(launch_args(&l), ["--permission-mode", m]);
+    }
+    let l = Launch { permission_mode: Some("yolo".into()), ..Launch::default() };
+    assert_eq!(launch_args(&l), ["--permission-mode", "acceptEdits"]);
   }
 
   #[test]

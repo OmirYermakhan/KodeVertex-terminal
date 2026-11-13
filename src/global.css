@@ -95,6 +95,13 @@ body {
   font-weight: 500;
 }
 
+/* Claude запущен с bypassPermissions: та же плашка, что .sg.v, но цветом --del. */
+.sg.danger {
+  background: var(--del);
+  color: #fff;
+  font-weight: 500;
+}
+
 .sg.right {
   margin-left: auto;
   border-left: 1px solid var(--rule);

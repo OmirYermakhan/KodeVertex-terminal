@@ -28,6 +28,7 @@ export default function App() {
   const focusedPane = useTabs((s) => s.tabs.find((x) => x.id === s.active)?.focused)
   const git = useGitInfo(cwd)
   const claude = useClaudeSessions((s) => (focusedPane ? s.sessions[focusedPane]?.state : undefined))
+  const permissionMode = useClaudeSessions((s) => (focusedPane ? s.sessions[focusedPane]?.permissionMode : undefined))
   const settingsOpen = useUi((s) => s.settingsOpen)
   const attachments = useAttachCount((s) => (focusedPane ? (s.counts[focusedPane] ?? 0) : 0))
 
@@ -82,7 +83,7 @@ export default function App() {
         )}
       </div>
       <div data-testid="statusbar" className="statusbar">
-        <StatusBar cwd={cwd} git={git} claude={claude} attachments={attachments} />
+        <StatusBar cwd={cwd} git={git} claude={claude} attachments={attachments} permissionMode={permissionMode} />
       </div>
       <Toasts />
       <SettingsPanel open={settingsOpen} onClose={() => useUi.getState().setSettingsOpen(false)} />

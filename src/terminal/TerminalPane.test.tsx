@@ -1232,7 +1232,7 @@ describe('TerminalPane', () => {
       return r
     }
     const withSession = () =>
-      act(() => useClaudeSessions.setState({ sessions: { p: { state: mockupScene(), procId: 'c1', cwd: '/w', model: null, effort: null, queue: [], paused: false, pauseHint: false } } }))
+      act(() => useClaudeSessions.setState({ sessions: { p: { state: mockupScene(), procId: 'c1', cwd: '/w', model: null, effort: null, permissionMode: null, queue: [], paused: false, pauseHint: false } } }))
     const panel = () => document.querySelector<HTMLElement>('.dock .agents')
 
     it('без Claude-сессии панели нет; с сессией — в доке над строкой ввода', async () => {

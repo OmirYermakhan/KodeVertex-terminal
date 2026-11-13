@@ -9,6 +9,8 @@ import { GET_SETTINGS, effortRequest, modelNote, persistedModel, setModelRequest
 import { docOf } from '../attach/doc'
 import { serialize } from '../attach/serialize'
 import type { Attachment, Doc } from '../attach/types'
+import type { ClaudePermissionMode } from '../settings/settings'
+import { useSettings } from '../settings/store'
 
 export type { ModelChoice }
 
@@ -29,6 +31,11 @@ export interface PaneClaude {
   /** Модель и усилие, выбранные в `/model`: передаются процессу при (пере)запуске. */
   model: string | null
   effort: string | null
+  /**
+   * Режим разрешений, с которым запущен текущий процесс (из настроек на момент запуска;
+   * смена настройки действует со следующего запуска). null — процесс ещё не запускался.
+   */
+  permissionMode: ClaudePermissionMode | null
   /**
    * Сообщения, набранные, пока ход шёл (как в Claude Code): ждут конца хода и уходят по одному
    * за ход. В ленте их нет, пока не отправлены.
@@ -78,6 +85,7 @@ function get(paneId: string): PaneClaude {
       cwd: null,
       model: null,
       effort: null,
+      permissionMode: null,
       queue: [],
       paused: false,
       pauseHint: false,
@@ -140,6 +148,9 @@ function start(paneId: string): Proc {
   const prev = get(paneId)
   const resume = prev.state.sessionId
   const { cwd, model, effort } = prev
+  // Режим — из настроек на момент запуска; Rust проверяет его по списку (неизвестный — acceptEdits).
+  const permissionMode = useSettings.getState().settings.claudePermissionMode
+  patch(paneId, (p) => ({ ...p, permissionMode }))
   let gotLine = false
   const onLine = new Channel<string>((line) => {
     gotLine = true
@@ -181,7 +192,7 @@ function start(paneId: string): Proc {
       return { ...p, procId: null, state, ...pause(p) }
     })
   })
-  proc.ready = invoke<string>('claude_start', { cwd, resume, model, effort, onLine, onExit })
+  proc.ready = invoke<string>('claude_start', { cwd, resume, model, effort, permissionMode, onLine, onExit })
     .then((id) => {
       if (!alive()) {
         // Панель закрыли, пока процесс запускался.

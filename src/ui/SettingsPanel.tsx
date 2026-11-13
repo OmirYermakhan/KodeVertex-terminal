@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { useEffect, useRef, useState } from 'react'
-import { stepSize, type Settings } from '../settings/settings'
+import { CLAUDE_PERMISSION_MODES, stepSize, type ClaudePermissionMode, type Settings } from '../settings/settings'
 import { useSettings } from '../settings/store'
 import { codeFontStack, textFontStack } from '../theme/fontFamily'
 import { THEMES, type ThemeId } from '../theme/themes'
@@ -38,6 +38,19 @@ const BUNDLED_TEXT = ['Inter', 'Geist Sans', 'IBM Plex Sans', 'PT Serif', 'syste
 const BUNDLED_CODE = ['JetBrains Mono', 'Geist Mono', 'IBM Plex Mono', 'Fira Code', 'ui-monospace'].map(entry)
 
 const LINE_HEIGHTS: Settings['lineHeight'][] = [1.5, 1.6, 1.7, 1.8]
+
+/** Подписи режимов разрешений Claude (`--permission-mode`). */
+const PERMISSION_MODE_LABEL: Record<ClaudePermissionMode, string> = {
+  default: 'Спрашивать всё',
+  acceptEdits: 'Правки без вопросов',
+  bypassPermissions: 'Ничего не спрашивать',
+}
+
+const PERMISSION_MODE_HINT: Record<ClaudePermissionMode, string> = {
+  default: 'Claude спрашивает перед правкой файлов, командами и сетью.',
+  acceptEdits: 'Правки файлов — сразу; команды, сеть и остальное — с вашего разрешения.',
+  bypassPermissions: 'Опасно: команды выполняются без вопросов, в том числе подсказанные чужим текстом (инъекция в файле, странице, выводе).',
+}
 
 const PREVIEW_CODE = `fn main() {
     let msg = "Привет, мир";
@@ -197,6 +210,23 @@ export default function SettingsPanel(p: { open: boolean; onClose: () => void })
               <span>Подсказки путей</span>
               <input type="checkbox" checked={settings.pathCompletions} onChange={(e) => update({ pathCompletions: e.target.checked })} />
             </label>
+
+            <h3>Claude</h3>
+            <label className="st-row">
+              <span>Разрешения</span>
+              <select
+                aria-label="Разрешения"
+                value={settings.claudePermissionMode}
+                onChange={(e) => update({ claudePermissionMode: e.target.value as ClaudePermissionMode })}
+              >
+                {CLAUDE_PERMISSION_MODES.map((m) => (
+                  <option key={m} value={m}>{PERMISSION_MODE_LABEL[m]}</option>
+                ))}
+              </select>
+            </label>
+            <small className="st-hint">
+              {PERMISSION_MODE_HINT[settings.claudePermissionMode]} Действует со следующего запуска сессии Claude.
+            </small>
 
             <h3>Уведомления</h3>
             <label className="st-row">
