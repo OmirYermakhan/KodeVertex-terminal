@@ -97,7 +97,8 @@ export interface ClaudeState {
 }
 
 const MAIN = 'main'
-const DEFAULT_CONTEXT_MAX = 200000
+/** До первого `result` окно неизвестно; у моделей семейства 5 (и `[1m]`) — 1 млн токенов. */
+const DEFAULT_CONTEXT_MAX = 1_000_000
 const HISTORY_LIMIT = 50
 
 type Rec = Record<string, unknown>

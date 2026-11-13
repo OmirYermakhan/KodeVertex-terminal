@@ -74,7 +74,7 @@ describe('chooseModel (/model)', () => {
         const req = a.request as { subtype: string; model?: string }
         const body =
           req.subtype === 'set_model'
-            ? { model: req.model === 'fable' ? 'claude-fable-5-2' : 'claude-opus-5-5' }
+            ? { model: req.model?.startsWith('fable') ? 'claude-fable-5-2[1m]' : 'claude-opus-5-5[1m]' }
             : req.subtype === 'get_settings'
               ? { effective: { model: 'opus' }, applied: { model: 'claude-fable-5-2', effort: 'high' } }
               : undefined
@@ -96,22 +96,22 @@ describe('chooseModel (/model)', () => {
     enterClaude('m', '/w')
     await flush()
     await chooseModel('m', '/w', { alias: 'fable', effort: 'high', persist: false })
-    expect(requests()).toContainEqual({ subtype: 'set_model', model: 'fable' })
+    expect(requests()).toContainEqual({ subtype: 'set_model', model: 'fable[1m]' })
     expect(requests()).toContainEqual({ subtype: 'apply_flag_settings', settings: { effortLevel: 'high' } })
     expect(calls('claude_start')).toHaveLength(1)
     expect(calls('claude_save_defaults')).toHaveLength(0)
     expect(state().state.model).toBe('claude-fable-5-2')
     expect(state().state.items).toContainEqual({ type: 'note', text: 'Модель: Fable 5.2 · усилие high' })
-    expect(state()).toMatchObject({ model: 'fable', effort: 'high' })
+    expect(state()).toMatchObject({ model: 'fable[1m]', effort: 'high' })
   })
 
   it('↵: сохраняет по умолчанию; Default — без модели; усилие не меняли — не пишется', async () => {
     enterClaude('m', '/w')
     await flush()
     await chooseModel('m', '/w', { alias: 'fable', effort: 'max', persist: true })
-    expect(calls('claude_save_defaults')[0][1]).toEqual({ model: 'fable', modelId: 'claude-fable-5-2', effort: 'max' })
+    expect(calls('claude_save_defaults')[0][1]).toEqual({ model: 'fable[1m]', modelId: 'claude-fable-5-2[1m]', effort: 'max' })
     await chooseModel('m', '/w', { alias: 'default', effort: null, persist: true })
-    expect(calls('claude_save_defaults')[1][1]).toEqual({ model: null, modelId: 'claude-opus-5-5', effort: null })
+    expect(calls('claude_save_defaults')[1][1]).toEqual({ model: null, modelId: 'claude-opus-5-5[1m]', effort: null })
     expect(requests()).toContainEqual({ subtype: 'set_model', model: 'default' })
   })
 
@@ -125,11 +125,11 @@ describe('chooseModel (/model)', () => {
 
   it('модель панели запоминается после set_model; перезапуск — с --model/--effort', async () => {
     await chooseModel('m', '/w', { alias: 'sonnet', effort: 'low', persist: false })
-    expect(state()).toMatchObject({ model: 'sonnet', effort: 'low' })
+    expect(state()).toMatchObject({ model: 'sonnet[1m]', effort: 'low' })
     const first = calls('claude_start')[0][1] as { onExit: { onmessage(e: unknown): void } }
     first.onExit.onmessage({ code: 0, stderr: '' })
     await askClaude('m', '/w', 'дальше')
-    expect(calls('claude_start')[1][1]).toMatchObject({ model: 'sonnet', effort: 'low' })
+    expect(calls('claude_start')[1][1]).toMatchObject({ model: 'sonnet[1m]', effort: 'low' })
   })
 
   it('set_model не прошёл — модель панели не меняется, карточка ошибки; ответ не ждём 10 с после выхода', async () => {
@@ -260,7 +260,7 @@ describe('выход claude при ждущем вопросе', () => {
 })
 
 describe('по умолчанию с [1m]', () => {
-  it('Opus при opus[1m] в настройках пишется как opus[1m]', async () => {
+  it('Opus и Fable пишутся с [1m] — окно 1 млн токенов', async () => {
     stopClaude('d')
     invoke.mockReset()
     let onLine: { onmessage(m: string): void } | null = null
@@ -279,7 +279,7 @@ describe('по умолчанию с [1m]', () => {
     await chooseModel('d', '/w', { alias: 'opus', effort: null, persist: true })
     expect(calls('claude_save_defaults')[0][1]).toMatchObject({ model: 'opus[1m]' })
     await chooseModel('d', '/w', { alias: 'fable', effort: null, persist: true })
-    expect(calls('claude_save_defaults')[1][1]).toMatchObject({ model: 'fable' })
+    expect(calls('claude_save_defaults')[1][1]).toMatchObject({ model: 'fable[1m]' })
   })
 })
 

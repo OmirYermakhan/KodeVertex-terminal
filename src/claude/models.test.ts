@@ -39,11 +39,13 @@ describe('модели', () => {
 })
 
 describe('persistedModel', () => {
-  it('суффикс [1m] сохраняется только для того же семейства; Default — null', () => {
+  it('opus/fable/sonnet — всегда с [1m] (окно 1 млн); Default — null', () => {
     expect(persistedModel('opus', 'opus[1m]')).toBe('opus[1m]')
     expect(persistedModel('opus', 'claude-opus-5-5[1m]')).toBe('opus[1m]')
-    expect(persistedModel('fable', 'opus[1m]')).toBe('fable')
-    expect(persistedModel('sonnet', null)).toBe('sonnet')
+    expect(persistedModel('fable', 'opus[1m]')).toBe('fable[1m]')
+    expect(persistedModel('sonnet', null)).toBe('sonnet[1m]')
+    expect(persistedModel('opus', 'opus')).toBe('opus[1m]')
+    expect(persistedModel('haiku', 'opus[1m]')).toBe('haiku')
     expect(persistedModel('default', 'opus[1m]')).toBeNull()
   })
 })
@@ -80,5 +82,16 @@ describe('pickerKey', () => {
     expect(pickerKey(s0, 'S').action).toMatchObject({ persist: false })
     expect(pickerKey(s0, 'Escape').action).toEqual({ kind: 'cancel' })
     expect(pickerKey(s0, 'x')).toMatchObject({ handled: false, action: null })
+  })
+})
+
+import { tokensLabel } from './AgentsPanel'
+describe('tokensLabel', () => {
+  it('k до миллиона, M от миллиона', () => {
+    expect(tokensLabel(84_000)).toBe('84k')
+    expect(tokensLabel(200_000)).toBe('200k')
+    expect(tokensLabel(1_000_000)).toBe('1M')
+    expect(tokensLabel(1_250_000)).toBe('1.3M')
+    expect(tokensLabel(999)).toBe('999')
   })
 })

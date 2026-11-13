@@ -13,6 +13,8 @@ export function agentElapsed(ms: number): string {
 
 /** Токены: `51k`; меньше тысячи — как есть. */
 export function tokensLabel(t: number): string {
+  // Окно в 1 млн — «1M», а не «1000k»; 1 250 000 → «1.3M».
+  if (t >= 999_500) return `${Number((t / 1_000_000).toFixed(1))}M`
   return t >= 1000 ? `${Math.round(t / 1000)}k` : String(t)
 }
 

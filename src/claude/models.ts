@@ -37,12 +37,17 @@ export const setModelRequest = (alias: string) => ({ subtype: 'set_model', model
 export const effortRequest = (effort: string) => ({ subtype: 'apply_flag_settings', settings: { effortLevel: effort } })
 export const GET_SETTINGS = { subtype: 'get_settings' }
 
+/** Семейства, которым окно в 1 млн токенов включается суффиксом `[1m]` (у haiku оно и так 1 млн). */
+const ONE_M = new Set(['opus', 'fable', 'sonnet'])
+
 /**
- * Что записать в `model` настроек: псевдоним; суффикс контекста (`[1m]`) из прежнего значения
+ * Что записать в `model` настроек: псевдоним; для opus/fable/sonnet — всегда с `[1m]`
+ * (окно 1 млн токенов, иначе CLI берёт 200k). Прочий суффикс из прежнего значения
  * сохраняется, если семейство то же. Default — null (ключ удаляется).
  */
 export function persistedModel(alias: string, current: string | null | undefined): string | null {
   if (alias === 'default') return null
+  if (ONE_M.has(alias)) return `${alias}[1m]`
   const suffix = /\[[^\]]*\]$/.exec(current ?? '')?.[0]
   return suffix && aliasOf(current) === alias ? alias + suffix : alias
 }
