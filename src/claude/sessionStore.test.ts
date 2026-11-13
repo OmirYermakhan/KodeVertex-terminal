@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
 }))
 
-const { recallQueued, removeQueued, sendQueued, dismissQueueHint, answerPermission, answerQuestion, interruptClaude, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
+const { editClaude, recallQueued, removeQueued, sendQueued, dismissQueueHint, answerPermission, answerQuestion, interruptClaude, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
 
 const { useSettings } = await import('../settings/store')
 
@@ -489,5 +489,116 @@ describe('вложения: отправка и очередь', () => {
     result()
     await flush()
     expect(calls('claude_send').at(-1)![1]).toEqual({ id: 'pv', text: 'a @src/Form.tsx' })
+  })
+})
+
+describe('editClaude (правка отправленного сообщения)', () => {
+  type Ch = { onLine: { onmessage(m: string): void }; onExit: { onmessage(e: unknown): void } }
+  let chs: Ch[]
+  beforeEach(() => {
+    stopClaude('e')
+    invoke.mockReset()
+    chs = []
+    invoke.mockImplementation((cmd: string, a: Record<string, unknown>) => {
+      if (cmd === 'claude_start') {
+        chs.push(a as unknown as Ch)
+        return Promise.resolve(`pe${chs.length}`)
+      }
+      // Прерванный ход заканчивается result (как у claude после SIGINT).
+      if (cmd === 'claude_interrupt') setTimeout(() => line({ type: 'result', subtype: 'error_during_execution', is_error: true, session_id: 's1' }))
+      return Promise.resolve()
+    })
+  })
+  const sess = () => useClaudeSessions.getState().sessions.e
+  const line = (ev: object) => chs[chs.length - 1].onLine.onmessage(JSON.stringify(ev))
+  const turn = (session: string, uuid: string) => {
+    line({ type: 'system', subtype: 'init', session_id: session })
+    line({ type: 'assistant', uuid, session_id: session, parent_tool_use_id: null, message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: 'ок' }] } })
+    line({ type: 'result', subtype: 'success', result: 'ок', session_id: session })
+  }
+  const userAt = (text: string) => items('e').findIndex((i) => i.type === 'user' && i.text === text)
+  const order = () => invoke.mock.calls.map((c) => c[0] as string).filter((c) => c !== 'claude_control')
+
+  it('ответ идёт: прервать → дождаться конца хода → остановить → запустить с перемоткой и ответвлением → отправить', async () => {
+    await askClaude('e', '/w', 'первое')
+    turn('s1', 'm1')
+    await askClaude('e', '/w', 'второе')
+    expect(sess().state.busy).toBe(true)
+    invoke.mockClear()
+    expect(await editClaude('e', userAt('второе'), 'второе!')).toBe(true)
+    expect(order()).toEqual(['claude_interrupt', 'claude_stop', 'claude_start', 'claude_send'])
+    expect(calls('claude_stop')[0][1]).toEqual({ id: 'pe1' })
+    expect(calls('claude_start')[0][1]).toMatchObject({ cwd: '/w', resume: 's1', resumeAt: 'm1', fork: true })
+    expect(calls('claude_send')[0][1]).toEqual({ id: 'pe2', text: 'второе!' })
+    // В ленте: прежний вариант на месте пузыря, новый пузырь — в конце; строки новой сессии нет.
+    const it = items('e')
+    const i = it.findIndex((x) => x.type === 'replaced')
+    expect(it[i]).toMatchObject({ type: 'replaced', count: 1 })
+    expect(it.at(-1)).toMatchObject({ type: 'user', text: 'второе!' })
+    expect(it.filter((x) => x.type === 'session')).toHaveLength(1)
+    // Ответвление сообщает свой id сессии — дальше работаем с ним.
+    turn('s2', 'm2')
+    expect(sess().state.sessionId).toBe('s2')
+    expect(sess().state.chain).toEqual({ session: 's2', uuid: 'm2' })
+    // Новое сообщение снова можно изменить: точка — та же, что у заменённого.
+    expect(sess().state.edits[it.length - 1].at).toEqual({ session: 's1', uuid: 'm1' })
+  })
+
+  it('ответ готов: без прерывания, перезапуск с точки; режим разрешений прежнего процесса сохраняется', async () => {
+    await askClaude('e', '/w', 'первое')
+    turn('s1', 'm1')
+    await askClaude('e', '/w', 'второе')
+    turn('s1', 'm2')
+    const prev = useSettings.getState().settings
+    useSettings.setState({ settings: { ...prev, claudePermissionMode: 'bypassPermissions' } })
+    try {
+      invoke.mockClear()
+      expect(await editClaude('e', userAt('второе'), 'иначе')).toBe(true)
+      expect(order()).toEqual(['claude_stop', 'claude_start', 'claude_send'])
+      expect(calls('claude_start')[0][1]).toMatchObject({ resume: 's1', resumeAt: 'm1', fork: true, permissionMode: 'acceptEdits' })
+    } finally {
+      useSettings.setState({ settings: prev })
+    }
+  })
+
+  it('первое сообщение сессии — новая сессия без --resume', async () => {
+    await askClaude('e', '/w', 'первое')
+    turn('s1', 'm1')
+    await askClaude('e', '/w', 'второе')
+    turn('s1', 'm2')
+    invoke.mockClear()
+    expect(await editClaude('e', userAt('первое'), 'с начала')).toBe(true)
+    const a = calls('claude_start')[0][1] as Record<string, unknown>
+    expect(a.resume).toBeNull()
+    expect(a).not.toHaveProperty('resumeAt')
+    expect(a).not.toHaveProperty('fork')
+    const it = items('e')
+    expect(it.find((x) => x.type === 'replaced')).toMatchObject({ count: 2 })
+    expect(it.at(-1)).toMatchObject({ type: 'user', text: 'с начала' })
+  })
+
+  it('точка неизвестна — false, процесс не трогаем', async () => {
+    await askClaude('e', '/w', 'первое')
+    turn('s1', 'm1')
+    useClaudeSessions.setState((st) => ({ sessions: { ...st.sessions, e: { ...st.sessions.e, state: { ...st.sessions.e.state, edits: {} } } } }))
+    invoke.mockClear()
+    expect(await editClaude('e', userAt('первое'), 'x')).toBe(false)
+    expect(order()).toEqual([])
+  })
+
+  it('очередь остаётся и уходит после исправленного ответа (без паузы)', async () => {
+    await askClaude('e', '/w', 'первое')
+    turn('s1', 'm1')
+    await askClaude('e', '/w', 'второе')
+    await askClaude('e', '/w', 'потом')
+    expect(sess().queue.map((m) => m.text)).toEqual(['потом'])
+    expect(await editClaude('e', userAt('второе'), 'второе!')).toBe(true)
+    expect(sess().queue.map((m) => m.text)).toEqual(['потом'])
+    expect(sess().paused).toBe(false)
+    expect(calls('claude_send').map((c) => (c[1] as { text: string }).text)).toEqual(['первое', 'второе', 'второе!'])
+    turn('s2', 'm3')
+    await flush()
+    expect(calls('claude_send').map((c) => (c[1] as { text: string }).text)).toEqual(['первое', 'второе', 'второе!', 'потом'])
+    expect(sess().queue).toEqual([])
   })
 })

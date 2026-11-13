@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import raw from './fixtures/bash-ls.jsonl?raw'
-import { actionTitle, cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaude, pendingPrompt, pendingQuestion, recordAnswer, modelLabel, nowLabel, reduceClaude, userSent } from './reducer'
+import { canEdit, editInfo, lastEditable, messagesLabel, newSession, replaceFrom, actionTitle, cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaude, pendingPrompt, pendingQuestion, recordAnswer, modelLabel, nowLabel, reduceClaude, userSent } from './reducer'
 import type { ClaudeState } from './reducer'
 
 const lines = raw
@@ -308,5 +308,81 @@ describe('итог не повторяет ответ', () => {
     const s1 = run(userSent(initialClaude(), 'a', 0), [assistant([{ type: 'text', text: 'да' }]), { type: 'result', result: 'да' }])
     const s2 = run(userSent(s1, 'b', 0), [{ type: 'result', result: 'да' }])
     expect(s2.items.at(-1)).toMatchObject({ type: 'summary', text: 'да' })
+  })
+})
+
+describe('правка сообщения: точки перемотки', () => {
+  const SID = '5d0c3728-a401-4b61-a620-0fa4e7b276f4'
+  const res = { type: 'result', subtype: 'success', result: 'ok', session_id: SID }
+  const asst = (uuid: string, parent: string | null = null) => ({ ...assistant([{ type: 'text', text: 'ответ' }], parent), uuid, session_id: SID })
+
+  it('первое сообщение — новая сессия; следующее — после последнего ответа главного агента предыдущего хода', () => {
+    let s = run(userSent(initialClaude(), 'покажи файлы', 0), lines)
+    expect(s.edits[0]).toEqual({ at: 'fresh', epoch: 0 })
+    // В фикстуре несколько событий assistant за ход: точка — последнее перед result.
+    expect(s.chain).toEqual({ session: SID, uuid: '1c421479-681d-4410-bdf7-f122f19b07c1' })
+    s = userSent(s, 'ещё', 0)
+    const i = s.items.length - 1
+    expect(s.edits[i]).toEqual({ at: { session: SID, uuid: '1c421479-681d-4410-bdf7-f122f19b07c1' }, epoch: 0 })
+  })
+
+  it('сообщения субагентов цепочку не двигают', () => {
+    let s = run(userSent(initialClaude(), 'a', 0), [asst('m1'), asst('sub-1', 'tu1'), res])
+    expect(s.chain?.uuid).toBe('m1')
+    s = run(s, [asst('-флаг')])
+    expect(s.chain?.uuid).toBe('m1')
+  })
+
+  it('точка неизвестна (сессия есть, ответа с uuid не было) — изменить нельзя', () => {
+    const s0 = { ...initialClaude(), sessionId: 'other' }
+    const s = userSent(s0, 'x', 0)
+    expect(s.edits[0]).toEqual({ at: null, epoch: 0 })
+    expect(canEdit(s, 0)).toBe(false)
+    expect(editInfo(s, 0)).toBeNull()
+    expect(lastEditable(s)).toBe(-1)
+  })
+
+  it('новая сессия (другой каталог) — прежние сообщения не правятся', () => {
+    let s = run(userSent(initialClaude(), 'a', 0), [asst('m1'), res])
+    expect(canEdit(s, 0)).toBe(true)
+    s = newSession(s)
+    expect(s.chain).toBeNull()
+    expect(canEdit(s, 0)).toBe(false)
+    s = userSent(s, 'b', 0)
+    expect(s.edits[s.items.length - 1]).toEqual({ at: 'fresh', epoch: 1 })
+  })
+
+  it('editInfo: номер, сколько после, идёт ли ответ, были ли правки файлов', () => {
+    let s = run(userSent(initialClaude(), 'a', 0), [asst('m1'), res])
+    s = run(userSent(s, 'b', 0), [assistant([toolUse('t1', 'Edit', { file_path: '/x', old_string: '1', new_string: '2' })]), toolResult('t1', 'ok'), asst('m2'), res])
+    s = userSent(s, 'c', 0)
+    const us = s.items.map((it, i) => (it.type === 'user' ? i : -1)).filter((i) => i >= 0)
+    expect(editInfo(s, us[0])).toEqual({ n: 1, total: 3, after: 2, busy: true, files: true })
+    expect(editInfo(s, us[2])).toEqual({ n: 3, total: 3, after: 0, busy: true, files: false })
+    expect(lastEditable(s)).toBe(us[2])
+  })
+
+  it('replaceFrom: пузырь и всё после него — одной строкой «Прежний вариант», индексы не сдвигаются', () => {
+    let s = run(userSent(initialClaude(), 'a', 0), [asst('m1'), res])
+    s = run(userSent(s, 'b', 0), [{ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'идёт' } } }])
+    const i = s.items.findIndex((it) => it.type === 'user' && it.text === 'b')
+    const n = s.items.length
+    const r = replaceFrom(s, i)
+    expect(r.items).toHaveLength(n)
+    const head = r.items[i]
+    expect(head.type).toBe('replaced')
+    if (head.type !== 'replaced') return
+    expect(head.count).toBe(1)
+    expect(head.items[0]).toEqual({ type: 'user', text: 'b' })
+    // Недоигранный ответ в истории — уже не «идёт».
+    expect(head.items.some((it) => it.type === 'assistant' && it.streaming)).toBe(false)
+    expect(r.items.slice(i + 1).every((it) => it.type === 'gone')).toBe(true)
+    expect(canEdit(r, i)).toBe(false)
+  })
+
+  it('messagesLabel склоняет', () => {
+    expect([1, 2, 4, 5, 11, 12, 21, 22, 25].map(messagesLabel)).toEqual([
+      '1 сообщение', '2 сообщения', '4 сообщения', '5 сообщений', '11 сообщений', '12 сообщений', '21 сообщение', '22 сообщения', '25 сообщений',
+    ])
   })
 })

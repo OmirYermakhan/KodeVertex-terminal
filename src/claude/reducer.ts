@@ -58,8 +58,32 @@ export type FeedClaudeItem =
     }
   /** Начало новой сессии Claude: каталог, в котором она работает. */
   | { type: 'session'; cwd: string; /** Вход в режим Claude из строки ввода (`claude`): с подсказкой. */ mode?: boolean }
+  /**
+   * Прежний вариант разговора после правки сообщения: изменённый пузырь и всё после него — одной
+   * свёрнутой строкой на месте пузыря (items — как были, только для чтения; count — сообщений «Вы»).
+   */
+  | { type: 'replaced'; items: FeedClaudeItem[]; count: number }
+  /** Место элемента, ушедшего в «Прежний вариант» (индексы элементов не сдвигаются). */
+  | { type: 'gone' }
 
 export type PermissionDecision = 'allow' | 'always' | 'deny'
+
+/** Сообщение сессии, после которого можно продолжить разговор (`--resume-session-at`). */
+export interface RewindPoint {
+  session: string
+  /** uuid последнего события `assistant` главного агента. */
+  uuid: string
+}
+
+/**
+ * Как переписать отправленное сообщение. at: точка перед ним; 'fresh' — первое сообщение сессии
+ * (правка начинает новую сессию); null — точка неизвестна («Изменить» не показываем, не гадаем).
+ * epoch — линия сессии: сообщения прежних сессий (другой каталог) не правятся.
+ */
+export interface EditPoint {
+  at: RewindPoint | 'fresh' | null
+  epoch: number
+}
 export type CancelReason = 'exit' | 'stop'
 
 export interface Agent {
@@ -94,6 +118,12 @@ export interface ClaudeState {
   agents: Agent[]
   /** агент, чьё событие пришло последним; null, пока ничего не идёт */
   currentAgentId: string | null
+  /** Последнее сообщение главного агента текущей сессии — точка перемотки для следующего вопроса. */
+  chain: RewindPoint | null
+  /** Линия сессии: растёт, когда начинается новая сессия (не продолжение и не ответвление). */
+  epoch: number
+  /** Точки правки сообщений «Вы»: индекс элемента → точка. */
+  edits: Record<number, EditPoint>
 }
 
 const MAIN = 'main'
@@ -136,7 +166,15 @@ export function initialClaude(): ClaudeState {
     items: [],
     agents: [{ ...newAgent(MAIN, null, 'Главный', 0), status: 'waiting' }],
     currentAgentId: null,
+    chain: null,
+    epoch: 0,
+    edits: {},
   }
+}
+
+/** Новая сессия (другой каталог, --resume не удался): прежние сообщения больше не правятся. */
+export function newSession(s: ClaudeState): ClaudeState {
+  return { ...s, sessionId: null, chain: null, epoch: s.epoch + 1 }
 }
 
 function patchAgent(s: ClaudeState, id: string, patch: Partial<Agent> | ((a: Agent) => Partial<Agent>)): ClaudeState {
@@ -152,8 +190,11 @@ function ensureAgent(s: ClaudeState, id: string, now: number): ClaudeState {
 }
 
 export function userSent(s: ClaudeState, text: string, now: number, tokens?: Attachment[]): ClaudeState {
+  // Точка правки этого сообщения: конец предыдущего хода; сессии ещё нет — первое сообщение.
+  const at: EditPoint['at'] = s.chain ?? (s.sessionId === null ? 'fresh' : null)
   const next: ClaudeState = {
     ...s,
+    edits: { ...s.edits, [s.items.length]: { at, epoch: s.epoch } },
     busy: true,
     pending: s.pending + 1,
     currentAgentId: MAIN,
@@ -280,6 +321,10 @@ function onAssistant(s: ClaudeState, ev: Rec, now: number): ClaudeState {
   let next = ensureAgent(s, aid, now)
   next = { ...next, currentAgentId: aid }
   next = withModel(next, aid, strOr(msg.model))
+  // Сообщения главного агента — цепочка сессии (у субагентов своя, по ней не перематываем).
+  const uuid = strOr(ev.uuid)
+  const session = strOr(ev.session_id) || next.sessionId
+  if (aid === MAIN && uuid && !uuid.startsWith('-') && session) next = { ...next, chain: { session, uuid } }
 
   if (isRec(msg.usage)) {
     const u = msg.usage
@@ -503,6 +548,81 @@ export function finishQuestion(s: ClaudeState, requestId: string): ClaudeState {
 export function pendingQuestion(s: ClaudeState): Extract<FeedClaudeItem, { type: 'question' }> | null {
   const p = pendingPrompt(s)
   return p?.type === 'question' ? p : null
+}
+
+/** Инструменты, меняющие файлы: при правке сообщения их изменения не откатываются. */
+const FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+
+function touchesFiles(items: readonly FeedClaudeItem[]): boolean {
+  return items.some((it) => (it.type === 'action' && FILE_TOOLS.has(it.tool)) || (it.type === 'replaced' && touchesFiles(it.items)))
+}
+
+/** Сообщения «Вы» текущей сессии (индексы в items), по порядку. */
+function userIndices(s: ClaudeState): number[] {
+  const out: number[] = []
+  s.items.forEach((it, i) => {
+    if (it.type === 'user' && s.edits[i]?.epoch === s.epoch) out.push(i)
+  })
+  return out
+}
+
+/** Сообщение index можно изменить: «Вы» текущей сессии с известной точкой перемотки. */
+export function canEdit(s: ClaudeState, index: number): boolean {
+  const e = s.edits[index]
+  return s.items[index]?.type === 'user' && !!e && e.epoch === s.epoch && e.at !== null
+}
+
+/** Последнее отправленное сообщение, если его можно изменить; иначе -1. */
+export function lastEditable(s: ClaudeState): number {
+  const us = userIndices(s)
+  const last = us[us.length - 1]
+  return last !== undefined && canEdit(s, last) ? last : -1
+}
+
+export interface EditInfo {
+  /** Номер сообщения среди сообщений «Вы» сессии и их число. */
+  n: number
+  total: number
+  /** Сообщений «Вы» после него (уйдут в историю). */
+  after: number
+  /** Claude ещё отвечает. */
+  busy: boolean
+  /** После него были правки файлов (Edit/Write…): они не откатываются. */
+  files: boolean
+}
+
+/** Что сделает правка сообщения index (для подсказки над строкой ввода); null — нельзя. */
+export function editInfo(s: ClaudeState, index: number): EditInfo | null {
+  if (!canEdit(s, index)) return null
+  const us = userIndices(s)
+  const n = us.indexOf(index) + 1
+  return { n, total: us.length, after: us.length - n, busy: s.busy, files: touchesFiles(s.items.slice(index + 1)) }
+}
+
+/** «1 сообщение», «3 сообщения», «5 сообщений». */
+export function messagesLabel(n: number): string {
+  const d = n % 10
+  const dd = n % 100
+  const w = d === 1 && dd !== 11 ? 'сообщение' : d >= 2 && d <= 4 && (dd < 12 || dd > 14) ? 'сообщения' : 'сообщений'
+  return `${n} ${w}`
+}
+
+/**
+ * Правка сообщения index: оно и всё после него — «Прежний вариант» на его месте (индексы
+ * остальных не сдвигаются), недоигранное в нём закрыто.
+ */
+export function replaceFrom(s: ClaudeState, index: number): ClaudeState {
+  if (index < 0 || index >= s.items.length) return s
+  const old = s.items.slice(index).map((it): FeedClaudeItem => {
+    if (it.type === 'assistant' && it.streaming) return { ...it, streaming: false }
+    if (it.type === 'action' && it.status === 'running') return { ...it, status: 'error' }
+    return it
+  })
+  const count = old.filter((it) => it.type === 'user').length
+  const items = s.items.slice(0, index)
+  items.push({ type: 'replaced', items: old, count })
+  for (let i = index + 1; i < s.items.length; i++) items.push({ type: 'gone' })
+  return { ...s, items }
 }
 
 export function reduceClaude(s: ClaudeState, line: string | object, now: number): ClaudeState {

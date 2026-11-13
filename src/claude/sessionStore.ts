@@ -2,7 +2,7 @@
 // чтобы его читали лента панели, панель агентов и статус-бар.
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { create } from 'zustand'
-import { cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaude, questionSteps, recordAnswer, reduceClaude, userSent, type ClaudeState } from './reducer'
+import { canEdit, cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaude, newSession, questionSteps, recordAnswer, reduceClaude, replaceFrom, userSent, type ClaudeState } from './reducer'
 import { allowResponse, alwaysResponse, answerResponse, denyResponse, parsePermissionRequest } from './questions'
 import type { FeedClaudeItem, PermissionDecision } from './reducer'
 import { GET_SETTINGS, effortRequest, modelNote, persistedModel, setModelRequest, type ModelChoice } from './models'
@@ -45,6 +45,11 @@ export interface PaneClaude {
   paused: boolean
   /** Подсказка «пауза — ↵ отправить следующее» в заголовке очереди (esc убирает). */
   pauseHint: boolean
+  /**
+   * Правка сообщения: следующий запуск продолжает сессию с этого сообщения (`--resume-session-at`)
+   * ответвлением (`--fork-session`). Сбрасывается запуском.
+   */
+  rewindAt?: string | null
 }
 
 export interface QueuedMessage {
@@ -89,6 +94,7 @@ function get(paneId: string): PaneClaude {
       queue: [],
       paused: false,
       pauseHint: false,
+      rewindAt: null,
     }
   )
 }
@@ -148,9 +154,12 @@ function start(paneId: string): Proc {
   const prev = get(paneId)
   const resume = prev.state.sessionId
   const { cwd, model, effort } = prev
+  // Перезапуск после правки сообщения: с точки перед ним, в новой сессии-ответвлении.
+  const rewindAt = resume !== null ? (prev.rewindAt ?? null) : null
   // Режим — из настроек на момент запуска; Rust проверяет его по списку (неизвестный — acceptEdits).
-  const permissionMode = useSettings.getState().settings.claudePermissionMode
-  patch(paneId, (p) => ({ ...p, permissionMode }))
+  // Перезапуск после правки сохраняет режим прежнего процесса.
+  const permissionMode = (prev.rewindAt ? prev.permissionMode : null) ?? useSettings.getState().settings.claudePermissionMode
+  patch(paneId, (p) => ({ ...p, permissionMode, rewindAt: null }))
   let gotLine = false
   const onLine = new Channel<string>((line) => {
     gotLine = true
@@ -185,14 +194,15 @@ function start(paneId: string): Proc {
           : failed(p.state, exitMessage(e), now)
       // --resume упал, не сказав ни строки (сессии нет или она из другого каталога) — дальше начинаем
       // новую сессию, а не повторяем тот же resume на каждый ⌘↵.
-      if (!ok && resume !== null && !gotLine) state = { ...state, sessionId: null }
+      if (!ok && resume !== null && !gotLine) state = newSession(state)
       // Вопрос без процесса не ответить: отменяем (блок над строкой ввода исчезает).
       state = cancelPrompts(state, undefined, 'exit')
       // Очередь не уходит сама в новый процесс: пауза до ↵.
       return { ...p, procId: null, state, ...pause(p) }
     })
   })
-  proc.ready = invoke<string>('claude_start', { cwd, resume, model, effort, permissionMode, onLine, onExit })
+  const rewind = rewindAt ? { resumeAt: rewindAt, fork: true } : {}
+  proc.ready = invoke<string>('claude_start', { cwd, resume, model, effort, permissionMode, ...rewind, onLine, onExit })
     .then((id) => {
       if (!alive()) {
         // Панель закрыли, пока процесс запускался.
@@ -390,7 +400,7 @@ function switchCwd(paneId: string, paneCwd: string | undefined): string | null {
   if (cwd === null) return null
   if (cur.cwd !== null && cwd !== cur.cwd) {
     dropProc(paneId)
-    patchState(paneId, (s) => ({ ...stopped(s, Date.now()), sessionId: null, contextUsed: 0 }))
+    patchState(paneId, (s) => ({ ...newSession(stopped(s, Date.now())), contextUsed: 0 }))
   }
   if (cur.cwd !== cwd) patch(paneId, (p) => ({ ...p, cwd }))
   return cwd
@@ -429,6 +439,11 @@ export async function askClaude(paneId: string, paneCwd: string | undefined, tex
     patch(paneId, (p) => ({ ...p, queue: [...p.queue, msg], pauseHint: p.pauseHint || p.paused }))
     return
   }
+  return send(paneId, paneCwd, text, toks, false)
+}
+
+/** Отправка вопроса в простое (не в очередь). edit — правка сообщения: строку новой сессии не пишем. */
+async function send(paneId: string, paneCwd: string | undefined, text: string, toks: Attachment[] | undefined, edit: boolean): Promise<void> {
   // Отправка вручную снимает паузу: после этого хода очередь снова уходит сама.
   patch(paneId, (p) => (p.paused ? { ...p, paused: false, pauseHint: false } : p))
   const cwd = switchCwd(paneId, paneCwd)
@@ -437,7 +452,7 @@ export async function askClaude(paneId: string, paneCwd: string | undefined, tex
     return
   }
   // Новая сессия (не продолжение): в ленте — строка с её каталогом.
-  if (!procs.has(paneId) && get(paneId).state.sessionId === null) {
+  if (!edit && !procs.has(paneId) && get(paneId).state.sessionId === null) {
     patchState(paneId, (s) => ({ ...s, items: [...s.items, { type: 'session', cwd }] }))
   }
   patchState(paneId, (s) => userSent(s, text, Date.now(), toks))
@@ -535,6 +550,77 @@ export function interruptClaude(paneId: string): boolean {
   // Процесс ещё запускается — отметки достаточно: askClaude не отправит вопрос.
   if (proc.id) invoke('claude_interrupt', { id: proc.id }).catch(() => {})
   return true
+}
+
+/** Сколько ждать конца прерванного хода перед перезапуском (дальше процесс просто останавливается). */
+export const SETTLE_MS = 5000
+
+/** Ход прерван: ждём его конца (result или выход процесса), не дольше SETTLE_MS. */
+function settled(paneId: string, proc: Proc): Promise<void> {
+  const done = () => !get(paneId).state.busy || procs.get(paneId) !== proc
+  if (done()) return Promise.resolve()
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer)
+      unsub()
+      resolve()
+    }
+    const timer = setTimeout(finish, SETTLE_MS)
+    const unsub = useClaudeSessions.subscribe(() => {
+      if (done()) finish()
+    })
+  })
+}
+
+/** Идущая правка панели: вторая (двойной ↵) не начинается, пока первая не перезапустила процесс. */
+const editing = new Set<string>()
+
+/**
+ * Правка отправленного сообщения index (↵ в режиме правки). Порядок: прервать ход, если идёт
+ * (и дождаться его конца) → остановить процесс → запустить заново с точки перед сообщением
+ * (`--resume <сессия> --resume-session-at <uuid> --fork-session`; первое сообщение — новая сессия)
+ * → отправить исправленный текст. В ленте прежний вариант сворачивается на месте сообщения.
+ * Очередь остаётся и уходит после нового ответа. false — сообщение изменить нельзя.
+ */
+export async function editClaude(paneId: string, index: number, text: string, tokens?: Attachment[]): Promise<boolean> {
+  if (editing.has(paneId) || !canEdit(get(paneId).state, index)) return false
+  editing.add(paneId)
+  try {
+    const proc = procs.get(paneId)
+    if (proc && get(paneId).state.busy) {
+      // Как ⌃C, но очередь не ставится на паузу: она уйдёт после исправленного ответа.
+      proc.interrupted = true
+      patchState(paneId, (s) => cancelPrompts(s))
+      if (proc.id) {
+        await invoke('claude_interrupt', { id: proc.id }).catch(() => {})
+        await settled(paneId, proc)
+      }
+    }
+    // Пока ждали, сессия могла смениться (другой каталог) — тогда это сообщение уже не правится.
+    const cur = get(paneId)
+    const point = cur.state.edits[index]?.at
+    if (!canEdit(cur.state, index) || !point) return false
+    dropProc(paneId)
+    const at = point === 'fresh' ? null : point
+    patch(paneId, (p) => ({
+      ...p,
+      procId: null,
+      paused: false,
+      pauseHint: false,
+      rewindAt: at ? at.uuid : null,
+      state: {
+        ...replaceFrom(cancelPrompts(stopped(p.state, Date.now()), undefined, 'stop'), index),
+        // Продолжаем ту сессию, где была точка (её файл цел), — или начинаем новую с первого сообщения.
+        sessionId: at ? at.session : null,
+        chain: at,
+      },
+    }))
+    const toks = tokens && tokens.length > 0 ? tokens : undefined
+    await send(paneId, cur.cwd ?? undefined, text, toks, true)
+    return true
+  } finally {
+    editing.delete(paneId)
+  }
 }
 
 /** Панель закрыта: процесс остановить, состояние забыть. */
