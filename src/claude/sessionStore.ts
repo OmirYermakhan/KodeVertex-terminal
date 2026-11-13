@@ -2,7 +2,7 @@
 // чтобы его читали лента панели, панель агентов и статус-бар.
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { create } from 'zustand'
-import { canEdit, cancelPrompts, clearSession, decidePermission, finishQuestion, gotoStep, initialClaude, newSession, questionSteps, recordAnswer, reduceClaude, replaceFrom, userSent, type ClaudeState } from './reducer'
+import { canEdit, cancelPrompts, clearSession, dropSuggestion, decidePermission, finishQuestion, gotoStep, initialClaude, newSession, questionSteps, recordAnswer, reduceClaude, replaceFrom, userSent, type ClaudeState } from './reducer'
 import { allowResponse, alwaysResponse, answerResponse, denyResponse, parsePermissionRequest } from './questions'
 import type { FeedClaudeItem, PermissionDecision } from './reducer'
 import { GET_SETTINGS, effortRequest, modelNote, persistedModel, setModelRequest, type ModelChoice } from './models'
@@ -186,6 +186,8 @@ function start(paneId: string): Proc {
   // Режим — из настроек на момент запуска; Rust проверяет его по списку (неизвестный — acceptEdits).
   // Перезапуск после правки сохраняет режим прежнего процесса.
   const permissionMode = (prev.rewindAt ? prev.permissionMode : null) ?? useSettings.getState().settings.claudePermissionMode
+  // Подсказка следующего сообщения (`--prompt-suggestions`): из настроек на момент запуска.
+  const promptSuggestions = useSettings.getState().settings.claudePromptSuggestions
   patch(paneId, (p) => ({ ...p, permissionMode, rewindAt: null }))
   let gotLine = false
   const onLine = new Channel<string>((line) => {
@@ -229,7 +231,7 @@ function start(paneId: string): Proc {
     })
   })
   const rewind = rewindAt ? { resumeAt: rewindAt, fork: true } : {}
-  proc.ready = invoke<string>('claude_start', { cwd, resume, model, effort, permissionMode, ...rewind, onLine, onExit })
+  proc.ready = invoke<string>('claude_start', { cwd, resume, model, effort, permissionMode, ...rewind, promptSuggestions, onLine, onExit })
     .then((id) => {
       if (!alive()) {
         // Панель закрыли, пока процесс запускался.
@@ -251,6 +253,12 @@ function start(paneId: string): Proc {
     })
   procs.set(paneId, proc)
   return proc
+}
+
+/** Подсказку следующего сообщения убрали (набор, esc, вставка): до следующего хода её нет. */
+export function dismissSuggestion(paneId: string): void {
+  if (!useClaudeSessions.getState().sessions[paneId]?.state.suggestion) return
+  patchState(paneId, dropSuggestion)
 }
 
 /** Ожидающие ответа управляющие запросы: request_id → обработчики. */

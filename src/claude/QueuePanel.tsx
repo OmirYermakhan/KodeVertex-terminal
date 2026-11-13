@@ -4,6 +4,7 @@ import { forwardRef, useImperativeHandle, useRef, useState, type KeyboardEvent }
 import type { QueuedMessage } from './sessionStore'
 import { segments } from '../attach/doc'
 import { CLIP_PATH, Token } from '../attach/tokenView'
+import { usePresence } from '../ui/motion'
 
 export const QUEUE_KEYS = '↑ в пустой строке — изменить последнее · ⌫ убрать · esc к вводу'
 export const PAUSE_HINT = 'пауза — ↵ отправить следующее'
@@ -72,23 +73,38 @@ export const QueuePanel = forwardRef<QueuePanelHandle, QueuePanelProps>(function
   }
 
   const n = p.queue.length
+  // Убранная строка ещё миг уходит (анимация в global.css), потом пропадает.
+  const rows = usePresence(p.queue, (m) => m.id)
+  // Панель смонтирована и при пустой очереди (TerminalPane): так уход последней строки доигрывается —
+  // уходит вся панель (заголовок с прежним числом), затем ничего не рисуется.
+  if (rows.length === 0) return null
+  const leaving = n === 0
   return (
-    <div className="queue" ref={boxRef} tabIndex={-1} role="listbox" aria-label="Очередь сообщений" onKeyDown={onKeyDown}>
+    <div
+      className={leaving ? 'queue leaving' : 'queue'}
+      ref={boxRef}
+      tabIndex={-1}
+      role={leaving ? undefined : 'listbox'}
+      aria-label={leaving ? undefined : 'Очередь сообщений'}
+      aria-hidden={leaving || undefined}
+      onKeyDown={onKeyDown}
+    >
       <div className="dh">
         <span>
-          В очереди · <b>{n}</b>
+          В очереди · <b>{leaving ? rows.length : n}</b>
           {p.paused && <span className="qu-pause"> · {PAUSE_HINT}</span>}
         </span>
         <span className="keys">{QUEUE_KEYS}</span>
       </div>
       <div className="qu-list">
-        {p.queue.map((m) => (
+        {rows.map(({ item: m, leaving }) => (
           <div
             key={m.id}
-            className={'qu-row' + (m.id === selected ? ' focus' : '')}
-            role="option"
-            aria-selected={m.id === selected}
-            data-queue-id={m.id}
+            className={'qu-row' + (leaving ? ' leaving' : m.id === selected ? ' focus' : '')}
+            role={leaving ? undefined : 'option'}
+            aria-hidden={leaving || undefined}
+            aria-selected={leaving ? undefined : m.id === selected}
+            data-queue-id={leaving ? undefined : m.id}
             onMouseDown={(e) => {
               e.preventDefault()
               focusRow(m.id)

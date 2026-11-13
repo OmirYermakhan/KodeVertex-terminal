@@ -22,7 +22,7 @@ import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
 import { applyShell, claudeIndex, claudeItemId, commandBytes, failurePrompt, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
-import { editClaude, dismissQueueHint, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
+import { editClaude, dismissQueueHint, dismissSuggestion, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
 import { aliasOf } from '../claude/models'
 import { canEdit, editInfo, lastEditable, pendingPrompt, type PermissionDecision } from '../claude/reducer'
 import { EditChip } from '../claude/EditChip'
@@ -32,6 +32,7 @@ import { QuestionPrompt } from '../claude/QuestionPrompt'
 import { dropPaneFeed, restoredPane, scheduleSave, setPaneFeed } from '../persist/session'
 import { InputBar, type InputBarHandle, type InputSnapshot } from '../input/InputBar'
 import { QueuePanel, type QueuePanelHandle } from '../claude/QueuePanel'
+import { Collapse } from '../ui/motion'
 import { AgentsPanel, type AgentsPanelHandle } from '../claude/AgentsPanel'
 import { blockText, blockTextOf, cleanSerializedHtml } from '../feed/blockHtml'
 import { pushHistory } from '../input/history'
@@ -530,11 +531,12 @@ export function TerminalPane(p: TerminalPaneProps) {
   useLayoutEffect(() => {
     queueShownRef.current = queueShown
   })
-  // Очередь опустела (ушло последнее), пока фокус был в ней — вернуть ввод.
+  // Очередь опустела (ушло последнее), пока фокус был в ней — вернуть ввод. Уходящая панель
+  // (.queue.leaving) ещё миг держит фокус, а потом пропадает — поэтому фокус в ней тоже считается.
   useEffect(() => {
     if (queueShown || !p.focused) return
     const active = document.activeElement
-    if (!active || active === document.body) focusActive()
+    if (!active || active === document.body || active.closest?.('.queue')) focusActive()
   }, [queueShown, p.focused, focusActive])
   const queueInput = useMemo(
     () => ({
@@ -809,6 +811,8 @@ export function TerminalPane(p: TerminalPaneProps) {
   const dropHere = useDrop((s) => (s.paneId === p.paneId ? s.paths : null))
   /** Строка ввода в режиме Claude: брошенные файлы станут значками (иначе — путями). */
   const [acceptsTokens, setAcceptsTokens] = useState(false)
+  /** Строка ввода в режиме Claude (подсказка пустой ленты — про этот режим). */
+  const [inClaude, setInClaude] = useState(restored?.claudeMode === true)
   useEffect(() => registerDropTarget(p.paneId, (paths) => inputRef.current?.insertPaths(paths)), [p.paneId])
   const onClearFeed = useCallback(() => {
     // Идущий блок и незаконченный ответ Claude (с ним — всё после него) не трогаем:
@@ -934,6 +938,14 @@ export function TerminalPane(p: TerminalPaneProps) {
   useEffect(() => {
     if (editLost) cancelEdit()
   }, [editLost, cancelEdit])
+  // Подсказка следующего сообщения: только между ходами — не во время ответа, не при очереди,
+  // вопросе или запросе разрешения, не при правке сообщения; выключена в настройках — не видна.
+  const suggestion =
+    settings.claudePromptSuggestions && claudeState && !claudeState.busy && claudeState.pending === 0 &&
+    queue.length === 0 && !prompt && !editing && !alt
+      ? (claudeState.suggestion ?? null)
+      : null
+  const onDismissSuggestion = useCallback(() => dismissSuggestion(p.paneId), [p.paneId])
   const onEditLast = useCallback(() => {
     const st = useClaudeSessions.getState().sessions[callbacks.current.paneId]?.state
     const i = st ? lastEditable(st) : -1
@@ -1106,6 +1118,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         editable={editable}
         onEdit={onEditItem}
         editingId={editing ? claudeItemId(editing.index) : null}
+        claudeMode={inClaude}
         park={
           // Пока xterm не показан, он стоит здесь: невидим, но сохраняет ширину текста блока (cols).
           // inert: спрятанный xterm не получает фокус по Tab/⇧Tab (ввод вслепую в ZLE).
@@ -1122,6 +1135,8 @@ export function TerminalPane(p: TerminalPaneProps) {
             <AgentsPanel ref={agentsRef} state={claude.state} queued={queue.length} onExit={() => inputRef.current?.focus()} />
           </ErrorBoundary>
         )}
+        {/* После ответа вопрос сворачивается по высоте (src/ui/motion.tsx). */}
+        <Collapse open={!!question && !alt}>
         {question && !alt && (
           <ErrorBoundary name="вопрос агента" resetKey={question}>
           <QuestionPrompt
@@ -1136,6 +1151,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           />
           </ErrorBoundary>
         )}
+        </Collapse>
         {permission && !alt && (
           <ErrorBoundary name="запрос разрешения" resetKey={permission}>
           <PermissionPrompt
@@ -1148,7 +1164,8 @@ export function TerminalPane(p: TerminalPaneProps) {
           />
           </ErrorBoundary>
         )}
-        {queueShown && (
+        {/* Смонтирована и при пустой очереди: уход последней строки анимируется (QueuePanel рисует null). */}
+        {!alt && (
           <ErrorBoundary name="очередь сообщений">
           <QueuePanel
             ref={queueRef}
@@ -1183,6 +1200,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           onAsk={onAsk}
           onTokens={onTokens}
           onAcceptsTokens={setAcceptsTokens}
+          onClaudeMode={setInClaude}
           onEnterClaude={onEnterClaude}
           onNewClaude={onNewClaude}
           onExitClaude={onExitClaude}
@@ -1194,6 +1212,8 @@ export function TerminalPane(p: TerminalPaneProps) {
           preview={preview.api}
           atFeed={atFeed}
           claudeHistory={claudeHistory}
+          suggestion={suggestion}
+          onDismissSuggestion={onDismissSuggestion}
         />
       </div>
       {alt && (

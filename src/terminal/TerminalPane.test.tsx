@@ -475,6 +475,30 @@ describe('TerminalPane', () => {
         expect(document.querySelector('.feed .you')?.textContent).toContain('что тут?')
       })
 
+      it('подсказка пустой ленты пропадает сразу с входом в режим `claude`, до первого ответа', async () => {
+        claudeOk()
+        await mounted()
+        expect(document.querySelector('.feed .feed-empty')).not.toBeNull()
+        type('claude')
+        keyIn('Enter')
+        await act(async () => await flush())
+        expect(document.querySelector('.feed .feed-empty')).toBeNull()
+        expect(document.querySelector('.feed .card')).toBeNull()
+      })
+
+      it('⌃L в режиме Claude: подсказка пустой ленты — про режим Claude, не «Команда ↵»', async () => {
+        claudeOk()
+        await mounted()
+        const labels = () => [...document.querySelectorAll('.feed .feed-empty li > span:first-child')].map((e) => e.textContent)
+        expect(labels()[0]).toBe('Команда')
+        type('claude')
+        keyIn('Enter')
+        await act(async () => await flush())
+        keyIn('l', { ctrlKey: true })
+        expect(labels()[0]).toBe('Спросить Claude')
+        expect(labels()).not.toContain('Команда')
+      })
+
       it('вопрос агента: блок над строкой ввода с фокусом, в ленте — «ждёт ответа»; ответ уходит, блок исчезает', async () => {
         claudeOk()
         await mounted()
@@ -492,8 +516,9 @@ describe('TerminalPane', () => {
         const dock = document.querySelector('.dock')!
         const prompt = dock.querySelector('.aprompt') as HTMLElement
         expect(prompt).not.toBeNull()
-        // Порядок в доке: панель агентов, вопрос, строка ввода.
-        expect([...dock.children].map((c) => c.className.split(' ')[0])).toEqual(['agents', 'aprompt', 'input-wrap'])
+        // Порядок в доке: панель агентов, вопрос (в обёртке сворачивания), строка ввода.
+        expect([...dock.children].map((c) => c.className.split(' ')[0])).toEqual(['agents', 'kv-collapse', 'input-wrap'])
+        expect(prompt.parentElement!.parentElement).toBe(dock)
         expect(document.activeElement).toBe(prompt)
         expect(document.querySelector('.feed .q-wait')?.textContent).toContain('Какую базу?')
         // esc — к вводу, ⌘↓ — обратно к вопросу.
@@ -514,6 +539,34 @@ describe('TerminalPane', () => {
         expect(document.querySelector('.aprompt')).toBeNull()
         expect(document.querySelector('.feed .qcard .q-ans')?.textContent).toBe('✓ Ответ: MySQL')
         expect(textarea().getAttribute('aria-label')).not.toBe('Ваш ответ на вопрос…')
+      })
+
+      it('очередь опустела, пока фокус в ней (⌘↓), — фокус в строку ввода сразу, пока панель ещё уходит', async () => {
+        // С Web Animations панель после ухода последней строки ещё миг на месте (.queue.leaving).
+        ;(HTMLElement.prototype as unknown as { animate?: unknown }).animate = () => ({ cancel() {} })
+        try {
+          claudeOk()
+          await mounted()
+          type('claude')
+          keyIn('Enter')
+          await act(async () => await flush())
+          type('первое')
+          keyIn('Enter')
+          await act(async () => await flush())
+          type('второе')
+          keyIn('Enter')
+          await act(async () => await flush())
+          act(() => runPaneCommand('p', 'blockNext'))
+          expect(document.activeElement).toBe(document.querySelector('.queue'))
+          await act(async () => {
+            startArgs().onLine.onmessage(JSON.stringify({ type: 'result', subtype: 'success', result: 'ok', session_id: 's' }))
+            await flush()
+          })
+          expect(document.querySelector('.queue.leaving')).not.toBeNull()
+          expect(document.activeElement).toBe(textarea())
+        } finally {
+          delete (HTMLElement.prototype as unknown as { animate?: unknown }).animate
+        }
       })
 
       it('очередь: пока ход идёт — сообщения в очередь над строкой ввода; ⌘↓ ввод → очередь → агенты; по result — отправка', async () => {
@@ -1550,6 +1603,82 @@ describe('TerminalPane: правка отправленного сообщени
     keyIn('Enter')
     await act(async () => await flush(5))
     expect(names()).toEqual(['claude_interrupt', 'claude_stop', 'claude_start', 'claude_send'])
+  })
+
+  describe('подсказка следующего сообщения', () => {
+    const sugg = () => document.querySelector('.input .in-sugg')?.textContent ?? null
+    const suggest = (text: string) => line({ type: 'prompt_suggestion', suggestion: text, uuid: 'u', session_id: 's1' })
+
+    it('после хода — серым в пустом поле; → в поле без отправки; ↵ потом отправляет', async () => {
+      await twoTurns()
+      suggest('спасибо, до завтра')
+      expect(sugg()).toBe('спасибо, до завтра')
+      invoke.mockClear()
+      keyIn('Enter')
+      await act(async () => await flush())
+      expect(names()).toEqual([])
+      keyIn('ArrowRight')
+      expect(inputText()).toBe('спасибо, до завтра')
+      expect(sugg()).toBeNull()
+      expect(useClaudeSessions.getState().sessions.p.state.suggestion).toBeNull()
+      keyIn('Enter')
+      await act(async () => await flush())
+      expect(names()).toEqual(['claude_send'])
+    })
+
+    it('не во время ответа: пришла, когда уже отправлено следующее, — игнор', async () => {
+      await twoTurns()
+      type('третий')
+      keyIn('Enter')
+      await act(async () => await flush())
+      suggest('спасибо')
+      expect(sugg()).toBeNull()
+    })
+
+    it('при непустой очереди и при выключенной настройке не показывается', async () => {
+      await twoTurns()
+      suggest('спасибо')
+      expect(sugg()).toBe('спасибо')
+      act(() => useSettings.setState({ settings: { ...DEFAULTS, claudePromptSuggestions: false } }))
+      expect(sugg()).toBeNull()
+      act(() => useSettings.setState({ settings: { ...DEFAULTS } }))
+      expect(sugg()).toBe('спасибо')
+      act(() =>
+        useClaudeSessions.setState((st) => {
+          const s = st.sessions.p
+          return { sessions: { ...st.sessions, p: { ...s, queue: [{ id: 1, text: 'ждёт' }], paused: true } } }
+        }),
+      )
+      expect(sugg()).toBeNull()
+    })
+
+    it('при открытом запросе разрешения или вопросе агента не показывается', async () => {
+      await twoTurns()
+      suggest('спасибо')
+      expect(sugg()).toBe('спасибо')
+      line({ type: 'control_request', request_id: 'rq1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'rm -rf build' }, tool_use_id: 'tb' } })
+      expect(document.querySelector('.dock .aprompt .p-tool')!.textContent).toBe('Bash')
+      expect(sugg()).toBeNull()
+      act(() =>
+        useClaudeSessions.setState((st) => {
+          const s = st.sessions.p
+          return { sessions: { ...st.sessions, p: { ...s, state: { ...s.state, items: s.state.items.filter((i) => i.type !== 'permission') } } } }
+        }),
+      )
+      expect(sugg()).toBe('спасибо')
+      line({ type: 'control_request', request_id: 'rq2', request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input: { questions: [{ question: 'Удалить?', header: 'API', multiSelect: false, options: [{ label: 'Да', description: '' }, { label: 'Нет', description: '' }] }] }, tool_use_id: 'tq' } })
+      expect(sugg()).toBeNull()
+    })
+
+    it('esc убирает подсказку, второй esc — выход из режима Claude', async () => {
+      await twoTurns()
+      suggest('спасибо')
+      keyIn('Escape')
+      expect(sugg()).toBeNull()
+      expect(document.querySelector('.input .in-mode')).not.toBeNull()
+      keyIn('Escape')
+      expect(document.querySelector('.input .in-mode')).toBeNull()
+    })
   })
 
   it('точка перемотки неизвестна — «Изменить» не показываем, ↑ не правит', async () => {

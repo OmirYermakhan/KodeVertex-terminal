@@ -6,7 +6,7 @@ import { foldForMatch } from '../completion/completion'
 import { GROUP_TITLE, rowToken, type AtRow, type Mark } from './atSearch'
 import { loadPreview, type PreviewData } from './preview/api'
 import { PreviewCard } from './preview/PreviewCard'
-import { entryIcon } from './preview/cardLayout'
+import { FileIcon } from '../completion/FileIcon'
 import { Icon } from './tokenView'
 
 /** Пауза перед загрузкой бокового просмотра (быстрое ↑↓ не читает каждый файл). */
@@ -47,10 +47,9 @@ function fileName(query: string, name: string): ReactNode[] {
 function Row({ row, query, dirPart }: { row: AtRow; query: string; dirPart: string }) {
   switch (row.group) {
     case 'files': {
-      const [icon, cls] = entryIcon(row.entry.name, row.entry.isDir)
       return (
         <>
-          <Icon name={icon} className={cls} />
+          <FileIcon name={row.entry.name} isDir={row.entry.isDir} />
           <span className="tx">
             {fileName(query, row.entry.name)}
             {row.entry.isDir ? '/' : ''}

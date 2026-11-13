@@ -75,4 +75,35 @@ describe('PaneView mounting', () => {
     expect(unmounts[first]).toBeUndefined()
     expect(unmounts[second]).toBeUndefined()
   })
+
+  it('вкладку снова показали — разовые анимации появления в ней доводятся до конца, остальные не трогаются', () => {
+    const { getByTestId } = render(<Harness />)
+    const t0 = useTabs.getState().tabs[0].id
+    act(() => useTabs.getState().newTab())
+    const t1 = useTabs.getState().tabs[1].id
+    // Web Animations в jsdom нет: document.getAnimations отдаёт подставные анимации.
+    const inTab0 = document.createElement('div')
+    getByTestId(`tab-${t0}`).appendChild(inTab0)
+    const inTab1 = document.createElement('div')
+    getByTestId(`tab-${t1}`).appendChild(inTab1)
+    const anim = (name: string, target: Element) => ({ animationName: name, effect: { target }, finish: vi.fn() })
+    const appear = anim('kv-in', inTab0)
+    const caret = anim('kv-pulse', inTab0)
+    const other = anim('kv-in', inTab1)
+    const doc = document as unknown as { getAnimations?: () => unknown[] }
+    doc.getAnimations = () => [appear, caret, other]
+    try {
+      // Скрыли вкладку — ничего не доводим.
+      expect(appear.finish).not.toHaveBeenCalled()
+      act(() => useTabs.getState().activate(t0))
+      expect(appear.finish).toHaveBeenCalledTimes(1)
+      expect(caret.finish).not.toHaveBeenCalled()
+      expect(other.finish).not.toHaveBeenCalled()
+      act(() => useTabs.getState().activate(t1))
+      expect(other.finish).toHaveBeenCalledTimes(1)
+      expect(appear.finish).toHaveBeenCalledTimes(1)
+    } finally {
+      delete doc.getAnimations
+    }
+  })
 })

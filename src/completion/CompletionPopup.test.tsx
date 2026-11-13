@@ -34,7 +34,7 @@ describe('CompletionPopup', () => {
   it('renders entries, marks dirs and the selected one, highlights matched letters', () => {
     render(<CompletionPopup state={state()} x={10} y={20} onPick={vi.fn()} />)
     const rows = screen.getAllByRole('option')
-    expect(rows.map((r) => r.textContent)).toEqual(['▸src', 'README.md'])
+    expect(rows.map((r) => r.textContent)).toEqual(['src', 'README.md'])
     expect(rows[0]).toHaveClass('dir')
     expect(rows[1]).toHaveAttribute('aria-selected', 'true')
     expect(rows[0]).toHaveAttribute('aria-selected', 'false')

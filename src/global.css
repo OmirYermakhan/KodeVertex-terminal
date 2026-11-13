@@ -23,6 +23,9 @@ body {
   overflow: hidden;
 }
 
+/* Выделение текста — цветом акцента темы, а не системным (системный синий не сочетается с темами). */
+::selection { background: color-mix(in srgb, var(--acc) 30%, transparent); }
+
 .app {
   display: flex;
   flex-direction: column;
@@ -100,14 +103,14 @@ body {
 
 .sg.v {
   background: var(--acc);
-  color: #fff;
+  color: var(--onAcc);
   font-weight: 500;
 }
 
 /* Claude запущен с bypassPermissions: та же плашка, что .sg.v, но цветом --del. */
 .sg.danger {
   background: var(--del);
-  color: #fff;
+  color: var(--onAcc);
   font-weight: 500;
 }
 
@@ -189,9 +192,16 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .cp-list { overflow-y: auto; }
 .cp-item { box-sizing: border-box; padding: 0 10px 0 8px; border-left: 2px solid transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 .cp-item.dir { color: var(--info); }
-.cp-item.sel { background: color-mix(in srgb, var(--acc) 25%, transparent); border-left-color: var(--acc); }
+.cp-item.sel { background: color-mix(in srgb, var(--acc) 12%, var(--bg)); border-left-color: var(--acc); }
 .cp-item b { color: var(--strong); font-weight: 700; }
-.cp-icon { display: inline-block; width: 1.2em; }
+.fi { width: 13px; height: 13px; flex: none; vertical-align: -2px; margin-right: 6px; color: var(--muted); }
+.pop .fi { width: 15px; height: 15px; margin-right: 0; vertical-align: baseline; }
+.pv .fi { width: 12px; height: 12px; margin-right: 0; vertical-align: -2px; }
+.fi-dir { color: var(--warn); }
+.fi-code, .fi-script, .fi-web { color: var(--acc); }
+.fi-data, .fi-config { color: var(--info); }
+.fi-image, .fi-media { color: var(--add); }
+.fi-md { color: var(--text); }
 .cp-preview { box-sizing: border-box; padding: 4px 10px; border-left: 1px solid var(--rule); font-family: var(--font-code); font-size: 12px; line-height: 1.45; white-space: pre; overflow: hidden; }
 .cp-pdir { color: var(--info); }
 .cp-muted { color: var(--muted); }
@@ -220,7 +230,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .hp-row.mp-row { grid-template-columns: 1.4em var(--hp-name) minmax(0, 1fr) 1.2em; }
 .mp-row .hp-g { color: var(--muted); }
 .mp-row.sel .hp-g { color: var(--accText); }
-.mp-row.fable .hp-n { color: #e8c46a; }
+.mp-row.fable .hp-n { color: var(--gold); }
 .mp-ok { color: var(--add); text-align: right; font-family: var(--font-code); }
 .mp-effort { padding: 6px 14px; border-top: 1px solid var(--rule); font-family: var(--font-code); font-size: 12px; color: var(--muted); white-space: nowrap; }
 .mp-effort b { color: var(--strong); font-weight: 500; }
@@ -292,7 +302,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 /* Карточки Claude (макет 04 .you/.card/.act, макет 02 вариант B .sum/.diff) */
 .feed .who { font-family: var(--font-code); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 6px; line-height: normal; }
 .you { box-sizing: border-box; width: fit-content; min-width: 64px; margin: 0 0 12px auto; max-width: 60%; background: var(--you); border-radius: 10px 10px 2px 10px; padding: 9px 14px; font-family: var(--font-text); font-size: calc(var(--size-text) - 1.5px); line-height: normal; color: var(--strong); white-space: pre-wrap; overflow-wrap: anywhere; }
-.you .who { color: color-mix(in srgb, var(--accText) 45%, var(--strong)); text-align: right; white-space: normal; }
+.you .who { color: var(--youWho); text-align: right; white-space: normal; }
 /* Пузырь «Вы»: панелька «✎ Изменить» при наведении; выбран ⌘↑ или правится в строке ввода — обводка --acc. */
 .you { position: relative; }
 .you.sel, .you.edit { outline: 1px solid var(--acc); outline-offset: 0; }
@@ -309,8 +319,8 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .card .read-btn { font: inherit; letter-spacing: inherit; text-transform: inherit; color: var(--accText); background: transparent; border: 1px solid var(--rule); border-radius: 4px; padding: 1px 7px; cursor: pointer; }
 .card .read-btn:hover { border-color: var(--acc); color: var(--strong); }
 .card.sel { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 6%, var(--panel)); }
-.card.fable { border-left-color: #e8c46a; }
-.card.fable .who { color: #e8c46a; }
+.card.fable { border-left-color: var(--gold); }
+.card.fable .who { color: var(--gold); }
 .card.cerr { border-color: var(--del); }
 .card.cerr .who { color: var(--del); }
 /* Вопрос агента в ленте: пока ждёт — строка .cl-note, после ответа — свёрнутая карточка с полосой --warn. */
@@ -528,6 +538,12 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .drop .zone svg { color: var(--accText); }
 .input .ph { position: absolute; left: 0; top: 0; line-height: var(--input-lh, 18px); white-space: nowrap; overflow: hidden; max-width: 100%; pointer-events: none; }
 .input .caret { display: inline-block; width: 8px; height: 16px; background: var(--accText); vertical-align: -3px; animation: kv-pulse 1s steps(1) infinite; }
+/* Подсказка следующего сообщения (как в Claude Code): серым, как призрак истории; в фокусе курсор —
+   блоком в начале строки, первая буква подсказки внутри него. */
+.input .in-sugg { right: 0; text-overflow: ellipsis; }
+/* Курсор с первой буквой внутри: буква инвертирована (фон --accText, текст --bg), мигает фон, а не буква. */
+.input .in-sugg .caret { width: auto; min-width: 8px; height: auto; line-height: var(--input-lh, 18px); vertical-align: top; color: var(--bg); animation: kv-sugg-blink 1s steps(1) infinite; }
+@keyframes kv-sugg-blink { 50% { background: transparent; color: color-mix(in srgb, var(--muted) 55%, transparent); } }
 /* Режим Claude (`claude` ↵): метка слева в поле, высота строки как у поля. */
 .in-mode { flex: none; line-height: var(--input-lh, 18px); color: var(--accText); }
 .in-hint { flex: none; white-space: nowrap; line-height: var(--input-lh, 18px); }
@@ -566,7 +582,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .n { color: var(--strong); }
 .row .m { font-size: 10.5px; border: 1px solid var(--rule); border-radius: 4px; padding: 0 5px; justify-self: start; max-width: 100%; box-sizing: border-box; }
-.row .m.f { color: #e8c46a; border-color: #5a4a22; }
+.row .m.f { color: var(--gold); border-color: var(--goldRule); }
 .row b { color: var(--strong); font-weight: 500; }
 .row .r { text-align: right; }
 .row .w.waiting { color: var(--warn); }
@@ -642,3 +658,53 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .rd-body .md > :first-child { margin-top: 0; }
 .rd-body .md pre { font-size: max(12px, calc(var(--rd-size, 17px) - 3px)); }
 @container (max-width: 760px) { .rd-toc { display: none; } .rd-body { padding: 24px 18px 30vh; } }
+
+/* Плавные анимации (только opacity / transform / height). При «Уменьшить движение» их нет:
+   всё — внутри no-preference; раскрытие по высоте (src/ui/motion.tsx) проверяет ту же настройку.
+   translate/scale — отдельными свойствами: не спорят с transform выборок (.cp.pal).
+   Показ вкладки после display:none перезапустил бы их у всего поддерева — PaneView доводит их
+   до конца до отрисовки (motion.finishOnceAnimations; новое имя ключевых кадров — добавить в ONCE_ANIMATIONS). */
+.kv-collapse { overflow: hidden; }
+.kv-collapse:empty { display: none; }
+.qu-row.leaving, .queue.leaving { pointer-events: none; }
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes kv-in { from { opacity: 0; translate: 0 4px; } }
+  @keyframes kv-in-q { from { opacity: 0; translate: 0 4px; } }
+  @keyframes kv-pop { from { opacity: 0; scale: 0.98; } }
+  @keyframes kv-out { to { opacity: 0; translate: 8px 0; } }
+  @keyframes kv-out-fade { to { opacity: 0; } }
+  /* Карточка или блок появились (стрим текста их не перемонтирует — дельты без анимации). */
+  .feed > :not(.feed-park):not(.feed-empty) { animation: kv-in 140ms ease-out; }
+  /* Ответ на вопрос: тихая строка «Ждёт ответа» сменилась свёрнутой карточкой. */
+  .feed > .qcard.done { animation-name: kv-in-q; }
+  .feed-empty .ks { animation: kv-in 140ms ease-out; }
+  .qu-row { animation: kv-in 140ms ease-out; }
+  .qu-row.leaving { animation: kv-out 120ms ease-in forwards; }
+  /* Ушла последняя строка — уходит вся панель очереди (строка внутри — вместе с ней). */
+  .queue.leaving { animation: kv-out-fade 120ms ease-in forwards; }
+  .queue.leaving .qu-row.leaving { animation: none; }
+  .cp, .pop { animation: kv-pop 100ms ease-out; }
+  .dock > .aprompt { animation: kv-in 140ms ease-out; }
+}
+
+/* Длинный ответ Claude свёрнут (AssistantCard): первые 20 строк, затухание книзу, «Показать всё» — как у блока.
+   Поле слева — под номера списков (маркеры ol выступают за текст, overflow их иначе обрезал бы). */
+.ans-body.clipped { font-size: calc(var(--size-text) - 0.5px); line-height: var(--lh-text); max-height: 20lh; overflow: hidden; padding-left: 14px; margin-left: -14px; -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 4lh), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 4lh), transparent); }
+.ans-more { display: block; font-family: var(--font-code); }
+
+/* Заголовок «❯ команда» прилипает к верху ленты, пока прокручивается длинный вывод блока:
+   фон --bg (у выбранного — его подсветка), прилипшему (.stuck, FeedView.markStuck) — тонкая линия снизу.
+   Линия — тенью: высота заголовка не меняется, вывод не прыгает. Отступы блока перекрыты полями. */
+.blk > .bh { position: sticky; top: -16px; z-index: 1; margin: -8px -12px 0; padding: 8px 12px 0; background: var(--bg); border-radius: 8px 8px 0 0; }
+.blk.err > .bh { margin-left: -11px; padding-left: 11px; }
+.blk.sel > .bh { background: color-mix(in srgb, var(--acc) 6%, var(--bg)); }
+.blk > .bh.stuck { border-radius: 0; box-shadow: 0 1px 0 var(--rule); padding-bottom: 2px; margin-bottom: -2px; }
+
+/* Пустая лента: по центру — карточка клавиш как .ks макета 04 (рамка --rule, радиус 10, фон --panel2,
+   заголовок кодовым шрифтом в --accText, строки --muted 13.5px). */
+.feed-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; pointer-events: none; }
+.ks { box-sizing: border-box; width: 340px; max-width: 100%; border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; background: var(--panel2); font-family: var(--font-text); line-height: normal; pointer-events: auto; }
+.ks h3 { margin: 0 0 8px; font-family: var(--font-code); font-size: 14px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; color: var(--accText); }
+.ks ul { list-style: none; margin: 0; padding: 0; }
+.ks li { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 3px 0; color: var(--muted); font-size: 13.5px; }
+.ks-k { display: flex; gap: 4px; flex: none; }

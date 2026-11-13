@@ -1,5 +1,6 @@
 // Вид попапа подсказок путей: список слева, превью подсвеченного элемента справа.
 import { useEffect, useRef, type ReactNode } from 'react'
+import { FileIcon } from './FileIcon'
 import { foldForMatch, matchIndices } from './completion'
 import { enterAction, type CompletionState, type FsPreviewTS } from './useCompletion'
 
@@ -60,7 +61,7 @@ function Preview({ p }: { p: FsPreviewTS }) {
         <>
           {p.entries.map((e) => (
             <div key={e.name} className={e.isDir ? 'cp-pdir' : undefined}>
-              {e.isDir ? <span className="cp-icon">▸</span> : <span className="cp-icon" />}
+              <FileIcon name={e.name} isDir={e.isDir} />
               {e.name}
             </div>
           ))}
@@ -122,7 +123,7 @@ export function CompletionPopup({ state, x, y, onPick, previewFits = true }: Com
                 onPick(i)
               }}
             >
-              {it.isDir ? <span className="cp-icon">▸</span> : <span className="cp-icon" />}
+              <FileIcon name={it.name} isDir={it.isDir} />
               {highlight(query, it.name)}
             </div>
           ))}

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { clearPaneHighlights, FIND_CURRENT, FIND_HIGHLIGHT, findCount, findRanges, foldCase, setPaneHighlights } from './findInFeed'
+import { clearPaneHighlights, FIND_CURRENT, FIND_HIGHLIGHT, findCount, findRanges, foldCase, scrollToRange, setPaneHighlights } from './findInFeed'
 
 function feed(html: string): HTMLDivElement {
   const el = document.createElement('div')
@@ -91,5 +91,32 @@ describe('подсветка', () => {
     clearPaneHighlights('p1')
     clearPaneHighlights('p2')
     expect(reg.size).toBe(0)
+  })
+})
+
+describe('прокрутка к совпадению и прилипший заголовок блока', () => {
+  function setup(matchTop: number) {
+    const vp = feed('<div class="blk"><div class="bh">❯ cat</div><div class="out">текст</div></div>')
+    Object.defineProperty(vp.querySelector('.bh')!, 'offsetHeight', { value: 27 })
+    Object.defineProperty(vp, 'clientHeight', { value: 600 })
+    vp.getBoundingClientRect = () => ({ top: 100, bottom: 700 }) as DOMRect
+    let scrolled = 0
+    Object.defineProperty(vp, 'scrollTop', { get: () => scrolled, set: (v) => (scrolled = v), configurable: true })
+    const r = document.createRange()
+    r.selectNodeContents(vp.querySelector('.out')!)
+    r.getBoundingClientRect = () => ({ top: matchTop, bottom: matchTop + 18, width: 40, height: 18 }) as DOMRect
+    return { vp, r, scrolled: () => scrolled }
+  }
+
+  it('совпадение под заголовком высотой 27px (глубже прежнего запаса 24px) — прокручивается', () => {
+    const { vp, r, scrolled } = setup(100 + 26)
+    scrollToRange(r, vp)
+    expect(scrolled()).not.toBe(0)
+  })
+
+  it('совпадение ниже заголовка — лента на месте', () => {
+    const { vp, r, scrolled } = setup(100 + 60)
+    scrollToRange(r, vp)
+    expect(scrolled()).toBe(0)
   })
 })

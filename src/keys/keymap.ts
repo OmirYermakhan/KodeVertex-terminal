@@ -72,3 +72,51 @@ export function matchKey(
   )
   return b ? b.action : null
 }
+
+const MOD_ORDER: ['ctrl' | 'alt' | 'meta' | 'shift', string][] = [
+  ['ctrl', '⌃'],
+  ['alt', '⌥'],
+  ['meta', '⌘'],
+  ['shift', '⇧'],
+]
+const KEY_NAMES: Record<string, string> = {
+  ArrowUp: '↑',
+  ArrowDown: '↓',
+  ArrowLeft: '←',
+  ArrowRight: '→',
+  Enter: '↵',
+  Escape: 'esc',
+  Comma: ',',
+  Equal: '=',
+  Minus: '−',
+}
+
+type Keys = Pick<Binding, 'key' | 'meta' | 'shift' | 'alt' | 'ctrl'>
+
+/** Клавиши привязки для подсказок: ['⌘', '⇧', 'D'] (порядок модификаторов — как в меню macOS и макете). */
+export function bindingKeys(b: Keys): string[] {
+  const mods = MOD_ORDER.filter(([k]) => b[k]).map(([, s]) => s)
+  const key = KEY_NAMES[b.key] ?? b.key.replace(/^(Key|Digit)/, '')
+  return [...mods, key]
+}
+
+/** Клавиши действия из KEYMAP (первая привязка). */
+export function actionKeys(action: Action): string[] {
+  const b = KEYMAP.find((k) => k.action === action)
+  return b ? bindingKeys(b) : []
+}
+
+/**
+ * Клавиши строки ввода — их обрабатывает InputBar, а не KEYMAP: ↵ — команда оболочке,
+ * ⌘↵ — спросить Claude, ⌃R — поиск по истории команд (InputBar сверяет ⌃R с history).
+ */
+export const INPUT_BINDINGS = {
+  run: { key: 'Enter' },
+  ask: { key: 'Enter', meta: true },
+  history: { key: 'KeyR', ctrl: true },
+} as const satisfies Record<string, Keys>
+
+/** Нажатие — ровно эта привязка (по физической клавише, модификаторы все совпадают). */
+export function isBinding(b: Keys, e: Pick<KeyboardEvent, 'code' | 'metaKey' | 'shiftKey' | 'altKey' | 'ctrlKey'>): boolean {
+  return b.key === e.code && !!b.meta === e.metaKey && !!b.shift === e.shiftKey && !!b.alt === e.altKey && !!b.ctrl === e.ctrlKey
+}

@@ -52,6 +52,13 @@ const PERMISSION_MODE_HINT: Record<ClaudePermissionMode, string> = {
   bypassPermissions: 'Опасно: команды выполняются без вопросов, в том числе подсказанные чужим текстом (инъекция в файле, странице, выводе).',
 }
 
+export const PROMPT_SUGGESTIONS_LABEL = 'Подсказывать следующее сообщение'
+export const PROMPT_SUGGESTIONS_HINT =
+  'После ответа Claude в пустом поле серым — вероятная следующая реплика; → или ⇥ принимает её. ' +
+  'Claude Code тратит на неё короткий дополнительный запрос к модели после хода (со второго ответа). ' +
+  'Включение действует со следующего запуска сессии Claude; выключение сразу прячет подсказку, ' +
+  'а запросы прекращаются полностью для новых сессий Claude.'
+
 const PREVIEW_CODE = `fn main() {
     let msg = "Привет, мир";
     println!("{msg} -> {}", 1 != 2);
@@ -227,6 +234,15 @@ export default function SettingsPanel(p: { open: boolean; onClose: () => void })
             <small className="st-hint">
               {PERMISSION_MODE_HINT[settings.claudePermissionMode]} Действует со следующего запуска сессии Claude.
             </small>
+            <label className="st-row">
+              <span>{PROMPT_SUGGESTIONS_LABEL}</span>
+              <input
+                type="checkbox"
+                checked={settings.claudePromptSuggestions}
+                onChange={(e) => update({ claudePromptSuggestions: e.target.checked })}
+              />
+            </label>
+            <small className="st-hint">{PROMPT_SUGGESTIONS_HINT}</small>
 
             <h3>Уведомления</h3>
             <label className="st-row">

@@ -1,10 +1,11 @@
 // Карточка мини-просмотра (макет 06-attachments `.pv`, галерея В): своя для каждого типа значка.
-// Размеры и значки записей — cardLayout.ts. variant: card — всплывающая над значком (~300px); bubble — картинка из пузыря «Вы» (сцена Д,
+// Размеры — cardLayout.ts. variant: card — всплывающая над значком (~300px); bubble — картинка из пузыря «Вы» (сцена Д,
 // 210px, без заголовка); side — справа от выбора `@` (сцена Е, 220px, без подвала).
 import { memo, type ReactNode } from 'react'
 import { relativize } from '../serialize'
 import { iconOf, Icon, Token } from '../tokenView'
-import { BLOCK_TAIL, cardWidth, entryIcon, NAME_PAD, SIDE_LINES, type PreviewVariant } from './cardLayout'
+import { FileIcon } from '../../completion/FileIcon'
+import { BLOCK_TAIL, cardWidth, NAME_PAD, SIDE_LINES, type PreviewVariant } from './cardLayout'
 import type { Attachment } from '../types'
 import { baseName } from '../classify'
 import { formatDuration } from '../../feed/feed'
@@ -241,12 +242,11 @@ function DirCard({ t, data, variant, cwd, home }: { t: Attachment; data: Preview
         {dir && shown.length > 0 && (
           <pre>
             {shown.map((e, i) => {
-              const [icon, cls] = entryIcon(e.name, e.isDir)
               const label = e.isDir ? e.name + '/' : e.name
               const extra = e.isDir ? (e.count !== null ? String(e.count) : '') : e.size !== null ? sizeLabel(e.size) : ''
               return (
                 <span key={e.name}>
-                  <Icon name={icon} className={cls + ' sm'} /> {label.padEnd(NAME_PAD)} <span className="dim">{extra}</span>
+                  <FileIcon name={e.name} isDir={e.isDir} /> {label.padEnd(NAME_PAD)} <span className="dim">{extra}</span>
                   {i < shown.length - 1 || dir.total > shown.length ? '\n' : ''}
                 </span>
               )

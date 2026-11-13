@@ -55,6 +55,11 @@ export interface ThemeTokens {
   hlTag: string
   /** Подложка страницы PDF (бумага под отрисованной страницей). */
   pvPaper: string
+  /** Fable (модель-«архитектор»): золото подписи и значка, рамка значка. На светлом фоне — тёмное золото. */
+  gold: string
+  goldRule: string
+  /** Подпись «Вы» в пузыре (макет 03: --muted, в Android Studio — #9fb6e8). */
+  youWho: string
 }
 
 export interface Theme {
@@ -119,6 +124,9 @@ export const THEMES: Record<ThemeId, Theme> = {
       pvLn: '#5a5f65',
       hlTag: '#c9a0ff',
       pvPaper: '#e9e7e1',
+      gold: '#e8c46a',
+      goldRule: '#5a4a22',
+      youWho: '#8a9199',
     },
   },
   warm: {
@@ -175,6 +183,9 @@ export const THEMES: Record<ThemeId, Theme> = {
       pvLn: '#66625a',
       hlTag: '#c9a0c9',
       pvPaper: '#e9e7e1',
+      gold: '#e8c46a',
+      goldRule: '#5a4a22',
+      youWho: '#9c958a',
     },
   },
   cold: {
@@ -231,6 +242,9 @@ export const THEMES: Record<ThemeId, Theme> = {
       pvLn: '#5b6572',
       hlTag: '#b9a2f0',
       pvPaper: '#e9e7e1',
+      gold: '#e8c46a',
+      goldRule: '#5a4a22',
+      youWho: '#8c99aa',
     },
   },
   light: {
@@ -252,7 +266,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       info: '#2f6fb3',
       add: '#2e8540',
       del: '#c0443b',
-      warn: '#b5641a',
+      warn: '#9a5410',
       mag: '#8a3ffc',
       sumBg: '#e9efd9',
       sumRule: '#c8d6a3',
@@ -260,7 +274,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       str: '#2e8540',
       fn: '#2f6fb3',
       num: '#b5641a',
-      com: '#9a9ea4',
+      com: '#7d828a',
       tk: '#d5dfe6',
       tkRule: '#b6cadc',
       tkText: '#101a24',
@@ -287,6 +301,9 @@ export const THEMES: Record<ThemeId, Theme> = {
       pvLn: '#a1a4a7',
       hlTag: '#8a3ffc',
       pvPaper: '#e9e7e1',
+      gold: '#7f5f0a',
+      goldRule: '#d6c38c',
+      youWho: '#5a6068',
     },
   },
   as: {
@@ -343,6 +360,9 @@ export const THEMES: Record<ThemeId, Theme> = {
       pvLn: '#4f535a',
       hlTag: '#c77dbb',
       pvPaper: '#e9e7e1',
+      gold: '#e8c46a',
+      goldRule: '#5a4a22',
+      youWho: '#9fb6e8',
     },
   },
 }

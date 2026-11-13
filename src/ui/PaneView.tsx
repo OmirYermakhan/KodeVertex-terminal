@@ -1,7 +1,8 @@
-import { useEffect, useRef, type PointerEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, type PointerEvent } from 'react'
 import { childRects, layoutRects, type PaneNode, type Rect } from '../layout/paneTree'
 import { useTabs, type Tab } from '../layout/tabsStore'
 import { TerminalPane } from '../terminal/TerminalPane'
+import { finishOnceAnimations } from './motion'
 
 interface Divider {
   path: ('a' | 'b')[]
@@ -34,6 +35,14 @@ export default function PaneView({ tab, visible }: { tab: Tab; visible: boolean 
   const rects = layoutRects(tab.tree)
   const stopDrag = useRef<(() => void) | null>(null)
   useEffect(() => () => stopDrag.current?.(), [])
+  // Вкладку снова показали (display:none → block): CSS заново запустил бы появление у всей ленты,
+  // очереди и запросов. Доводим до конца до отрисовки — каждый элемент появляется один раз
+  // (появившиеся в скрытой вкладке — без анимации, как восстановленные).
+  const wasVisible = useRef(visible)
+  useLayoutEffect(() => {
+    if (visible && !wasVisible.current) finishOnceAnimations(hostRef.current)
+    wasVisible.current = visible
+  }, [visible])
 
   const startDrag = (d: Divider) => (e: PointerEvent<HTMLDivElement>) => {
     e.preventDefault()

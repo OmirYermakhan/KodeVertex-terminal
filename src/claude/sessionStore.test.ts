@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
 }))
 
-const { claudeOpen, clearClaude, exitClaude, editClaude, recallQueued, removeQueued, sendQueued, dismissQueueHint, answerPermission, answerQuestion, interruptClaude, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
+const { dismissSuggestion, claudeOpen, clearClaude, exitClaude, editClaude, recallQueued, removeQueued, sendQueued, dismissQueueHint, answerPermission, answerQuestion, interruptClaude, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
 
 const { useSettings } = await import('../settings/store')
 
@@ -52,6 +52,34 @@ describe('enterClaude (команда `claude` в строке ввода)', () 
     } finally {
       useSettings.setState({ settings: prev })
     }
+  })
+
+  it('подсказка следующего сообщения: флаг запуска — из настроек (по умолчанию вкл.)', async () => {
+    enterClaude('p', '/w')
+    await flush()
+    expect(calls('claude_start')[0][1]).toMatchObject({ promptSuggestions: true })
+    stopClaude('p')
+    const prev = useSettings.getState().settings
+    useSettings.setState({ settings: { ...prev, claudePromptSuggestions: false } })
+    try {
+      enterClaude('p', '/w')
+      await flush()
+      expect(calls('claude_start')[1][1]).toMatchObject({ promptSuggestions: false })
+    } finally {
+      useSettings.setState({ settings: prev })
+    }
+  })
+
+  it('prompt_suggestion после хода — в состоянии панели; dismissSuggestion убирает', async () => {
+    enterClaude('p', '/w')
+    await flush()
+    await askClaude('p', '/w', 'привет')
+    const onLine = calls('claude_start')[0][1].onLine as { onmessage(m: string): void }
+    onLine.onmessage(JSON.stringify({ type: 'result', result: 'ok', duration_ms: 1, total_cost_usd: 0 }))
+    onLine.onmessage(JSON.stringify({ type: 'prompt_suggestion', suggestion: 'спасибо, до завтра' }))
+    expect(useClaudeSessions.getState().sessions.p.state.suggestion?.text).toBe('спасибо, до завтра')
+    dismissSuggestion('p')
+    expect(useClaudeSessions.getState().sessions.p.state.suggestion).toBeNull()
   })
 
   it('уже идущая сессия не перезапускается; вопрос потом идёт в неё же через claude_send', async () => {

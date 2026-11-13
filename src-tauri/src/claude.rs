@@ -82,11 +82,16 @@ pub struct Launch {
   pub resume_at: Option<String>,
   /// `--fork-session`: продолжение — в новой сессии, файл исходной остаётся как был.
   pub fork: bool,
+  /// `--prompt-suggestions true`: после хода claude присылает `prompt_suggestion` — вероятную
+  /// следующую реплику пользователя (короткий дополнительный запрос к модели). Нет — флаг не
+  /// передаётся (в режиме -p подсказки выключены).
+  pub prompt_suggestions: bool,
 }
 
 /// Аргументы `claude` после обязательных: `--permission-mode`, `--model`, `--effort`, `--resume`
 /// (с ним — `--resume-session-at`, `--fork-session`). Пустые значения, значения с `-` в начале
-/// и неизвестное усилие пропускаются; неизвестный режим — `acceptEdits`.
+/// и неизвестное усилие пропускаются; неизвестный режим — `acceptEdits`. В конце — `--prompt-suggestions true`,
+/// если подсказки включены.
 pub fn launch_args(l: &Launch) -> Vec<String> {
   let mut a = vec!["--permission-mode".to_string(), permission_mode(l.permission_mode.as_deref()).to_string()];
   if let Some(m) = l.model.as_deref().map(str::trim).filter(|m| !m.is_empty() && !m.starts_with('-')) {
@@ -105,6 +110,9 @@ pub fn launch_args(l: &Launch) -> Vec<String> {
     if l.fork {
       a.push("--fork-session".to_string());
     }
+  }
+  if l.prompt_suggestions {
+    a.extend(["--prompt-suggestions".to_string(), "true".to_string()]);
   }
   a
 }
@@ -428,6 +436,7 @@ pub async fn claude_start(
   permission_mode: Option<String>,
   resume_at: Option<String>,
   fork: Option<bool>,
+  prompt_suggestions: Option<bool>,
   on_line: Channel<String>,
   on_exit: Channel<ClaudeExit>,
 ) -> Result<String, String> {
@@ -435,7 +444,15 @@ pub async fn claude_start(
   manager.start(
     &program,
     Path::new(&cwd),
-    Launch { resume, model, effort, permission_mode, resume_at, fork: fork.unwrap_or(false) },
+    Launch {
+      resume,
+      model,
+      effort,
+      permission_mode,
+      resume_at,
+      fork: fork.unwrap_or(false),
+      prompt_suggestions: prompt_suggestions.unwrap_or(false),
+    },
     move |line| {
       let _ = on_line.send(line);
     },
@@ -631,7 +648,7 @@ mod tests {
     let (_d, p) = script("printf '{\"args\":\"%s\"}\\n' \"$*\"");
     let m = ClaudeManager::default();
     let (ltx, lrx) = mpsc::channel();
-    m.start(&p, Path::new("/"), Launch { resume: Some("abc-123".into()), model: Some("fable".into()), effort: Some("high".into()), permission_mode: Some("default".into()), ..Launch::default() }, move |l| {
+    m.start(&p, Path::new("/"), Launch { resume: Some("abc-123".into()), model: Some("fable".into()), effort: Some("high".into()), permission_mode: Some("default".into()), prompt_suggestions: true, ..Launch::default() }, move |l| {
       let _ = ltx.send(l);
     }, |_, _| {})
     .unwrap();
@@ -639,7 +656,7 @@ mod tests {
     let a = v["args"].as_str().unwrap();
     assert_eq!(
       a,
-      "-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompt-tool stdio --permission-mode default --model fable --effort high --resume abc-123"
+      "-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompt-tool stdio --permission-mode default --model fable --effort high --resume abc-123 --prompt-suggestions true"
     );
   }
 
@@ -675,8 +692,18 @@ mod tests {
     let l = Launch { resume: Some("s-1".into()), resume_at: Some(String::new()), fork: false, ..Launch::default() };
     assert_eq!(launch_args(&l)[2..], ["--resume", "s-1"]);
     // Модель, усилие и режим при перезапуске сохраняются.
-    let l = Launch { resume: Some("s-1".into()), resume_at: Some("u-9".into()), fork: true, model: Some("fable".into()), effort: Some("high".into()), permission_mode: Some("default".into()) };
+    let l = Launch { resume: Some("s-1".into()), resume_at: Some("u-9".into()), fork: true, model: Some("fable".into()), effort: Some("high".into()), permission_mode: Some("default".into()), prompt_suggestions: false };
     assert_eq!(launch_args(&l), ["--permission-mode", "default", "--model", "fable", "--effort", "high", "--resume", "s-1", "--resume-session-at", "u-9", "--fork-session"]);
+  }
+
+  #[test]
+  fn prompt_suggestions_flag_only_when_on() {
+    assert!(!launch_args(&Launch::default()).contains(&"--prompt-suggestions".to_string()));
+    let l = Launch { prompt_suggestions: true, ..Launch::default() };
+    assert_eq!(launch_args(&l), ["--permission-mode", "acceptEdits", "--prompt-suggestions", "true"]);
+    // С продолжением сессии флаг — последним, после --resume и точки перемотки.
+    let l = Launch { resume: Some("s-1".into()), resume_at: Some("u-9".into()), fork: true, prompt_suggestions: true, ..Launch::default() };
+    assert_eq!(launch_args(&l)[2..], ["--resume", "s-1", "--resume-session-at", "u-9", "--fork-session", "--prompt-suggestions", "true"]);
   }
 
   #[test]

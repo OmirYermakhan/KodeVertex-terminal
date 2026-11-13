@@ -48,6 +48,15 @@ describe('SettingsPanel', () => {
     expect(screen.getByText(/^Опасно:/)).toBeTruthy()
   })
 
+  it('Claude: «Подсказывать следующее сообщение» — по умолчанию вкл., подпись про дополнительный запрос', () => {
+    render(<SettingsPanel open onClose={() => {}} />)
+    const box = screen.getByLabelText('Подсказывать следующее сообщение') as HTMLInputElement
+    expect(box.checked).toBe(true)
+    expect(screen.getByText(/короткий дополнительный запрос к модели/)).toBeTruthy()
+    fireEvent.click(box)
+    expect(update).toHaveBeenCalledWith({ claudePromptSuggestions: false })
+  })
+
   it('shows all themes and selects one', () => {
     render(<SettingsPanel open onClose={() => {}} />)
     for (const t of Object.values(THEMES)) expect(screen.getByRole('button', { name: new RegExp(t.name) })).toBeTruthy()
