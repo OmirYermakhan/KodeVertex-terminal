@@ -208,6 +208,10 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .hp-n { color: var(--strong); font-family: var(--font-code); font-size: 13px; }
 .hp-n b { color: var(--accText); font-weight: 700; }
 .hp-d { color: var(--muted); font-family: var(--font-text); font-size: 12.5px; max-width: 52ch; }
+/* Поиск ⌃R по истории: одна колонка — команда целиком. */
+.cp.hs { min-width: min(420px, calc(100% - 24px)); }
+.hp-row.hs-row { grid-template-columns: minmax(0, 1fr); }
+.hs-empty { color: var(--muted); cursor: default; }
 .hp-keys { padding: 6px 14px; border-top: 1px solid var(--rule); font-family: var(--font-code); font-size: 10.5px; line-height: normal; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Выбор модели (`/model`): та же рамка .cp.hp, номера, ✓ текущей (--add), Fable — золотом, строка усилия. */
 .mp .hp-h { padding-bottom: 2px; }

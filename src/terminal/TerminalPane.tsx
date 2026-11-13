@@ -689,6 +689,13 @@ export function TerminalPane(p: TerminalPaneProps) {
     }
     return { blocks, messages }
   }, [])
+  /** Отправленные сообщения Claude панели без значков (старые первыми) — поиск ⌃R в режиме Claude. */
+  const claudeHistory = useCallback((): string[] => {
+    const items = useClaudeSessions.getState().sessions[callbacks.current.paneId]?.state.items ?? []
+    const out: string[] = []
+    for (const it of items) if (it.type === 'user' && !it.tokens?.length && it.text.trim()) out.push(it.text)
+    return out
+  }, [])
 
   const copyItem = useCallback((id: string | null) => {
     const it = id ? itemsRef.current.find((x) => x.id === id) : undefined
@@ -1080,6 +1087,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           onClearFeed={onClearFeed}
           preview={preview.api}
           atFeed={atFeed}
+          claudeHistory={claudeHistory}
         />
       </div>
       {alt && (

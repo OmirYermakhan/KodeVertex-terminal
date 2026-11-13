@@ -1134,3 +1134,66 @@ describe('InputBar: подсказка-призрак', () => {
     expect(ghost(container)).toBeNull()
   })
 })
+
+describe('InputBar: поиск ⌃R по истории', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    invoke.mockResolvedValue([])
+    resetHistory(['make test', 'git status', 'make build', 'git status', 'npm run dev'])
+  })
+  const rows = (c: HTMLElement) => [...c.querySelectorAll('.hs [role="option"]')].map((r) => r.textContent)
+  const sel = (c: HTMLElement) => c.querySelector('.hs [aria-selected="true"]')?.textContent ?? null
+  const ctrlR = (key: (k: string, o?: KeyboardEventInit) => void) => key('r', { ctrlKey: true, code: 'KeyR' })
+
+  it('⌃R открывает «История»: новые первыми, без повторов; набор фильтрует с подсветкой', () => {
+    const { container, set, key } = setup()
+    set('')
+    ctrlR(key)
+    expect(container.querySelector('.hs .hp-h')!.textContent).toBe('История')
+    expect(rows(container)).toEqual(['npm run dev', 'git status', 'make build', 'make test'])
+    expect(sel(container)).toBe('npm run dev')
+    set('mk')
+    expect(rows(container)).toEqual(['make build', 'make test'])
+    expect(container.querySelector('.hs [aria-selected="true"] b')!.textContent).toBe('m')
+  })
+
+  it('⌃R ещё раз и ↓ — следующее совпадение; ↵ выполняет выбранное', () => {
+    const { container, set, key, p } = setup()
+    set('make')
+    ctrlR(key)
+    ctrlR(key)
+    expect(sel(container)).toBe('make test')
+    key('ArrowUp')
+    expect(sel(container)).toBe('make build')
+    key('Enter')
+    expect(p.onRun).toHaveBeenCalledWith('make build')
+    expect(container.querySelector('.hs')).toBeNull()
+  })
+
+  it('⇥ — команда в строку для правки; esc закрывает, набранное остаётся', () => {
+    const { container, set, key, ta, p } = setup()
+    set('git')
+    ctrlR(key)
+    key('Tab')
+    expect(ta.value).toBe('git status')
+    expect(p.onRun).not.toHaveBeenCalled()
+    expect(container.querySelector('.hs')).toBeNull()
+    set('np')
+    ctrlR(key)
+    key('Escape')
+    expect(container.querySelector('.hs')).toBeNull()
+    expect(ta.value).toBe('np')
+  })
+
+  it('в режиме Claude ищет отправленные сообщения панели, ↵ отправляет', () => {
+    const { container, set, key, ref, p } = setup({ claudeHistory: () => ['почему тест падает?', 'объясни diff'] })
+    act(() => void ref.current!.insertTokens([], { claude: true }))
+    set('')
+    ctrlR(key)
+    expect(rows(container)).toEqual(['объясни diff', 'почему тест падает?'])
+    expect(container.querySelector('.hs .hp-keys')!.textContent).toContain('↵ отправить')
+    key('ArrowDown')
+    key('Enter')
+    expect(p.onAsk).toHaveBeenCalledWith('почему тест падает?')
+  })
+})

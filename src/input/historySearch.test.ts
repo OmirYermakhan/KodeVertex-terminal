@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ghostSuggestion, nextWord } from './historySearch'
+import { ghostSuggestion, nextWord, searchHistory } from './historySearch'
 
 describe('ghostSuggestion', () => {
   const list = ['git status', 'git commit -m x', 'ls -la', 'git checkout main']
@@ -25,5 +25,16 @@ describe('nextWord', () => {
   })
   it('путь — по одному каталогу', () => {
     expect(nextWord('src/input/x.ts')).toBe('src/')
+  })
+})
+
+describe('searchHistory', () => {
+  const list = ['make test', 'git status', 'make build', 'git status', 'npm run dev']
+  it('новые первыми, без повторов', () => {
+    expect(searchHistory(list, '')).toEqual(['npm run dev', 'git status', 'make build', 'make test'])
+  })
+  it('нечёткое совпадение', () => {
+    expect(searchHistory(list, 'mkb')).toEqual(['make build'])
+    expect(searchHistory(list, 'gst')).toEqual(['git status'])
   })
 })

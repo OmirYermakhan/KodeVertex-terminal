@@ -13,7 +13,8 @@ import { isClaudeExit, isClearCommand, isModelCommand, isShellClear, parseClaude
 import { ModelPicker } from '../claude/ModelPicker'
 import { initialPicker, pickerKey, type ModelChoice, type PickerState } from '../claude/models'
 import { getHistory, historyStep, loadHistory, NAV_START, pushHistory, type HistoryNav } from './history'
-import { ghostSuggestion, nextWord } from './historySearch'
+import { ghostSuggestion, nextWord, searchHistory } from './historySearch'
+import { HistoryPicker } from './HistoryPicker'
 import { backspace, countTokens, docOf, forwardDelete, insertText, insertTokens, moveCaret, readable, splice, tokenAt, tokenPos, type Edit } from '../attach/doc'
 import { effective, overBudget, pathAttachment, sendBlocked } from '../attach/classify'
 import { attachPaths, pasteClipboardImage, pickFiles, screenshotLabel } from '../attach/api'
@@ -123,6 +124,8 @@ export interface InputBarProps {
   preview?: PreviewApi
   /** Блоки и ответы Claude ленты — группы «Блоки» и «Сообщения» в `@`. */
   atFeed?(): AtFeed
+  /** Отправленные сообщения Claude панели (старые первыми) — поиск ⌃R в режиме Claude. */
+  claudeHistory?(): readonly string[]
 }
 
 export interface InputBarHandle {
@@ -227,6 +230,13 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const [composing, setComposing] = useState(false)
   /** Текст, на котором подсказку-призрак скрыли по esc: до правки строки не показываем. */
   const [ghostHidden, setGhostHidden] = useState<string | null>(null)
+  /** Поиск ⌃R по истории (запрос — набранная строка); null — закрыт. */
+  const [hs, setHsState] = useState<{ selected: number } | null>(null)
+  const hsRef = useRef<{ selected: number } | null>(null)
+  const setHs = useCallback((v: { selected: number } | null) => {
+    hsRef.current = v
+    setHsState(v)
+  }, [])
   const props = useRef(p)
   useEffect(() => {
     props.current = p
@@ -512,10 +522,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   useEffect(() => {
     if (p.disabled && edRef.current && document.activeElement === edRef.current) edRef.current.blur()
     if (p.disabled) {
+      setHs(null)
       props.current.preview?.closeFrom('input')
       setNearTok(false)
     }
-  }, [p.disabled])
+  }, [p.disabled, setHs])
 
   useImperativeHandle(ref, () => ({
     focus: () => {
@@ -643,6 +654,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     const s = document.activeElement === el ? getSelection(el) : null
     const cursor = s?.end ?? v.length
     setCaretEnd(cursor === v.length && (!s || s.start === s.end))
+    // Поиск ⌃R открыт: набранное — его запрос, другие выборки не открываются.
+    if (hsRef.current) return
     const q = props.current
     if (q.answer) return setAt(null)
     if (q.hints && !q.disabled && !q.continuation) hintsRef.current.update(v, cursor)
@@ -666,6 +679,63 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  /** Строки поиска ⌃R по набранному: история оболочки или сообщения Claude панели. */
+  function historyRows(): string[] {
+    const src = claudeRef.current ? (props.current.claudeHistory?.() ?? []) : getHistory()
+    return searchHistory(src, docRef.current.text)
+  }
+
+  function historySearchKey(e: React.KeyboardEvent<HTMLDivElement>): boolean {
+    const q = props.current
+    const ctrlR = e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === 'KeyR'
+    const cur = hsRef.current
+    if (!cur) {
+      if (!ctrlR || q.answer || pickerRef.current) return false
+      completionRef.current.close()
+      hintsRef.current.close()
+      setAt(null)
+      setHs({ selected: 0 })
+      return true
+    }
+    const rows = historyRows()
+    const n = rows.length
+    const i = Math.min(cur.selected, Math.max(0, n - 1))
+    const plain = !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
+    const put = (run: boolean) => {
+      const r = rows[i]
+      setHs(null)
+      if (r === undefined) return
+      nav.current = NAV_START
+      setLine(r, r.length)
+      if (run) submit(r, false)
+    }
+    if (ctrlR || (plain && e.key === 'ArrowDown')) {
+      if (n > 0) setHs({ selected: (i + 1) % n })
+      return true
+    }
+    if (plain && e.key === 'ArrowUp') {
+      if (n > 0) setHs({ selected: (i - 1 + n) % n })
+      return true
+    }
+    if (plain && e.key === 'Enter') {
+      put(true)
+      return true
+    }
+    if (plain && (e.key === 'Tab' || e.key === 'ArrowRight')) {
+      put(false)
+      return true
+    }
+    if (plain && e.key === 'Escape') {
+      setHs(null)
+      return true
+    }
+    if (e.ctrlKey && e.code === 'KeyC' && !e.metaKey) {
+      setHs(null)
+      return false
+    }
+    return false
+  }
+
   /** Набор браузером (буквы, IME): модель — из DOM, поле не перерисовываем. */
   const onInput = () => {
     const el = edRef.current
@@ -680,6 +750,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     setDocState(d)
     // Правка строки — выход из истории: ↑ снова начнёт с последней команды.
     nav.current = NAV_START
+    // Новый запрос поиска ⌃R — выбор снова с самой свежей записи.
+    if (hsRef.current) setHs({ selected: 0 })
     report()
     syncNear()
   }
@@ -709,6 +781,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     if (pk && e.ctrlKey && e.key.toLowerCase() === 'c') {
       e.preventDefault()
       setPickerState(null)
+      return
+    }
+    // Поиск ⌃R: ↑↓ / ⌃R — выбор, ↵ — выполнить, ⇥/→ — в строку для правки, esc — закрыть.
+    if (!ne.isComposing && ne.keyCode !== 229 && historySearchKey(e)) {
+      e.preventDefault()
       return
     }
     // Режим Claude: `@` — выбор с группами (файлы, блоки, сообщения), иначе — подсказки путей.
@@ -987,10 +1064,12 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [open, ctx, buffer, lineStart])
 
   const empty = doc.text === ''
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const hsRows = useMemo(() => (hs ? historyRows() : []), [hs !== null, doc.text, claudeMode])
   // Подсказка-призрак из истории: только оболочка, курсор в конце, без открытых выборок и IME.
   const ghost =
     !claudeMode && focused && caretEnd && !composing && !p.disabled && !p.answer && !p.edit && !p.continuation &&
-    !picker && !(open && pathsOn) && !(hints.state.open && p.hints) && !atShown &&
+    !picker && !hs && !(open && pathsOn) && !(hints.state.open && p.hints) && !atShown &&
     doc.tokens.length === 0 && doc.text !== ghostHidden
       ? ghostSuggestion(getHistory(), doc.text)
       : null
@@ -1028,7 +1107,22 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           onSelect={(i) => setPickerState({ ...picker, selected: i })}
         />
       )}
-      {!picker && hints.state.open && p.hints && !p.disabled && !p.continuation && (
+      {hs && !p.disabled && (
+        <HistoryPicker
+          rows={hsRows}
+          selected={Math.min(hs.selected, Math.max(0, hsRows.length - 1))}
+          query={doc.text}
+          claude={claudeMode}
+          onPick={(i) => {
+            const r = hsRows[i]
+            if (r === undefined) return
+            setHs(null)
+            nav.current = NAV_START
+            setLine(r, r.length)
+          }}
+        />
+      )}
+      {!hs && !picker && hints.state.open && p.hints && !p.disabled && !p.continuation && (
         <HintsPopup state={hints.state} onPick={hints.pick} />
       )}
       {p.continuation && !p.disabled && <div className="in-note">{CONTINUATION_NOTE}</div>}
@@ -1124,6 +1218,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               completionRef.current.close()
               hintsRef.current.close()
               setPickerState(null)
+              setHs(null)
             }}
           />
           {empty && (
