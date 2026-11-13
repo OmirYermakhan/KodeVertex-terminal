@@ -60,9 +60,27 @@ export const AssistantCard = memo(function AssistantCard({
   const [expanded, setExpanded] = useState(false)
   const [lines, setLines] = useState(0)
   // Пока идёт стрим, не меряем и не сворачиваем; после — по высоте отрисованного текста.
+  // Перемеряем при смене ширины (ResizeObserver): окно изменили или вкладку показали — в скрытой
+  // (display:none) высота 0, и ответ, дописанный в фоне, иначе не свернулся бы никогда.
+  // Высота без смены ширины (свёрнутый вид, «Показать всё») замер не трогает — сворачивание не дрожит.
   useLayoutEffect(() => {
     const md = bodyRef.current?.querySelector<HTMLElement>('.md')
-    setLines(!streaming && md ? renderedLines(md) : 0)
+    if (streaming || !md) {
+      setLines(0)
+      return
+    }
+    let width = -1
+    const measure = () => {
+      const w = md.clientWidth
+      if (w === width) return
+      width = w
+      setLines(renderedLines(md))
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(md)
+    return () => ro.disconnect()
   }, [text, streaming])
   const collapsible = !streaming && answerCollapsible(text.length, lines)
   const collapsed = collapsible && !expanded
