@@ -9,9 +9,11 @@ import { CompletionPopup, LIST_WIDTH, PREVIEW_WIDTH, popupHeight } from '../comp
 import { useHints } from '../completion/useHints'
 import { HintsPopup } from '../completion/HintsPopup'
 import { shellEscape } from '../completion/completion'
-import { isClaudeExit, isClearCommand, isModelCommand, isShellClear, parseClaudeCommand } from './claudeCommand'
+import { isClaudeExit, isClearCommand, isModelCommand, isResumeCommand, isShellClear, parseClaudeCommand } from './claudeCommand'
 import { ModelPicker } from '../claude/ModelPicker'
 import { initialPicker, pickerKey, type ModelChoice, type PickerState } from '../claude/models'
+import { ResumePicker } from '../claude/ResumePicker'
+import { initialResume, resumeKey, type ResumeState, type SessionInfo } from '../claude/resume'
 import { getHistory, historyStep, loadHistory, NAV_START, pushHistory, type HistoryNav } from './history'
 import { ghostSuggestion, nextWord, searchHistory } from './historySearch'
 import { HistoryPicker } from './HistoryPicker'
@@ -104,6 +106,13 @@ export interface InputBarProps {
   onChooseModel?(choice: ModelChoice): void
   /** Текущие модель (псевдоним, null — по умолчанию) и усилие панели — для карточки выбора. */
   modelInfo?(): { current: string | null; effort: string | null }
+  /**
+   * `/resume` (в любом режиме): прошлые разговоры каталога панели и id текущего — для карточки
+   * выбора. Нет — `/resume` уходит как набран.
+   */
+  onListSessions?(): Promise<{ rows: SessionInfo[]; current: string | null }>
+  /** Разговор выбран (↵): продолжить его. true — панель в режиме Claude. */
+  onResume?(s: SessionInfo): boolean
   /** «Свой ответ…» на вопрос агента: ↵ отдаёт текст сюда, esc — назад к вопросу. */
   answer?: { onSubmit(text: string): void; onCancel(): void } | null
   /**
@@ -148,7 +157,7 @@ export interface InputBarHandle {
   hasFocus(): boolean
   /** В поле ничего не набрано. */
   isEmpty(): boolean
-  /** Открыта карточка выбора модели (`/model`). */
+  /** Открыта карточка выбора модели (`/model`) или разговора (`/resume`). */
   pickerOpen(): boolean
   /** Строка в режиме Claude (значки вставляются значками, а не путями). */
   claudeMode(): boolean
@@ -179,6 +188,8 @@ export interface InputBarHandle {
   openHistorySearch(): void
   /** ⌘P «/model»: карточка выбора модели, как после `/model` ↵ (набранное в строке остаётся). */
   openModelPicker(): void
+  /** ⌘P «/resume»: карточка выбора разговора, как после `/resume` ↵. */
+  openResumePicker(): void
 }
 
 export interface InputSnapshot {
@@ -225,6 +236,18 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const setPickerState = useCallback((v: PickerState | null) => {
     pickerRef.current = v
     setPicker(v)
+  }, [])
+  /** Открытая карточка выбора разговора (`/resume`); null — закрыта. */
+  const [resume, setResume] = useState<ResumeState | null>(null)
+  const resumeRef = useRef<ResumeState | null>(null)
+  /** id текущего разговора панели (✓ в карточке). */
+  const [resumeCurrent, setResumeCurrent] = useState<string | null>(null)
+  /** Номер открытия карточки: список, пришедший к закрытой или открытой заново, не применяется. */
+  const resumeSeq = useRef(0)
+  const setResumeState = useCallback((v: ResumeState | null) => {
+    if (v === null) resumeSeq.current++
+    resumeRef.current = v
+    setResume(v)
   }, [])
   const nav = useRef<HistoryNav>(NAV_START)
   /** `@…` у курсора в режиме Claude (выбор с группами); null — нет. */
@@ -365,6 +388,39 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   /** Строка принимает значки: режим Claude и не ответ на вопрос агента. */
   const acceptsTokens = () => claudeRef.current && !props.current.answer
 
+  /** Карточка выбора разговора: открыть и прочитать список (пока читается — «Загрузка…»). */
+  const openResume = useCallback(() => {
+    const q = props.current
+    if (!q.onListSessions) return
+    completionRef.current.close()
+    hintsRef.current.close()
+    setAt(null)
+    setPickerState(null)
+    setResumeState(null)
+    const seq = resumeSeq.current
+    setResumeState(initialResume())
+    q.onListSessions().then(
+      ({ rows, current }) => {
+        if (seq !== resumeSeq.current || !resumeRef.current) return
+        setResumeCurrent(current)
+        setResumeState({ ...resumeRef.current, rows })
+      },
+      (e: unknown) => {
+        if (seq !== resumeSeq.current || !resumeRef.current) return
+        setResumeState({ ...resumeRef.current, rows: [], error: `Не удалось прочитать разговоры: ${e instanceof Error ? e.message : String(e)}` })
+      },
+    )
+  }, [setAt, setPickerState, setResumeState])
+
+  /** Разговор выбран: карточка закрывается, панель продолжает его (режим Claude). */
+  const pickSession = useCallback(
+    (s: SessionInfo) => {
+      setResumeState(null)
+      if (props.current.onResume?.(s)) setClaudeMode(true)
+    },
+    [setResumeState, setClaudeMode],
+  )
+
   const submit = useCallback((text: string, ask: boolean) => {
     const q = props.current
     const tokens = docRef.current.tokens
@@ -392,6 +448,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       completionRef.current.close()
       hintsRef.current.close()
       setPickerState(initialPicker(info.current, info.effort))
+    } else if (!q.continuation && isResumeCommand(text) && q.onListSessions) {
+      openResume()
     } else if (!q.continuation && (text.trim() === '/exit' || (claudeRef.current && isClaudeExit(text)))) {
       // Как выход из claude в терминале: сессия закрывается, строка — снова оболочка.
       q.onExitClaude?.()
@@ -435,7 +493,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     setLine('', 0)
     completionRef.current.reset()
     hintsRef.current.reset()
-  }, [setLine, setClaudeMode, setPickerState, showNote, setAt])
+  }, [setLine, setClaudeMode, setPickerState, showNote, setAt, openResume])
 
   /** Значки у курсора (заменяя выделение). */
   const putTokens = useCallback(
@@ -564,7 +622,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     },
     hasFocus,
     isEmpty: () => docRef.current.text === '',
-    pickerOpen: () => pickerRef.current !== null,
+    pickerOpen: () => pickerRef.current !== null || resumeRef.current !== null,
     claudeMode: () => claudeRef.current,
     acceptsTokens: () => acceptsTokens() && !props.current.disabled,
     insertTokens: (toks, opts) => {
@@ -610,7 +668,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     },
     openHistorySearch: () => {
       const q = props.current
-      if (q.disabled || q.answer || q.edit || q.continuation || pickerRef.current) return
+      if (q.disabled || q.answer || q.edit || q.continuation || pickerRef.current || resumeRef.current) return
       completionRef.current.close()
       hintsRef.current.close()
       setAt(null)
@@ -633,7 +691,13 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       const info = q.modelInfo?.() ?? { current: null, effort: null }
       completionRef.current.close()
       hintsRef.current.close()
+      setResumeState(null)
       setPickerState(initialPicker(info.current, info.effort))
+      edRef.current?.focus()
+    },
+    openResumePicker: () => {
+      if (props.current.disabled || !props.current.onListSessions) return
+      openResume()
       edRef.current?.focus()
     },
     load: (d) => {
@@ -758,7 +822,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     const cur = hsRef.current
     if (!cur) {
       // Правка сообщения и продолжение команды (PS2): ↵ из поиска ушёл бы не туда.
-      if (!ctrlR || q.answer || q.edit || q.continuation || pickerRef.current) return false
+      if (!ctrlR || q.answer || q.edit || q.continuation || pickerRef.current || resumeRef.current) return false
       completionRef.current.close()
       hintsRef.current.close()
       setAt(null)
@@ -850,6 +914,21 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     if (pk && e.ctrlKey && e.key.toLowerCase() === 'c') {
       e.preventDefault()
       setPickerState(null)
+      return
+    }
+    // Карточка выбора разговора — так же.
+    const rs = resumeRef.current
+    if (rs && !ne.isComposing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault()
+      const r = resumeKey(rs, e.key)
+      if (r.action?.kind === 'cancel') setResumeState(null)
+      else if (r.action?.kind === 'choose') pickSession(r.action.session)
+      else if (r.handled) setResumeState(r.state)
+      return
+    }
+    if (rs && e.ctrlKey && e.key.toLowerCase() === 'c') {
+      e.preventDefault()
+      setResumeState(null)
       return
     }
     // Поиск ⌃R: ↑↓ / ⌃R — выбор, ↵ — выполнить, ⇥/→ — в строку для правки, esc — закрыть.
@@ -1173,14 +1252,14 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   // Подсказка-призрак из истории: только оболочка, курсор в конце, без открытых выборок и IME.
   const ghost =
     !claudeMode && focused && caretEnd && !composing && !p.disabled && !p.answer && !p.edit && !p.continuation &&
-    !picker && !hs && !(open && pathsOn) && !(hints.state.open && p.hints) && !atShown &&
+    !picker && !resume && !hs && !(open && pathsOn) && !(hints.state.open && p.hints) && !atShown &&
     doc.tokens.length === 0 && doc.text !== ghostHidden
       ? ghostSuggestion(getHistory(), doc.text)
       : null
   // Подсказка следующего сообщения: пустое поле режима Claude, без открытых выборок и IME.
   const suggShown =
     p.suggestion && claudeMode && empty && doc.tokens.length === 0 && !composing && !p.disabled && !p.answer && !p.edit &&
-    !picker && !hs
+    !picker && !resume && !hs
       ? p.suggestion
       : null
   /** Первая буква подсказки (по кодовым точкам, без разрыва суррогатной пары) — под курсором. */
@@ -1219,6 +1298,18 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           onSelect={(i) => setPickerState({ ...picker, selected: i })}
         />
       )}
+      {resume && !p.disabled && (
+        <ResumePicker
+          state={resume}
+          current={resumeCurrent}
+          now={Date.now()}
+          onSelect={(i) => setResumeState({ ...resume, selected: i })}
+          onPick={(i) => {
+            const r = resume.rows?.[i]
+            if (r) pickSession(r)
+          }}
+        />
+      )}
       {hs && !p.disabled && (
         <HistoryPicker
           rows={hsRows}
@@ -1234,7 +1325,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           }}
         />
       )}
-      {!hs && !picker && hints.state.open && p.hints && !p.disabled && !p.continuation && (
+      {!hs && !picker && !resume && hints.state.open && p.hints && !p.disabled && !p.continuation && (
         <HintsPopup state={hints.state} onPick={hints.pick} />
       )}
       {p.continuation && !p.disabled && <div className="in-note">{CONTINUATION_NOTE}</div>}
@@ -1330,6 +1421,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
               completionRef.current.close()
               hintsRef.current.close()
               setPickerState(null)
+              setResumeState(null)
               setHs(null)
             }}
           />

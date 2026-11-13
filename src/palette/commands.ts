@@ -58,6 +58,7 @@ export function paletteCommands(ctx: PaletteContext): PaletteCommand[] {
       : [
           pane('claudeToggle', ctx.claude ? 'Режим Claude: выключить' : 'Режим Claude: включить'),
           pane('chooseModel', 'Выбрать модель Claude', undefined, '/model'),
+          pane('resumeClaude', 'Продолжить разговор Claude', undefined, '/resume'),
         ]
   return [
     app('splitRight', 'Разделить вправо', ['⌘', 'D']),

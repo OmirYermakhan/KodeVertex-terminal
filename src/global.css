@@ -234,6 +234,12 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .mp-ok { color: var(--add); text-align: right; font-family: var(--font-code); }
 .mp-effort { padding: 6px 14px; border-top: 1px solid var(--rule); font-family: var(--font-code); font-size: 12px; color: var(--muted); white-space: nowrap; }
 .mp-effort b { color: var(--strong); font-weight: 500; }
+/* Выбор разговора (`/resume`): рамка и строки выбора модели; заголовок — первое сообщение (шрифт текста). */
+.rp .hp-list { --hp-name: 44ch; }
+.rp-row .hp-n { font-family: var(--font-text); font-size: 13.5px; }
+.rp-row .hp-d { font-family: var(--font-code); font-size: 11.5px; }
+.hp-row.rp-empty { grid-template-columns: minmax(0, 1fr); color: var(--muted); cursor: default; }
+.hp-row.rp-empty.err { color: var(--del); white-space: normal; }
 
 /* ⌘P — палитра команд: та же рамка .cp.hp, по центру вверху окна; клавиши — .kbd макета 04. */
 .pal-back { position: fixed; inset: 0; z-index: 90; }
@@ -376,6 +382,41 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .diff .d { color: var(--del); }
 .diff .n { color: var(--com); }
 .diff-more { display: block; }
+/* План агента (TodoWrite): рамка и подпись как у .act, но сплошная — карточка обновляется на месте.
+   Текущий пункт — --accText, сделанные — приглушены и зачёркнуты. */
+.plan { box-sizing: border-box; border: 1px solid var(--rule); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; max-width: 100ch; font-family: var(--font-code); font-size: calc(var(--size-code) - 0.5px); line-height: normal; color: var(--text); }
+.plan .who { color: var(--info); }
+.plan-list { list-style: none; margin: 0; padding: 0; max-width: 76ch; font-family: var(--font-text); font-size: calc(var(--size-text) - 1.5px); line-height: var(--lh-text); }
+.plan-i { display: flex; gap: 8px; align-items: baseline; }
+.plan-box { flex: none; width: 1.2em; font-family: var(--font-code); color: var(--muted); }
+.plan-t { min-width: 0; overflow-wrap: anywhere; }
+.plan-i.in_progress .plan-box, .plan-i.in_progress .plan-t { color: var(--accText); }
+.plan-i.completed .plan-t { color: var(--muted); text-decoration: line-through; }
+/* Вид изменений файла (Edit/Write/MultiEdit): заголовок «путь +A −D» и кнопки, ниже — .diff макета 02
+   с колонками номеров «было/стало»; строки +/− — тонированный фон --add/--del, код — подсветка hljs. */
+.dv { margin-top: 2px; }
+.dv-h { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 4px; }
+.dv-path { min-width: 0; overflow-wrap: anywhere; }
+.dv-stat { flex: none; }
+.dv-add { color: var(--add); }
+.dv-del { color: var(--del); }
+.dv-btns { display: flex; gap: 6px; margin-left: auto; flex: none; }
+.dv-btn { font: inherit; font-size: 11px; color: var(--accText); background: transparent; border: 1px solid var(--rule); border-radius: 4px; padding: 1px 7px; cursor: pointer; }
+.dv-btn:hover, .dv-btn:focus-visible { border-color: var(--acc); color: var(--strong); outline: none; }
+.diff.dv-body { white-space: normal; padding: 6px 0; overflow-wrap: anywhere; }
+.dv-body .dl { display: flex; padding: 0 10px; color: var(--text); }
+.dv-body .dl.a { color: var(--add); background: color-mix(in srgb, var(--add) 12%, transparent); }
+.dv-body .dl.d { color: var(--del); background: color-mix(in srgb, var(--del) 12%, transparent); }
+.dv-body .dn { flex: none; margin-right: 8px; text-align: right; color: var(--com); user-select: none; font-variant-numeric: tabular-nums; }
+.dv-body .dn + .dn { margin-right: 10px; }
+.dv-body.nonum .dn { display: none; }
+.dv-body .dm { flex: none; width: 1ch; margin-right: 8px; color: var(--com); user-select: none; }
+.dv-body .dl.a .dm, .dv-body .dl.a .dn { color: var(--add); }
+.dv-body .dl.d .dm, .dv-body .dl.d .dn { color: var(--del); }
+.dv-body .dt { flex: 1; min-width: 0; white-space: pre-wrap; font-variant-ligatures: var(--liga); }
+.dv-body .dl.gap { display: block; box-sizing: border-box; width: 100%; margin: 2px 0; padding: 0 10px; border: 0; background: color-mix(in srgb, var(--rule) 45%, transparent); font: inherit; color: var(--com); text-align: left; }
+.dv-body button.dl.gap { cursor: pointer; }
+.dv-body button.dl.gap:hover, .dv-body button.dl.gap:focus-visible { color: var(--accText); outline: none; }
 /* Запрос разрешения: весь ввод инструмента (команда, запись, правка, JSON) — моно, со своей прокруткой,
    фон и скругление как у .diff. Стоит после .diff, чтобы .diff.p-code брал отступы отсюда. */
 .p-code { box-sizing: border-box; margin: 0 16px 6px 14px; max-width: 76ch; max-height: 180px; overflow: auto; padding: 6px 10px; background: var(--bg); border-radius: 6px; font-family: var(--font-code); font-size: 12.5px; line-height: 1.5; color: var(--strong); white-space: pre-wrap; word-break: break-all; }
@@ -388,6 +429,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .q-opts.p-wait .q-row { opacity: 0.55; cursor: default; }
 .sum { box-sizing: border-box; background: var(--sumBg); border: 1px solid var(--sumRule); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; max-width: 100ch; color: var(--text); font-family: var(--font-text); }
 .sum .who { display: flex; justify-content: space-between; gap: 12px; color: var(--accText); }
+.card .turn-meta { margin-top: 6px; font-size: 11px; color: var(--muted); font-family: var(--font-code); }
 .sum .sum-meta { color: var(--muted); text-transform: none; letter-spacing: 0; }
 .sum.err { border-color: var(--del); }
 .sum.err .who > span:first-child { color: var(--del); }

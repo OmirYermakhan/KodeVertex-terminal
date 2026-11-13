@@ -471,6 +471,80 @@ describe('InputBar: /model', () => {
   })
 })
 
+describe('InputBar: /resume', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    invoke.mockResolvedValue([])
+    resetHistory()
+  })
+
+  const rows = [
+    { id: 'a', title: 'Первый', modified: Date.now(), messages: 4, partial: false },
+    { id: 'b', title: 'Второй', modified: Date.now(), messages: 2, partial: false },
+  ]
+  const enterMode = (s: ReturnType<typeof setup>) => {
+    s.set('claude')
+    s.key('Enter')
+  }
+
+  it('`/resume` ↵: карточка с «Загрузка…», затем список; ↓ ↵ — продолжить выбранный', async () => {
+    let done!: (v: { rows: typeof rows; current: string | null }) => void
+    const onListSessions = vi.fn(() => new Promise<{ rows: typeof rows; current: string | null }>((r) => (done = r)))
+    const onResume = vi.fn(() => true)
+    const s = setup({ onListSessions, onResume })
+    enterMode(s)
+    s.set('/resume')
+    s.key('Enter')
+    expect(s.p.onAsk).not.toHaveBeenCalled()
+    expect(s.ta.value).toBe('')
+    expect(s.container.querySelector('.rp .rp-empty')!.textContent).toBe('Загрузка…')
+    expect(s.ref.current!.pickerOpen()).toBe(true)
+    await act(async () => done({ rows, current: 'b' }))
+    expect([...s.container.querySelectorAll('.rp .hp-n')].map((e) => e.textContent)).toEqual(['Первый', 'Второй'])
+    expect(s.container.querySelectorAll('.rp .mp-ok')[1].textContent).toBe('✓')
+    // Набор букв не уходит в строку, пока карточка открыта.
+    s.key('x')
+    s.key('ArrowDown')
+    s.key('Enter')
+    expect(onResume).toHaveBeenCalledWith(rows[1])
+    expect(s.container.querySelector('.rp')).toBeNull()
+    expect(s.container.querySelector('.in-mode')).not.toBeNull()
+  })
+
+  it('esc — отмена; список, пришедший после закрытия, карточку не открывает', async () => {
+    let done!: (v: { rows: typeof rows; current: string | null }) => void
+    const onResume = vi.fn(() => true)
+    const s = setup({ onListSessions: () => new Promise((r) => (done = r)), onResume })
+    s.set('/resume')
+    s.key('Enter', { metaKey: true })
+    expect(s.container.querySelector('.rp')).not.toBeNull()
+    s.key('Escape')
+    expect(s.container.querySelector('.rp')).toBeNull()
+    await act(async () => done({ rows, current: null }))
+    expect(s.container.querySelector('.rp')).toBeNull()
+    expect(onResume).not.toHaveBeenCalled()
+  })
+
+  it('ошибка чтения — строкой в карточке; ↵ ничего не делает', async () => {
+    const onResume = vi.fn(() => true)
+    const s = setup({ onListSessions: () => Promise.reject(new Error('нет доступа')), onResume })
+    enterMode(s)
+    s.set('/resume')
+    await act(async () => s.key('Enter'))
+    expect(s.container.querySelector('.rp-empty.err')!.textContent).toBe('Не удалось прочитать разговоры: нет доступа')
+    s.key('Enter')
+    expect(onResume).not.toHaveBeenCalled()
+  })
+
+  it('без onListSessions `/resume` уходит вопросом', () => {
+    const s = setup()
+    enterMode(s)
+    s.set('/resume')
+    s.key('Enter')
+    expect(s.p.onAsk).toHaveBeenCalledWith('/resume')
+  })
+})
+
 describe('InputBar: свой ответ на вопрос агента', () => {
   beforeEach(() => {
     invoke.mockReset()

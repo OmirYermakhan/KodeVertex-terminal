@@ -3,6 +3,7 @@
 import { actionTitle, modelLabel, nowLabel } from './labels'
 import { parsePermissionRequest, type Question } from './questions'
 import type { Attachment } from '../attach/types'
+import { ORIGINAL_MAX, parseHunks, type FileDiff } from './diff'
 
 export { actionTitle, modelLabel, nowLabel }
 
@@ -12,7 +13,7 @@ export type FeedClaudeItem =
    * порядку (хранятся как есть, не разбираются из текста: правка сообщения вернёт их в строку).
    */
   | { type: 'user'; text: string; tokens?: Attachment[] }
-  | { type: 'assistant'; agentId: string; text: string; streaming: boolean }
+  | { type: 'assistant'; agentId: string; text: string; streaming: boolean; turn?: { durationMs: number; costUsd?: number } }
   | {
       type: 'action'
       agentId: string
@@ -20,12 +21,18 @@ export type FeedClaudeItem =
       tool: string
       title: string
       detail: string
-      diff?: { before: string; after: string; path: string }
+      diff?: FileDiff
       status: 'running' | 'done' | 'error'
       result?: string
     }
-  | { type: 'summary'; text: string; durationMs: number; costUsd: number; isError: boolean }
+  /** costUsd нет — стоимость хода неизвестна (см. ClaudeState.costUnknown). */
+  | { type: 'summary'; text: string; durationMs: number; costUsd?: number; isError: boolean }
   | { type: 'error'; text: string }
+  /**
+   * План агента (TodoWrite): одна карточка на агента, каждый следующий TodoWrite обновляет её
+   * на месте, а не добавляет новую.
+   */
+  | { type: 'todo'; agentId: string; toolUseId: string; todos: Todo[]; /** Ушла из ленты (⌃L, /clear): больше не обновляется — следующий TodoWrite добавит новую. */ frozen?: boolean }
   /** Тихая моноширинная строка ленты (например, «Модель: Fable 5.2 · усилие high»). */
   | { type: 'note'; text: string }
   /** Вопрос агента с вариантами (AskUserQuestion): ответы по шагам, всё отвечено — done. */
@@ -65,6 +72,49 @@ export type FeedClaudeItem =
   | { type: 'replaced'; items: FeedClaudeItem[]; count: number }
   /** Место элемента, ушедшего в «Прежний вариант» (индексы элементов не сдвигаются). */
   | { type: 'gone' }
+
+export type TodoStatus = 'pending' | 'in_progress' | 'completed'
+export interface Todo {
+  content: string
+  status: TodoStatus
+  /** Форма «в процессе» («Пишу тесты»), если агент её дал. */
+  activeForm?: string
+}
+
+const TODO_STATUS = new Set<string>(['pending', 'in_progress', 'completed'])
+
+/** Пункты TodoWrite: без текста — пропускаем, неизвестный статус — «не начат». */
+function parseTodos(v: unknown[]): Todo[] {
+  const out: Todo[] = []
+  for (const t of v) {
+    if (!isRec(t)) continue
+    const content = strOr(t.content).trim()
+    if (!content) continue
+    const status = (TODO_STATUS.has(strOr(t.status)) ? t.status : 'pending') as TodoStatus
+    const active = strOr(t.activeForm).trim()
+    out.push(active ? { content, status, activeForm: active } : { content, status })
+  }
+  return out
+}
+
+/** План агента в ленте: есть карточка — обновить на месте, нет — добавить в конец. */
+function upsertTodo(s: ClaudeState, aid: string, toolUseId: string, todos: Todo[]): ClaudeState {
+  const idx = s.items.findIndex((it) => it.type === 'todo' && it.agentId === aid && !it.frozen)
+  const item: FeedClaudeItem = { type: 'todo', agentId: aid, toolUseId, todos }
+  if (idx < 0) return { ...s, items: [...s.items, item] }
+  const items = s.items.slice()
+  items[idx] = item
+  return { ...s, items }
+}
+
+/**
+ * Лента очищена (⌃L, /clear): карточки плана с индексом < from не видны — их больше не обновляем,
+ * следующий TodoWrite покажет план новой карточкой внизу.
+ */
+export function freezeTodos(s: ClaudeState, from: number): ClaudeState {
+  if (!s.items.some((it, i) => i < from && it.type === 'todo' && !it.frozen)) return s
+  return { ...s, items: s.items.map((it, i) => (i < from && it.type === 'todo' && !it.frozen ? { ...it, frozen: true } : it)) }
+}
 
 export type PermissionDecision = 'allow' | 'always' | 'deny'
 
@@ -110,7 +160,30 @@ export interface ClaudeState {
   defaultModel: string | null
   contextUsed: number
   contextMax: number
+  /** Стоимость сессии целиком: costBase (завершённые процессы) + costProc (нарастающий итог текущего). */
   costUsd: number
+  /**
+   * База итога: costUsd = costBase + costProc. Растёт, когда начинается новая сессия без
+   * `--resume` (её `total_cost_usd` идёт с нуля, набранное в панели остаётся) или итог процесса
+   * вдруг уменьшился (процесс начал счёт с нуля).
+   */
+  costBase?: number
+  /**
+   * Нарастающий итог сессии по CLI (`total_cost_usd` последнего result). Процесс с `--resume`
+   * (⌘↵ после выхода, перезапуск приложения, правка с `--fork-session`) продолжает его — CLI
+   * восстанавливает итог из записей `cost-state` файла разговора (проверено на настоящем CLI).
+   */
+  costProc?: number
+  /**
+   * Последний известный нарастающий итог по id сессии (линия правок): ответвление правкой
+   * продолжает итог той сессии, от которой ответвляется, а не текущей.
+   */
+  costOf?: Record<string, number>
+  /**
+   * Итог сессии до этого процесса неизвестен (`/resume` разговора без записи стоимости): первый
+   * result только задаёт costProc, а время хода показывается без цены.
+   */
+  costUnknown?: boolean
   busy: boolean
   /** Отправленные и ещё не завершённые ходы (сообщения в очереди claude); busy = pending > 0. */
   pending: number
@@ -200,6 +273,23 @@ export function initialClaude(): ClaudeState {
   }
 }
 
+/**
+ * Запуск нового процесса `claude`. resume — id сессии из `--resume` (null — новая сессия).
+ * Новая сессия: её `total_cost_usd` начнётся с нуля, набранное в панели уходит в базу.
+ * Продолжение: CLI продолжает нарастающий итог этой сессии (у ответвления — итог сессии, от которой
+ * оно ответвилось, вместе с её отброшенной частью), так что costProc — последний известный итог
+ * этой сессии. Неизвестен (сохранён старой версией) — текущий costProc.
+ * Слепое пятно: процесс с `--resume`, который всё же начал счёт с нуля (CLI без `cost-state`),
+ * и чей первый ход дороже прежнего итога, читается как продолжение — недосчёт на прежний итог.
+ * Начавший с нуля и первым ходом дешевле — правило «итог уменьшился» в onResult.
+ */
+export function newProcess(s: ClaudeState, resume: string | null = null): ClaudeState {
+  if (resume === null) return { ...s, costBase: s.costUsd, costProc: 0, costUnknown: false }
+  const known = s.costOf?.[resume]
+  if (known === undefined || known === (s.costProc ?? 0)) return s
+  return { ...s, costBase: s.costUsd - known, costProc: known }
+}
+
 /** Новая сессия (другой каталог, --resume не удался): прежние сообщения больше не правятся. */
 export function newSession(s: ClaudeState): ClaudeState {
   return { ...s, sessionId: null, chain: null, epoch: s.epoch + 1, suggestion: null }
@@ -214,6 +304,7 @@ export function clearSession(s: ClaudeState): ClaudeState {
   const items = s.items.map((it): FeedClaudeItem => {
     if (it.type === 'assistant' && it.streaming) return { ...it, streaming: false }
     if (it.type === 'action' && it.status === 'running') return { ...it, status: 'error' }
+    if (it.type === 'todo' && !it.frozen) return { ...it, frozen: true }
     return it
   })
   return {
@@ -223,6 +314,10 @@ export function clearSession(s: ClaudeState): ClaudeState {
     currentAgentId: null,
     contextUsed: 0,
     costUsd: 0,
+    costBase: 0,
+    costProc: 0,
+    costOf: {},
+    costUnknown: false,
     agents: fresh.agents,
     edits: {},
   }
@@ -306,19 +401,38 @@ function onDelta(s: ClaudeState, aid: string, text: string, now: number): Claude
   return next
 }
 
-function diffOf(tool: string, i: Rec): { before: string; after: string; path: string } | undefined {
+function diffOf(tool: string, i: Rec): FileDiff | undefined {
   const path = strOr(i.file_path)
   if (tool === 'Edit') return { before: strOr(i.old_string), after: strOr(i.new_string), path }
   if (tool === 'Write') return { before: '', after: strOr(i.content), path }
   if (tool === 'MultiEdit' && Array.isArray(i.edits)) {
-    const edits = i.edits.filter(isRec)
+    const parts = i.edits.filter(isRec).map((e) => ({ before: strOr(e.old_string), after: strOr(e.new_string) }))
     return {
-      before: edits.map((e) => strOr(e.old_string)).join('\n'),
-      after: edits.map((e) => strOr(e.new_string)).join('\n'),
+      before: parts.map((e) => e.before).join('\n'),
+      after: parts.map((e) => e.after).join('\n'),
       path,
+      ...(parts.length > 1 ? { parts } : {}),
     }
   }
   return undefined
+}
+
+/**
+ * Результат правки файла (`tool_use_result` события user): structuredPatch — куски с настоящими
+ * номерами строк, originalFile — файл до правки (храним, только если небольшой), type create — новый файл.
+ */
+function withPatch(diff: FileDiff, r: unknown, single: boolean): FileDiff {
+  if (!isRec(r)) return diff
+  // tool_use_result — одно на событие: при нескольких tool_result в событии сверяем путь
+  // (в одиночном — нет: /tmp и /private/tmp — один файл).
+  const file = strOr(r.filePath)
+  if (!single && file !== diff.path) return diff
+  if (r.type === 'create') return { ...diff, created: true, ...(typeof r.content === 'string' ? { after: r.content } : {}) }
+  const hunks = parseHunks(r.structuredPatch)
+  if (!hunks || hunks.length === 0) return diff
+  const original = typeof r.originalFile === 'string' && r.originalFile.length <= ORIGINAL_MAX ? r.originalFile : undefined
+  const { parts: _parts, ...rest } = diff
+  return { ...rest, hunks, ...(original !== undefined ? { original } : {}) }
 }
 
 function onToolUse(s: ClaudeState, aid: string, block: Rec, now: number): ClaudeState {
@@ -329,7 +443,9 @@ function onToolUse(s: ClaudeState, aid: string, block: Rec, now: number): Claude
   const label = nowLabel(tool, input)
   let next = s
 
-  if (!next.items.some((it) => it.type === 'action' && it.toolUseId === id)) {
+  if (tool === 'TodoWrite' && Array.isArray(input.todos)) {
+    next = upsertTodo(next, aid, id, parseTodos(input.todos))
+  } else if (!next.items.some((it) => it.type === 'action' && it.toolUseId === id)) {
     const { title, detail } = actionTitle(tool, input)
     const diff = diffOf(tool, input)
     next = {
@@ -407,6 +523,7 @@ function onUser(s: ClaudeState, ev: Rec, now: number): ClaudeState {
   const msg = ev.message
   if (!isRec(msg) || !Array.isArray(msg.content)) return s
   let next = s
+  const single = msg.content.filter((b) => isRec(b) && b.type === 'tool_result').length === 1
   for (const b of msg.content) {
     if (!isRec(b) || b.type !== 'tool_result') continue
     const id = strOr(b.tool_use_id)
@@ -420,8 +537,11 @@ function onUser(s: ClaudeState, ev: Rec, now: number): ClaudeState {
       items: next.items.map((it) => {
         if (it.type === 'action' && it.toolUseId === id) {
           actionAgent = it.agentId
-          return { ...it, status, result } as FeedClaudeItem
+          const diff = it.diff && !isError ? withPatch(it.diff, ev.tool_use_result ?? ev.toolUseResult, single) : it.diff
+          return { ...it, status, result, ...(diff ? { diff } : {}) } as FeedClaudeItem
         }
+        // План (TodoWrite) — своя карточка, не действие: ответ тоже возвращает агента из «ждёт».
+        if (it.type === 'todo' && it.toolUseId === id) actionAgent = it.agentId
         return it
       }),
     }
@@ -453,7 +573,17 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
   // Ход закончен — его вопросы и запросы разрешений больше не ждут ответа.
   const s = cancelPrompts(prev)
   const isError = ev.is_error === true
-  const cost = typeof ev.total_cost_usd === 'number' ? ev.total_cost_usd : s.costUsd
+  const prevProc = s.costProc ?? 0
+  const procTotal = typeof ev.total_cost_usd === 'number' && ev.total_cost_usd >= 0 ? ev.total_cost_usd : prevProc
+  // Ход стоит разницу нарастающих итогов процесса; итог сессии — с учётом прежних процессов.
+  // Итог процесса не растёт, а стал меньше — это уже другой процесс: прежний итог уходит в базу.
+  // Итог до процесса неизвестен — этот result его и задаёт, цена хода неизвестна.
+  const unknown = s.costUnknown === true
+  const reset = !unknown && procTotal < prevProc
+  const costBase = unknown ? 0 : (s.costBase ?? 0) + (reset ? prevProc : 0)
+  const turnCost = unknown ? undefined : reset ? procTotal : procTotal - prevProc
+  const cost = costBase + procTotal
+  const sessionId = strOr(ev.session_id) || s.sessionId
   let contextMax = s.contextMax
   if (isRec(ev.modelUsage)) {
     const windows = Object.values(ev.modelUsage)
@@ -465,7 +595,23 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
     it.type === 'assistant' && it.streaming ? { ...it, streaming: false } : it,
   )
   const result = strOr(ev.result)
-  items.push({ type: 'summary', text: repeatsAnswer(items, result) ? '' : result, durationMs: num(ev.duration_ms), costUsd: cost, isError })
+  const durationMs = num(ev.duration_ms)
+  const price = turnCost === undefined ? {} : { costUsd: turnCost }
+  items.push({ type: 'summary', text: repeatsAnswer(items, result) ? '' : result, durationMs, ...price, isError })
+  // Время и цена хода — в подвале последнего ответа главного агента этого хода.
+  // Граница хода — итог предыдущего или сообщение «Вы», с которого ход начался (pending-е с конца:
+  // более поздние — следующие ходы в очереди claude). Так подвал не попадает на ответ из истории
+  // `/resume` (в ней нет итогов) или прерванного хода без result.
+  let users = 0
+  for (let i = items.length - 2; i >= 0; i--) {
+    const it = items[i]
+    if (it.type === 'summary') break
+    if (it.type === 'user' && ++users >= Math.max(1, s.pending)) break
+    if (it.type === 'assistant' && it.agentId === MAIN) {
+      items[i] = { ...it, turn: { durationMs, ...price } }
+      break
+    }
+  }
   // Ход закончен: его незавершённые действия и субагенты больше не идут.
   const closed: FeedClaudeItem[] = items.map((it) =>
     it.type === 'action' && it.status === 'running' ? { ...it, status: isError ? 'error' : 'done' } : it,
@@ -477,11 +623,15 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
     pending,
     busy: pending > 0,
     costUsd: cost,
+    costBase,
+    costProc: procTotal,
+    costUnknown: false,
+    ...(sessionId ? { costOf: { ...s.costOf, [sessionId]: procTotal } } : {}),
     contextMax,
     // Подсказка прежнего хода устарела; новая придёт после этого result.
     suggestion: null,
     turnEndAt: now,
-    sessionId: strOr(ev.session_id) || s.sessionId,
+    sessionId,
     currentAgentId: pending > 0 ? MAIN : null,
     agents: s.agents.map((a) =>
       a.id !== MAIN && (a.status === 'running' || a.status === 'waiting')
@@ -682,7 +832,9 @@ export function replaceFrom(s: ClaudeState, index: number): ClaudeState {
   const items = s.items.slice(0, index)
   items.push({ type: 'replaced', items: old, count })
   for (let i = index + 1; i < s.items.length; i++) items.push({ type: 'gone' })
-  return { ...s, items }
+  // План, начатый до правленого сообщения, мог обновляться после него (отброшенная ветка):
+  // больше не обновляется — план ответвления начнёт новую карточку.
+  return freezeTodos({ ...s, items }, index)
 }
 
 export function reduceClaude(s: ClaudeState, line: string | object, now: number): ClaudeState {

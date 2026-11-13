@@ -2,9 +2,10 @@
 // чтобы его читали лента панели, панель агентов и статус-бар.
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { create } from 'zustand'
-import { canEdit, cancelPrompts, clearSession, dropSuggestion, decidePermission, finishQuestion, gotoStep, initialClaude, newSession, questionSteps, recordAnswer, reduceClaude, replaceFrom, userSent, type ClaudeState } from './reducer'
+import { canEdit, cancelPrompts, freezeTodos, clearSession, dropSuggestion, decidePermission, finishQuestion, gotoStep, initialClaude, newProcess, newSession, questionSteps, recordAnswer, reduceClaude, replaceFrom, userSent, type ClaudeState } from './reducer'
 import { allowResponse, alwaysResponse, answerResponse, denyResponse, parsePermissionRequest } from './questions'
 import type { FeedClaudeItem, PermissionDecision } from './reducer'
+import { historyItems, type SessionHistory, type SessionInfo } from './resume'
 import { GET_SETTINGS, effortRequest, modelNote, persistedModel, setModelRequest, type ModelChoice } from './models'
 import { docOf } from '../attach/doc'
 import { serialize } from '../attach/serialize'
@@ -188,7 +189,7 @@ function start(paneId: string): Proc {
   const permissionMode = (prev.rewindAt ? prev.permissionMode : null) ?? useSettings.getState().settings.claudePermissionMode
   // Подсказка следующего сообщения (`--prompt-suggestions`): из настроек на момент запуска.
   const promptSuggestions = useSettings.getState().settings.claudePromptSuggestions
-  patch(paneId, (p) => ({ ...p, permissionMode, rewindAt: null }))
+  patch(paneId, (p) => ({ ...p, permissionMode, rewindAt: null, state: newProcess(p.state, resume) }))
   let gotLine = false
   const onLine = new Channel<string>((line) => {
     gotLine = true
@@ -253,6 +254,12 @@ function start(paneId: string): Proc {
     })
   procs.set(paneId, proc)
   return proc
+}
+
+/** ⌃L: Claude-элементы до from ушли из ленты — их планы больше не обновляются на месте. */
+export function feedCleared(paneId: string, from: number): void {
+  if (!(paneId in useClaudeSessions.getState().sessions)) return
+  patchState(paneId, (s) => freezeTodos(s, from))
 }
 
 /** Подсказку следующего сообщения убрали (набор, esc, вставка): до следующего хода её нет. */
@@ -464,6 +471,71 @@ export function enterClaude(paneId: string, paneCwd: string | undefined): boolea
 export function clearClaude(paneId: string): void {
   dropProc(paneId)
   patch(paneId, (p) => ({ ...p, procId: null, queue: [], paused: false, pauseHint: false, rewindAt: null, restored: false, state: clearSession(p.state) }))
+}
+
+/** `/resume`: прошлые разговоры каталога панели (новые первыми) и id текущего разговора панели. */
+export async function listSessions(paneId: string, paneCwd: string | undefined): Promise<{ rows: SessionInfo[]; current: string | null }> {
+  const cwd = paneCwd ?? get(paneId).cwd
+  if (cwd === null) throw new Error(NO_CWD)
+  const rows = await invoke<SessionInfo[]>('claude_sessions', { cwd })
+  return { rows, current: get(paneId).state.sessionId }
+}
+
+/** Номер последнего `/resume` панели: история, дочитанная к более раннему, не применяется. */
+const resumeSeqs = new Map<string, number>()
+
+/**
+ * `/resume` ↵: сначала читается история разговора; не прочиталась — текущий разговор остаётся,
+ * в ленте карточка ошибки. Прочиталась — прежний процесс останавливается (как `/clear`),
+ * onReplace(n) прячет в ленте элементы до n, история ложится карточками, процесс запускается
+ * заново с `--resume <id>`. Два `/resume` подряд — применяется последний. Модель, усилие из
+ * `/model` и очередь сообщений остаются (очередь уходит в продолженный разговор). false — каталог неизвестен или чтение не удалось / устарело.
+ */
+export async function resumeClaude(
+  paneId: string,
+  paneCwd: string | undefined,
+  s: SessionInfo,
+  onReplace?: (from: number) => void,
+): Promise<boolean> {
+  const seq = (resumeSeqs.get(paneId) ?? 0) + 1
+  resumeSeqs.set(paneId, seq)
+  const cwd = paneCwd ?? get(paneId).cwd
+  if (cwd === null) {
+    patchState(paneId, (x) => failed(x, NO_CWD, Date.now()))
+    return false
+  }
+  let history: SessionHistory
+  try {
+    history = await invoke<SessionHistory>('claude_session_history', { cwd, id: s.id })
+  } catch (e) {
+    if (resumeSeqs.get(paneId) === seq) addError(paneId, `Не удалось прочитать разговор: ${errText(e)}`)
+    return false
+  }
+  if (resumeSeqs.get(paneId) !== seq) return false
+  switchCwd(paneId, cwd)
+  onReplace?.(get(paneId).state.items.length)
+  // Очередь не теряется: она уходит в продолженный разговор (в его каталог), как обычно — по одному за ход.
+  const queue = get(paneId).queue.map((m) => ({ ...m, cwd }))
+  clearClaude(paneId)
+  // Итог разговора по CLI (`cost-state`): с него процесс `--resume` продолжит `total_cost_usd`.
+  // Неизвестен — первый ход покажет время без цены, итог задаст его result.
+  const cost = typeof history.cost === 'number' && Number.isFinite(history.cost) && history.cost >= 0 ? history.cost : null
+  patchState(paneId, (x) => ({
+    ...x,
+    sessionId: s.id,
+    items: [...x.items, { type: 'session', cwd }, ...historyItems(s.title, history)],
+    costUsd: cost ?? 0,
+    costBase: 0,
+    costProc: cost ?? 0,
+    costOf: cost === null ? {} : { [s.id]: cost },
+    costUnknown: cost === null,
+  }))
+  start(paneId)
+  if (queue.length > 0) {
+    patch(paneId, (p) => ({ ...p, queue }))
+    sendNextQueued(paneId, cwd)
+  }
+  return true
 }
 
 /** `/exit`: закрыть Claude панели (процесс остановлен, сессия забыта); лента не трогается. */
