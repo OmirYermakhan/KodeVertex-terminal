@@ -1,5 +1,6 @@
 mod attach;
 mod claude;
+mod claude_sessions;
 mod claude_settings;
 mod diag;
 mod fonts;
@@ -81,6 +82,8 @@ pub fn run() {
       claude::claude_control,
       claude::claude_respond,
       claude_settings::claude_save_defaults,
+      claude_sessions::claude_sessions,
+      claude_sessions::claude_session_history,
       attach::attach_inspect,
       attach::attach_clipboard_image,
       preview::preview_text,

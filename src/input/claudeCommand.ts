@@ -94,6 +94,11 @@ export function isModelCommand(text: string): boolean {
   return text.trim() === '/model'
 }
 
+/** `/resume` (режим Claude или ⌘↵): карточка выбора прошлого разговора вместо вопроса. */
+export function isResumeCommand(text: string): boolean {
+  return text.trim() === '/resume'
+}
+
 /** `/clear` (в любом режиме: в оболочке это не команда): новая сессия Claude и чистая лента. */
 export function isClearCommand(text: string): boolean {
   return text.trim() === '/clear'

@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
 }))
 
-const { dismissSuggestion, claudeOpen, clearClaude, exitClaude, editClaude, recallQueued, removeQueued, sendQueued, dismissQueueHint, answerPermission, answerQuestion, interruptClaude, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
+const { dismissSuggestion, claudeOpen, clearClaude, exitClaude, listSessions, resumeClaude, editClaude, recallQueued, removeQueued, sendQueued, dismissQueueHint, answerPermission, answerQuestion, interruptClaude, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
 
 const { useSettings } = await import('../settings/store')
 
@@ -689,5 +689,59 @@ describe('exitClaude (/exit)', () => {
   it('без сессии — ничего', () => {
     exitClaude('p')
     expect(useClaudeSessions.getState().sessions.p).toBeUndefined()
+  })
+})
+
+describe('resumeClaude (/resume)', () => {
+  const session = { id: 'sess-1', title: 'Старый разговор', modified: 0, messages: 2, partial: false }
+  const history = { skipped: 0, messages: [{ role: 'user', text: 'вопрос' }, { role: 'assistant', text: 'ответ' }] }
+  beforeEach(() => {
+    stopClaude('p')
+    invoke.mockReset()
+    invoke.mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === 'claude_start' ? 'proc-1' : cmd === 'claude_session_history' ? history : cmd === 'claude_sessions' ? [session] : undefined),
+    )
+  })
+
+  it('список — для каталога панели, с id текущего разговора; каталог неизвестен — ошибка', async () => {
+    await expect(listSessions('p', '/w')).resolves.toEqual({ rows: [session], current: null })
+    expect(calls('claude_sessions')[0][1]).toEqual({ cwd: '/w' })
+    await expect(listSessions('p', undefined)).rejects.toThrow(NO_CWD)
+  })
+
+  it('останавливает прежний процесс, кладёт историю карточками и запускает claude с --resume', async () => {
+    enterClaude('p', '/w')
+    await askClaude('p', '/w', 'текущий')
+    const before = items('p').length
+    expect(await resumeClaude('p', '/w', session)).toBe(true)
+    expect(calls('claude_stop')).toEqual([['claude_stop', { id: 'proc-1' }]])
+    expect(calls('claude_session_history')[0][1]).toEqual({ cwd: '/w', id: 'sess-1' })
+    expect(items('p').slice(before)).toEqual([
+      { type: 'session', cwd: '/w' },
+      { type: 'note', text: 'Разговор продолжен · Старый разговор' },
+      { type: 'user', text: 'вопрос' },
+      { type: 'assistant', agentId: 'main', text: 'ответ', streaming: false },
+    ])
+    await flush()
+    expect(calls('claude_start')).toHaveLength(2)
+    expect(calls('claude_start')[1][1]).toMatchObject({ cwd: '/w', resume: 'sess-1' })
+    expect(useClaudeSessions.getState().sessions.p.state.busy).toBe(false)
+    // Следующий вопрос — в тот же процесс, без нового запуска и строки новой сессии.
+    const n = items('p').length
+    await askClaude('p', '/w', 'дальше')
+    expect(calls('claude_start')).toHaveLength(2)
+    expect(items('p').slice(n)).toEqual([{ type: 'user', text: 'дальше' }])
+  })
+
+  it('историю не прочитать — карточка ошибки, процесс не запускается', async () => {
+    invoke.mockImplementation((cmd: string) => (cmd === 'claude_session_history' ? Promise.reject(new Error('разговор не найден')) : Promise.resolve(undefined)))
+    await resumeClaude('p', '/w', session)
+    expect(items('p').at(-1)).toEqual({ type: 'error', text: 'Не удалось прочитать разговор: разговор не найден' })
+    expect(calls('claude_start')).toHaveLength(0)
+  })
+
+  it('каталог неизвестен — false и карточка ошибки', async () => {
+    expect(await resumeClaude('p', undefined, session)).toBe(false)
+    expect(items('p').at(-1)).toMatchObject({ type: 'error', text: NO_CWD })
   })
 })

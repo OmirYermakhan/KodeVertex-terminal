@@ -5,6 +5,7 @@ import { create } from 'zustand'
 import { canEdit, cancelPrompts, clearSession, dropSuggestion, decidePermission, finishQuestion, gotoStep, initialClaude, newSession, questionSteps, recordAnswer, reduceClaude, replaceFrom, userSent, type ClaudeState } from './reducer'
 import { allowResponse, alwaysResponse, answerResponse, denyResponse, parsePermissionRequest } from './questions'
 import type { FeedClaudeItem, PermissionDecision } from './reducer'
+import { historyItems, type SessionHistory, type SessionInfo } from './resume'
 import { GET_SETTINGS, effortRequest, modelNote, persistedModel, setModelRequest, type ModelChoice } from './models'
 import { docOf } from '../attach/doc'
 import { serialize } from '../attach/serialize'
@@ -464,6 +465,44 @@ export function enterClaude(paneId: string, paneCwd: string | undefined): boolea
 export function clearClaude(paneId: string): void {
   dropProc(paneId)
   patch(paneId, (p) => ({ ...p, procId: null, queue: [], paused: false, pauseHint: false, rewindAt: null, restored: false, state: clearSession(p.state) }))
+}
+
+/** `/resume`: прошлые разговоры каталога панели (новые первыми) и id текущего разговора панели. */
+export async function listSessions(paneId: string, paneCwd: string | undefined): Promise<{ rows: SessionInfo[]; current: string | null }> {
+  const cwd = paneCwd ?? get(paneId).cwd
+  if (cwd === null) throw new Error(NO_CWD)
+  const rows = await invoke<SessionInfo[]>('claude_sessions', { cwd })
+  return { rows, current: get(paneId).state.sessionId }
+}
+
+/**
+ * `/resume` ↵: прежний процесс останавливается (как `/clear`), его история читается из файла
+ * разговора и ложится в ленту карточками, процесс запускается заново с `--resume <id>`.
+ * Модель и усилие из `/model` остаются. false — каталог неизвестен.
+ */
+export async function resumeClaude(paneId: string, paneCwd: string | undefined, s: SessionInfo): Promise<boolean> {
+  const cwd = switchCwd(paneId, paneCwd)
+  if (cwd === null) {
+    patchState(paneId, (x) => failed(x, NO_CWD, Date.now()))
+    return false
+  }
+  clearClaude(paneId)
+  let history: SessionHistory
+  try {
+    history = await invoke<SessionHistory>('claude_session_history', { cwd, id: s.id })
+  } catch (e) {
+    addError(paneId, `Не удалось прочитать разговор: ${errText(e)}`)
+    return true
+  }
+  // Пока читали, могли начать другое (новый вопрос, ещё один /resume): не перебиваем.
+  if (procs.has(paneId) || get(paneId).state.sessionId !== null || get(paneId).cwd !== cwd) return true
+  patchState(paneId, (x) => ({
+    ...x,
+    sessionId: s.id,
+    items: [...x.items, { type: 'session', cwd }, ...historyItems(s.title, history)],
+  }))
+  start(paneId)
+  return true
 }
 
 /** `/exit`: закрыть Claude панели (процесс остановлен, сессия забыта); лента не трогается. */
