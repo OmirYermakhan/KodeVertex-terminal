@@ -258,9 +258,9 @@ describe('карточки просмотра (галерея В)', () => {
     expect(lines[0]).toBe(' themes/           3')
     expect(lines[1]).toBe(' cart.css          4 KB')
     expect(lines.at(-1)).toBe('  … ещё 2')
-    expect(container.querySelectorAll('pre .ico.dir')).toHaveLength(1)
-    expect(container.querySelectorAll('pre .ico.code')).toHaveLength(3)
-    expect(container.querySelectorAll('pre .ico.pdf')).toHaveLength(1)
+    expect(container.querySelectorAll('pre .fi-dir')).toHaveLength(1)
+    expect(container.querySelectorAll('pre .fi-web')).toHaveLength(3)
+    expect(container.querySelectorAll('pre .fi-doc')).toHaveLength(1)
     expect(q(container, '.ft')).toBe('Claude получит путь↵ в Finder')
   })
   it('pdf: страница картинкой, «стр. 1 из 6», вес, ← → при нескольких страницах', () => {
