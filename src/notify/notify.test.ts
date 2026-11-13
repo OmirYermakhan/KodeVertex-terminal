@@ -3,6 +3,8 @@ import type { Agent } from '../claude/reducer'
 
 const perm = { granted: true }
 const sendNotification = vi.fn()
+const setBadgeCount = vi.fn(() => Promise.resolve())
+vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ setBadgeCount }) }))
 vi.mock('@tauri-apps/plugin-notification', () => ({
   isPermissionGranted: async () => perm.granted,
   requestPermission: async () => (perm.granted ? 'granted' : 'denied'),
@@ -12,7 +14,7 @@ import { useTabs } from '../layout/tabsStore'
 import { useUi } from '../ui/uiStore'
 import {
   agentEvents, agentText, audioContext, emit, handleWindowFocus, lastQuestion, commandText, needsSystemNotice, openToast, shouldNotifyAgent, shouldNotifyCommand,
-  soundFor, TOAST_MS, useToasts, waitingCount,
+  soundFor, TOAST_MS, useToasts, waitingCount, badgeCount, installNotifications, CHIME,
 } from './notify'
 
 const ag = (o: Partial<Agent>): Agent => ({
@@ -190,5 +192,35 @@ describe('долгие команды в alt screen', () => {
     expect(useToasts.getState().toasts).toEqual([])
     notifyCommandEnd('p', 'make', 60_000, 0, false)
     expect(useToasts.getState().toasts).toHaveLength(1)
+  })
+})
+
+describe('значок Dock и сигнал', () => {
+  it('значок: ждущие + готовые, пока окно было не в фокусе; сброс при возвращении', async () => {
+    const { useSettings } = await import('../settings/store')
+    useSettings.setState({ settings: { ...useSettings.getState().settings, notifySystem: false, notifySound: false } })
+    const off = installNotifications()
+    try {
+      expect(badgeCount(1, 2)).toBe(3)
+      setBadgeCount.mockClear()
+      vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+      await emit('done', '✓ Главный закончил', 'p', 'main')
+      expect(setBadgeCount).toHaveBeenLastCalledWith(1)
+      await emit('error', '✕ ошибка', 'p', 'main')
+      expect(setBadgeCount).toHaveBeenLastCalledWith(2)
+      vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+      await emit('done', 'в фокусе — не считается', 'p', 'main')
+      expect(setBadgeCount).toHaveBeenLastCalledWith(2)
+      handleWindowFocus()
+      expect(setBadgeCount).toHaveBeenLastCalledWith(undefined)
+    } finally {
+      off()
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('сигнал из двух нот: «готово» вверх, «ждёт» вниз', () => {
+    expect(CHIME.done[0]).toBeLessThan(CHIME.done[1])
+    expect(CHIME.waiting[0]).toBeGreaterThan(CHIME.waiting[1])
   })
 })

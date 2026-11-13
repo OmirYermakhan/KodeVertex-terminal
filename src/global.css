@@ -263,7 +263,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .cl-old-keys { color: color-mix(in srgb, var(--muted) 70%, transparent); }
 .cl-old-row:hover .cl-old-keys, .cl-old-row:focus-visible .cl-old-keys { color: var(--accText); }
 .cl-old-items { margin-top: 8px; padding-left: 12px; border-left: 1px solid var(--rule); opacity: 0.6; }
-.card { position: relative; box-sizing: border-box; background: var(--panel); border: 1px solid var(--rule); border-left: 2px solid var(--acc); border-radius: 8px; padding: 11px 14px; margin-bottom: 10px; max-width: 76ch; color: var(--text); font-family: var(--font-text); }
+.card { position: relative; box-sizing: border-box; background: var(--panel); border: 1px solid var(--rule); border-left: 2px solid var(--acc); border-radius: 8px; padding: 11px 14px; margin-bottom: 10px; max-width: 100ch; color: var(--text); font-family: var(--font-text); }
 .card .who { color: var(--accText); display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .card .read-btn { font: inherit; letter-spacing: inherit; text-transform: inherit; color: var(--accText); background: transparent; border: 1px solid var(--rule); border-radius: 4px; padding: 1px 7px; cursor: pointer; }
 .card .read-btn:hover { border-color: var(--acc); color: var(--strong); }
@@ -312,7 +312,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .q-row.p-deny .q-l { color: var(--del); }
 .cl-note { margin: 0 0 10px; max-width: 76ch; font-family: var(--font-code); font-size: 11px; line-height: normal; color: var(--muted); }
 .cerr-text { margin: 0; font-size: calc(var(--size-text) - 1.5px); line-height: var(--lh-text); white-space: pre-wrap; overflow-wrap: anywhere; }
-.act { box-sizing: border-box; border: 1px dashed var(--rule); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-family: var(--font-code); font-size: calc(var(--size-code) - 0.5px); line-height: normal; color: var(--muted); max-width: 76ch; overflow-wrap: anywhere; }
+.act { box-sizing: border-box; border: 1px dashed var(--rule); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-family: var(--font-code); font-size: calc(var(--size-code) - 0.5px); line-height: normal; color: var(--muted); max-width: 100ch; overflow-wrap: anywhere; }
 .act .who { color: var(--info); }
 .act b { color: var(--strong); font-weight: 500; }
 .act.run { border-left: 2px solid var(--acc); padding-left: 11px; }
@@ -335,7 +335,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .p-rules ul { margin: 2px 0 0; padding-left: 16px; }
 /* Первые ARM_MS после появления ↵ и щелчок не принимаются — варианты приглушены. */
 .q-opts.p-wait .q-row { opacity: 0.55; cursor: default; }
-.sum { box-sizing: border-box; background: var(--sumBg); border: 1px solid var(--sumRule); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; max-width: 76ch; color: var(--text); font-family: var(--font-text); }
+.sum { box-sizing: border-box; background: var(--sumBg); border: 1px solid var(--sumRule); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; max-width: 100ch; color: var(--text); font-family: var(--font-text); }
 .sum .who { display: flex; justify-content: space-between; gap: 12px; color: var(--accText); }
 .sum .sum-meta { color: var(--muted); text-transform: none; letter-spacing: 0; }
 .sum.err { border-color: var(--del); }

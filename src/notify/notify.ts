@@ -141,20 +141,28 @@ export function audioContext(): AudioContext | null {
   }
 }
 
-/** Короткий тихий тон; «готово» — выше, «ждёт» — ниже. */
+/** Ноты сигнала: «готово» — восходящие (до–соль), «ждёт вас» — нисходящие (соль–до). */
+export const CHIME: Record<'done' | 'waiting', number[]> = { done: [784, 1175], waiting: [1175, 784] }
+
+/** Сигнал из двух нот — слышно, но не резко (прежний одиночный тон 0.06 терялся). */
 function beep(kind: NotifyKind): void {
   try {
     const ctx = audioContext()
     if (!ctx) return
-    const osc = ctx.createOscillator()
-    const gain = ctx.createGain()
-    osc.frequency.value = kind === 'done' ? 880 : 660
-    gain.gain.setValueAtTime(0.0001, ctx.currentTime)
-    gain.gain.exponentialRampToValueAtTime(0.06, ctx.currentTime + 0.02)
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.25)
-    osc.connect(gain).connect(ctx.destination)
-    osc.start()
-    osc.stop(ctx.currentTime + 0.27)
+    const notes = CHIME[kind === 'done' ? 'done' : 'waiting']
+    notes.forEach((f, i) => {
+      const t = ctx.currentTime + i * 0.14
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.value = f
+      gain.gain.setValueAtTime(0.0001, t)
+      gain.gain.exponentialRampToValueAtTime(0.22, t + 0.015)
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.45)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(t)
+      osc.stop(t + 0.47)
+    })
   } catch {
     // Нет WebAudio — без звука.
   }
@@ -180,8 +188,19 @@ async function systemNotice(toast: Omit<Toast, 'id'>): Promise<void> {
   }
 }
 
+/** Готовые ответы, пришедшие, пока окно было не в фокусе (значок Dock до возвращения в окно). */
+let unseen = 0
+let refreshBadge: () => void = () => {}
+
+/** Значок Dock: ждущие ответа агенты + непросмотренные «готово/ошибка». */
+export const badgeCount = (waiting: number, unseenDone: number) => waiting + unseenDone
+
 /** Окно получило фокус: если недавно было системное уведомление — перейти к его вкладке/агенту. */
 export function handleWindowFocus(): void {
+  if (unseen) {
+    unseen = 0
+    refreshBadge()
+  }
   const p = pending
   pending = null
   if (!p || Date.now() - p.at > FOCUS_NAV_MS) return
@@ -194,6 +213,10 @@ export function emit(kind: NotifyKind, text: string, paneId: string, agentId: st
   const s = useSettings.getState().settings
   const inActive = isInActiveTab(paneId)
   useToasts.getState().push({ kind, text, paneId, agentId })
+  if (kind !== 'waiting' && !document.hasFocus()) {
+    unseen++
+    refreshBadge()
+  }
   if (s.notifySound && soundFor(kind)) beep(kind)
   if (s.notifySystem && needsSystemNotice(document.hasFocus(), inActive)) {
     return systemNotice({ kind, text, paneId, agentId })
@@ -222,6 +245,13 @@ export function installNotifications(): () => void {
   window.addEventListener('keydown', wake, { once: true, capture: true })
   window.addEventListener('pointerdown', wake, { once: true, capture: true })
   window.addEventListener('focus', handleWindowFocus)
+  unseen = 0
+  refreshBadge = () => {
+    const n = badgeCount(waitingCount(useClaudeSessions.getState().sessions), unseen)
+    if (n === lastBadge) return
+    lastBadge = n
+    getCurrentWindow().setBadgeCount(n > 0 ? n : undefined).catch(() => {})
+  }
   const unsub = useClaudeSessions.subscribe((st, prev) => {
     const settings = useSettings.getState().settings
     for (const [paneId, s] of Object.entries(st.sessions)) {
@@ -231,13 +261,10 @@ export function installNotifications(): () => void {
         if (shouldNotifyAgent(ev, settings)) void emit(ev.kind, agentText(ev, lastQuestion(s.state.items)), paneId, ev.agent.id)
       }
     }
-    const n = waitingCount(st.sessions)
-    if (n !== lastBadge) {
-      lastBadge = n
-      getCurrentWindow().setBadgeCount(n > 0 ? n : undefined).catch(() => {})
-    }
+    refreshBadge()
   })
   return () => {
+    refreshBadge = () => {}
     unsub()
     window.removeEventListener('keydown', wake, true)
     window.removeEventListener('pointerdown', wake, true)
