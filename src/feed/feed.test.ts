@@ -150,3 +150,13 @@ describe('commandBytes и PS2', () => {
     expect(parseOsc133('A;aid=1')).toEqual({ t: 'prompt' })
   })
 })
+
+describe('failurePrompt: длина и ограждение', () => {
+  it('хвост вывода не длиннее ASK_TAIL_CHARS; ``` в выводе не закрывает блок', async () => {
+    const { failurePrompt, ASK_TAIL_CHARS } = await import('./feed')
+    const huge = 'x'.repeat(ASK_TAIL_CHARS * 3)
+    expect(failurePrompt('make', 2, '/w', huge).length).toBeLessThan(ASK_TAIL_CHARS + 300)
+    const msg = failurePrompt('make', 2, '/w', 'a\n```\nb')
+    expect(msg).toContain('````\na\n```\nb\n````')
+  })
+})

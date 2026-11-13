@@ -657,6 +657,8 @@ export function TerminalPane(p: TerminalPaneProps) {
       const h = handleRef.current
       if (!h) return false
       sentRef.current = cmd
+      // Отправка из строки — выбор блока снят: позже ⌘R не повторит давно выбранную команду.
+      setSelected(null)
       setAwaitingShell(true)
       h.write(commandBytes(cmd))
       return true
@@ -666,7 +668,10 @@ export function TerminalPane(p: TerminalPaneProps) {
   // ⌃D на пустой строке — EOF в оболочку, как в обычном терминале (zsh с ignoreeof его проигнорирует).
   const onEof = useCallback(() => handleRef.current?.write('\x04'), [])
   const onAsk = useCallback(
-    (text: string, tokens?: Attachment[]) => void askClaude(p.paneId, cwdRef.current, text, tokens),
+    (text: string, tokens?: Attachment[]) => {
+      setSelected(null)
+      void askClaude(p.paneId, cwdRef.current, text, tokens)
+    },
     [p.paneId],
   )
   const onTokens = useCallback((n: number) => setAttachCount(p.paneId, n), [p.paneId])
@@ -738,7 +743,8 @@ export function TerminalPane(p: TerminalPaneProps) {
     (id: string | null) => {
       const it = id ? itemsRef.current.find((x) => x.id === id) : undefined
       if (it?.kind !== 'shell' || it.running || !shellIdleRef.current) return false
-      if (onRun(it.command)) pushHistory(it.command)
+      if (!onRun(it.command)) return false
+      pushHistory(it.command)
       return true
     },
     [onRun],

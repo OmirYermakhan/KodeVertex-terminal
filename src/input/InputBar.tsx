@@ -590,7 +590,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     },
     openHistorySearch: () => {
       const q = props.current
-      if (q.disabled || q.answer || pickerRef.current) return
+      if (q.disabled || q.answer || q.edit || q.continuation || pickerRef.current) return
       completionRef.current.close()
       hintsRef.current.close()
       setAt(null)
@@ -737,7 +737,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     const ctrlR = e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === 'KeyR'
     const cur = hsRef.current
     if (!cur) {
-      if (!ctrlR || q.answer || pickerRef.current) return false
+      // Правка сообщения и продолжение команды (PS2): ↵ из поиска ушёл бы не туда.
+      if (!ctrlR || q.answer || q.edit || q.continuation || pickerRef.current) return false
       completionRef.current.close()
       hintsRef.current.close()
       setAt(null)

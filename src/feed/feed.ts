@@ -228,7 +228,21 @@ export function moveSelection(items: FeedItem[], selected: string | null, dir: '
 export const ASK_TAIL_LINES = 200
 
 /** Сообщение «Спросить Claude» для упавшей команды: код, каталог и хвост вывода. */
+/** Не больше стольких символов хвоста вывода (одна строка минифицированной ошибки бывает мегабайтами). */
+export const ASK_TAIL_CHARS = 12000
+
+/** Ограждение длиннее любой серии обратных кавычек в тексте: ``` в выводе не ломает блок кода. */
+function fenceFor(text: string): string {
+  let max = 0
+  for (const m of text.matchAll(/`+/g)) max = Math.max(max, m[0].length)
+  return '`'.repeat(Math.max(3, max + 1))
+}
+
 export function failurePrompt(command: string, exitCode: number, cwd: string, output: string): string {
-  const tail = output.split('\n').slice(-ASK_TAIL_LINES).join('\n')
-  return `Команда \`${command}\` завершилась с кодом ${exitCode} в ${cwd}. Вывод:\n\`\`\`\n${tail}\n\`\`\`\nПомоги понять причину и исправить.`
+  let tail = output.split('\n').slice(-ASK_TAIL_LINES).join('\n')
+  if (tail.length > ASK_TAIL_CHARS) tail = '…' + tail.slice(-ASK_TAIL_CHARS)
+  const fence = fenceFor(tail)
+  const cmdFence = '`'.repeat(Math.max(1, ...[...command.matchAll(/`+/g)].map((m) => m[0].length + 1)))
+  const cmd = cmdFence.length > 1 ? `${cmdFence} ${command} ${cmdFence}` : `\`${command}\``
+  return `Команда ${cmd} завершилась с кодом ${exitCode} в ${cwd}. Вывод:\n${fence}\n${tail}\n${fence}\nПомоги понять причину и исправить.`
 }

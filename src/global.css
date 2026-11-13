@@ -434,7 +434,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .in-ta { flex: 1; min-width: 0; display: block; box-sizing: border-box; margin: 0; padding: 0; border: 0; outline: none; resize: none; background: transparent; color: var(--strong); font: inherit; line-height: var(--input-lh, 18px); min-height: var(--input-lh, 18px); max-height: calc(var(--input-lh, 18px) * 8); caret-color: var(--accText); white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; font-variant-ligatures: var(--liga); -webkit-user-modify: read-write-plaintext-only; }
 .in-ta.empty { caret-color: transparent; }
 /* Подсказка-призрак: копия набранного (невидимая) + остаток записи истории тусклым, поверх поля. */
-.in-ghost { position: absolute; left: 0; top: 0; right: 0; pointer-events: none; white-space: pre-wrap; overflow-wrap: anywhere; line-height: var(--input-lh, 18px); max-height: calc(var(--input-lh, 18px) * 8); overflow: hidden; font-variant-ligatures: var(--liga); }
+.in-ghost { position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: none; white-space: pre-wrap; overflow-wrap: anywhere; line-height: var(--input-lh, 18px); overflow: hidden; font-variant-ligatures: var(--liga); }
 .in-ghost-pre { visibility: hidden; }
 .in-ghost-rest { color: var(--muted); opacity: 0.55; }
 .in-ta[aria-disabled='true'] { background: transparent; color: var(--muted); -webkit-user-modify: read-only; }
