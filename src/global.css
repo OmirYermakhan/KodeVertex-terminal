@@ -191,12 +191,12 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .cp-item.dir { color: var(--info); }
 .cp-item.sel { background: color-mix(in srgb, var(--acc) 25%, transparent); border-left-color: var(--acc); }
 .cp-item b { color: var(--strong); font-weight: 700; }
-.cp-icon { display: inline-block; width: 1.2em; }
 .fi { width: 13px; height: 13px; flex: none; vertical-align: -2px; margin-right: 6px; color: var(--muted); }
 .pop .fi { width: 15px; height: 15px; margin-right: 0; vertical-align: baseline; }
-.fi-dir { color: var(--info); }
+.pv .fi { width: 12px; height: 12px; margin-right: 0; vertical-align: -2px; }
+.fi-dir { color: var(--warn); }
 .fi-code, .fi-script, .fi-web { color: var(--acc); }
-.fi-data, .fi-config { color: var(--warn); }
+.fi-data, .fi-config { color: var(--info); }
 .fi-image, .fi-media { color: var(--add); }
 .fi-md { color: var(--text); }
 .cp-preview { box-sizing: border-box; padding: 4px 10px; border-left: 1px solid var(--rule); font-family: var(--font-code); font-size: 12px; line-height: 1.45; white-space: pre; overflow: hidden; }

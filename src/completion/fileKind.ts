@@ -23,7 +23,7 @@ const CONFIG_NAMES = new Set(['.gitignore', '.gitattributes', '.editorconfig', '
 export function fileKind(name: string, isDir: boolean): FileKind {
   if (isDir) return 'dir'
   const n = name.toLowerCase()
-  if (n.startsWith('.env')) return 'config'
+  if (n === '.env' || n.startsWith('.env.')) return 'config'
   if (CONFIG_NAMES.has(n)) return 'config'
   if (n.endsWith('-lock.json') || n === 'yarn.lock') return 'lock'
   const dot = n.lastIndexOf('.')
