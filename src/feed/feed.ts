@@ -11,8 +11,6 @@ export type ShellBlock = {
   html: string | null
   lines: number
   running: boolean
-  /** Строка «фоновая задача»: вывод оболочки в простое (`[1]  + done  sleep 1`), без команды и HTML. */
-  notice?: string
 }
 export type ClaudeItem = { kind: 'claude'; id: string; item: FeedClaudeItem }
 export type FeedItem = ShellBlock | ClaudeItem
@@ -24,8 +22,6 @@ export type ShellEvent =
   | { t: 'end'; exitCode: number | null; at: number; html: string; lines: number }
   /** Вывод вне пары C…D (ошибка разбора, сообщения о фоновых заданиях): готовый блок. */
   | { t: 'stray'; command: string; cwd: string; at: number; html: string; lines: number }
-  /** Текст, напечатанный оболочкой в простое (сообщения о фоновых заданиях), — см. idleNotice. */
-  | { t: 'notice'; text: string; cwd: string; at: number }
 
 /** Результат разбора OSC 133 — без времени, cwd и HTML. */
 export type ParsedOsc133 =
@@ -69,29 +65,6 @@ export function parseOsc133(data: string): ParsedOsc133 | null {
   return null
 }
 
-/** ESC-последовательности: OSC (до BEL или ESC \\), CSI, прочие двухбайтовые. */
-// eslint-disable-next-line no-control-regex
-const ESCAPES = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-_]?/g
-/** Управляющие символы, кроме \t и \n (остатки после ESC-последовательностей). */
-// eslint-disable-next-line no-control-regex
-const CONTROLS = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g
-
-/**
- * Текст, напечатанный оболочкой в простое (между 133;A и следующей командой), → строка «фоновая задача»
- * или null. Так zsh сообщает о фоновых заданиях (`[1]  + done  sleep 1`). Последовательности и управляющие
- * символы убираются, из строки, переписанной после `\r`, остаётся последний вариант; пустые строки и одни
- * пробелы — шум перерисовки приглашения — не в счёт.
- */
-export function idleNotice(text: string): string | null {
-  const lines = text
-    .replace(ESCAPES, '')
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .map((l) => (l.split('\r').findLast((x) => x.trim() !== '') ?? '').replace(CONTROLS, '').replace(/\t/g, ' ').trimEnd())
-    .filter((l) => l.trim() !== '')
-  return lines.length > 0 ? lines.join('\n') : null
-}
-
 /** Монотонный счётчик id блоков: после очистки ленты (⌃L) id не повторяются. */
 let blockSeq = 0
 
@@ -105,24 +78,6 @@ function runningIndex(items: FeedItem[]): number {
 
 export function applyShell(items: FeedItem[], ev: ShellEvent): FeedItem[] {
   if (ev.t === 'prompt') return items
-  if (ev.t === 'notice') {
-    return [
-      ...items,
-      {
-        kind: 'shell',
-        id: `sh-${++blockSeq}`,
-        command: '',
-        cwd: ev.cwd,
-        startedAt: ev.at,
-        durationMs: null,
-        exitCode: null,
-        html: null,
-        lines: ev.text.split('\n').length,
-        running: false,
-        notice: ev.text,
-      },
-    ]
-  }
   if (ev.t === 'stray') {
     return [
       ...items,
@@ -245,7 +200,7 @@ export type SelectionMove = { id: string | null; leave: boolean }
 
 /** Выбирается ⌘↑/⌘↓: завершённый shell-блок или законченный ответ Claude (их можно вложить ⌘L). */
 export function selectable(it: FeedItem): boolean {
-  if (it.kind === 'shell') return !it.running && it.notice === undefined
+  if (it.kind === 'shell') return !it.running
   return it.item.type === 'assistant' && !it.item.streaming && it.item.text.trim() !== ''
 }
 

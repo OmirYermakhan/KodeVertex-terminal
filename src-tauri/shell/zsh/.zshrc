@@ -1,61 +1,16 @@
 # KodeVertex Terminal: интеграция zsh через ZDOTDIR.
 # Временно возвращаем пользовательский ZDOTDIR, подключаем его .zshrc
 # и снова переключаемся на наш каталог интеграции.
+KV_ZDOTDIR="${KV_ZDOTDIR:-$ZDOTDIR}"
 ZDOTDIR="${KV_ORIG_ZDOTDIR:-$HOME}"
 # /etc/zshrc (macOS) задаёт HISTFILE от $ZDOTDIR, когда тот ещё указывает на нас.
-[[ "$HISTFILE" == "$_kv_zdotdir/.zsh_history" ]] && HISTFILE="$ZDOTDIR/.zsh_history"
+[[ "$HISTFILE" == "$KV_ZDOTDIR/.zsh_history" ]] && HISTFILE="$ZDOTDIR/.zsh_history"
 [[ -f "$ZDOTDIR/.zshrc" ]] && source "$ZDOTDIR/.zshrc"
 # Пользовательский файл мог сам сменить ZDOTDIR — запоминаем его выбор.
 [[ "$ZDOTDIR" != "${KV_ORIG_ZDOTDIR:-$HOME}" ]] && KV_ORIG_ZDOTDIR="$ZDOTDIR"
-ZDOTDIR="$_kv_zdotdir"
+ZDOTDIR="$KV_ZDOTDIR"
 
 autoload -Uz add-zsh-hook
-
-# Конец запуска: ZDOTDIR снова пользовательский — для его плагинов, `vim $ZDOTDIR/.zshrc` и т. п.
-_kv_zdotdir_to_user() {
-  if [[ -n "$KV_ORIG_ZDOTDIR" ]]; then
-    export ZDOTDIR="$KV_ORIG_ZDOTDIR"
-  else
-    unset ZDOTDIR
-  fi
-  unset KV_ORIG_ZDOTDIR
-}
-
-# Окружение команды. zsh, запущенный командой (`exec zsh`, `omz reload`, вложенный `zsh`), должен
-# снова прочесть нашу интеграцию и знать метку: на время команды в окружении ZDOTDIR — наш каталог,
-# KV_ORIG_ZDOTDIR — ZDOTDIR пользователя (его увидел бы такой zsh в обычном терминале), KODEVERTEX_MARK —
-# метка. Перед приглашением всё возвращается. Команда, где упомянут ZDOTDIR (`echo $ZDOTDIR`,
-# `vim $ZDOTDIR/.zshrc`), видит значение пользователя.
-typeset -g _kv_zd_saved=
-_kv_env_preexec() {
-  emulate -L zsh
-  export KODEVERTEX_MARK="$_kv_mark"
-  [[ "$3" == *ZDOTDIR* ]] && return
-  # Тип (пусто — не задана; *export* — в окружении) и значение — чтобы вернуть как было.
-  _kv_zd_saved="${(t)ZDOTDIR}:${ZDOTDIR-}"
-  local user=
-  [[ ${(t)ZDOTDIR} == *export* ]] && user="$ZDOTDIR"
-  export KV_ORIG_ZDOTDIR="$user" ZDOTDIR="$_kv_zdotdir"
-}
-_kv_env_precmd() {
-  emulate -L zsh
-  unset KODEVERTEX_MARK KV_ORIG_ZDOTDIR
-  [[ -n "$_kv_zd_saved" ]] || return 0
-  local type="${_kv_zd_saved%%:*}" val="${_kv_zd_saved#*:}"
-  _kv_zd_saved=
-  # Команда сама сменила ZDOTDIR (`export ZDOTDIR=…`) — оставляем её выбор.
-  [[ "$ZDOTDIR" == "$_kv_zdotdir" ]] || return 0
-  if [[ -z "$type" ]]; then
-    unset ZDOTDIR
-  elif [[ "$type" == *export* ]]; then
-    export ZDOTDIR="$val"
-  else
-    typeset -g +x ZDOTDIR="$val"
-  fi
-}
-# Возврат окружения — среди первых хуков приглашения, до пользовательских.
-precmd_functions=(_kv_env_precmd ${precmd_functions:#_kv_env_precmd})
-add-zsh-hook preexec _kv_env_preexec
 
 # Режим блоков (KV_BLOCKS=1): границы команд по OSC 133 и скрытое приглашение.
 # 133;A — начало приглашения, 133;C;<base64 команды> — старт, 133;D;<код> — конец,
@@ -138,6 +93,3 @@ _kv_osc7() {
   printf '\e]7;file://%s%s;kv=%s\a' "$HOST" "$out" "$_kv_mark"
 }
 add-zsh-hook precmd _kv_osc7
-
-# Нелогин-оболочка (`exec zsh`, вложенный zsh): .zlogin не будет, .zshrc — последний файл запуска.
-[[ -o login ]] || _kv_zdotdir_to_user

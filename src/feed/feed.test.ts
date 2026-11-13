@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyShell, commandBytes, COLLAPSE_LINES, formatDuration, idleNotice, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from './feed'
+import { applyShell, commandBytes, COLLAPSE_LINES, formatDuration, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from './feed'
 import type { FeedClaudeItem } from '../claude/reducer'
 
 const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
@@ -56,36 +56,6 @@ describe('applyShell', () => {
   it('end закрывает running после claude-элемента', () => {
     const items: FeedItem[] = [...applyShell([], start('a', 0)), { kind: 'claude', id: 'c', item: { type: 'user', text: 'hi' } }]
     expect(sh(applyShell(items, end(5)), 0).running).toBe(false)
-  })
-})
-
-describe('idleNotice (вывод оболочки в простое)', () => {
-  it('сообщение zsh о фоновом задании — как есть, без последовательностей перерисовки', () => {
-    // Так zsh печатает его в ZLE (вывод PTY из теста background_job_notice_is_printed_while_idle).
-    const raw =
-      '\r\x1b[0m\x1b[27m\x1b[24m\x1b[J\x1b[K\x1b[?2004h\x1b[K\x1b[K\r\r\n[1]  + done       sleep 0.2\r\n\x1b[0m\x1b[27m\x1b[24m\x1b[J\x1b[K'
-    expect(idleNotice(raw)).toBe('[1]  + done       sleep 0.2')
-  })
-  it('несколько заданий — по строке; OSC-маркеры, \\t и управляющие символы убираются', () => {
-    const raw = '\x1b]7;file:///w;kv=x\x07[1]  - done\tsleep 1\n\n\x1b]133;A;kv=x\x1b\\[2]  + exit 1\x07     false  \n'
-    expect(idleNotice(raw)).toBe('[1]  - done sleep 1\n[2]  + exit 1     false')
-  })
-  it('переписанная после \\r строка — последний непустой вариант', () => {
-    expect(idleNotice('старое\rновое\r   ')).toBe('новое')
-  })
-  it('пусто, пробелы и одна перерисовка приглашения — null', () => {
-    for (const s of ['', '   ', '\r\n\r\n', '\x1b[0m\x1b[27m\x1b[J\x1b[K\x1b[?2004h', ' \t \r']) expect(idleNotice(s)).toBeNull()
-  })
-  it('строка «фоновая задача» в ленте — не выбирается ⌘↑ и не мешает running-блоку', () => {
-    let items = applyShell([], start('a', 0))
-    items = applyShell(items, end(5))
-    items = applyShell(items, { t: 'notice', text: '[1]  + done  sleep 1', cwd: '/w', at: 7 })
-    expect(sh(items, 1)).toMatchObject({ notice: '[1]  + done  sleep 1', command: '', running: false, html: null })
-    expect(moveSelection(items, null, 'up').id).toBe(items[0].id)
-    items = applyShell(items, start('b', 8))
-    items = applyShell(items, end(9))
-    expect(sh(items, 2)).toMatchObject({ command: 'b', running: false })
-    expect(sh(items, 1).notice).toBe('[1]  + done  sleep 1')
   })
 })
 
