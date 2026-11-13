@@ -2,6 +2,7 @@
 // Claude-сессии панели работает, ждёт или закончил; ↑↓ — выбор, ↵ — подробности, esc — назад к вводу.
 import { forwardRef, Fragment, useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { modelLabel, type Agent, type ClaudeState } from './reducer'
+import { Collapse } from '../ui/motion'
 
 export const AGENTS_KEYS = '↑↓ выбрать · ↵ подробно · esc назад к вводу · ⌘J скрыть'
 
@@ -256,7 +257,9 @@ export const AgentsPanel = forwardRef<AgentsPanelHandle, AgentsPanelProps>(funct
               boxRef.current?.focus()
             }}
           />
-          {open === agent.id && agent.id === selected && <Detail agent={agent} />}
+          <Collapse open={open === agent.id && agent.id === selected}>
+            <Detail agent={agent} />
+          </Collapse>
         </Fragment>
       ))}
     </div>

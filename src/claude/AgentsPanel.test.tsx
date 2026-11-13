@@ -72,7 +72,8 @@ describe('AgentsPanel', () => {
 
     fireEvent.keyDown(box, { key: 'Enter' })
     const detail = screen.getByTestId('agent-detail')
-    expect(detail.previousElementSibling).toHaveAttribute('data-agent-id', 'arch')
+    // Подробности — в обёртке раскрытия (src/ui/motion.tsx) сразу под строкой агента.
+    expect(detail.parentElement!.previousElementSibling).toHaveAttribute('data-agent-id', 'arch')
     expect(detail.textContent).toBe(
       '→ сейчас: проектирует модуль оплаты✓ прочитал PaymentApi.kt✓ записал PaymentService.kt · шаг 2 из 3',
     )

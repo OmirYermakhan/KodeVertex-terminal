@@ -32,6 +32,7 @@ import { QuestionPrompt } from '../claude/QuestionPrompt'
 import { dropPaneFeed, restoredPane, scheduleSave, setPaneFeed } from '../persist/session'
 import { InputBar, type InputBarHandle, type InputSnapshot } from '../input/InputBar'
 import { QueuePanel, type QueuePanelHandle } from '../claude/QueuePanel'
+import { Collapse } from '../ui/motion'
 import { AgentsPanel, type AgentsPanelHandle } from '../claude/AgentsPanel'
 import { blockText, blockTextOf, cleanSerializedHtml } from '../feed/blockHtml'
 import { pushHistory } from '../input/history'
@@ -1122,6 +1123,8 @@ export function TerminalPane(p: TerminalPaneProps) {
             <AgentsPanel ref={agentsRef} state={claude.state} queued={queue.length} onExit={() => inputRef.current?.focus()} />
           </ErrorBoundary>
         )}
+        {/* После ответа вопрос сворачивается по высоте (src/ui/motion.tsx). */}
+        <Collapse open={!!question && !alt}>
         {question && !alt && (
           <ErrorBoundary name="вопрос агента" resetKey={question}>
           <QuestionPrompt
@@ -1136,6 +1139,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           />
           </ErrorBoundary>
         )}
+        </Collapse>
         {permission && !alt && (
           <ErrorBoundary name="запрос разрешения" resetKey={permission}>
           <PermissionPrompt

@@ -492,8 +492,9 @@ describe('TerminalPane', () => {
         const dock = document.querySelector('.dock')!
         const prompt = dock.querySelector('.aprompt') as HTMLElement
         expect(prompt).not.toBeNull()
-        // Порядок в доке: панель агентов, вопрос, строка ввода.
-        expect([...dock.children].map((c) => c.className.split(' ')[0])).toEqual(['agents', 'aprompt', 'input-wrap'])
+        // Порядок в доке: панель агентов, вопрос (в обёртке сворачивания), строка ввода.
+        expect([...dock.children].map((c) => c.className.split(' ')[0])).toEqual(['agents', 'kv-collapse', 'input-wrap'])
+        expect(prompt.parentElement!.parentElement).toBe(dock)
         expect(document.activeElement).toBe(prompt)
         expect(document.querySelector('.feed .q-wait')?.textContent).toContain('Какую базу?')
         // esc — к вводу, ⌘↓ — обратно к вопросу.
