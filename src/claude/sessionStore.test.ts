@@ -13,6 +13,8 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 const { recallQueued, removeQueued, sendQueued, dismissQueueHint, answerPermission, answerQuestion, interruptClaude, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
 
+const { useSettings } = await import('../settings/store')
+
 const items = (pane: string) => useClaudeSessions.getState().sessions[pane]?.state.items ?? []
 const calls = (cmd: string) => invoke.mock.calls.filter((c) => c[0] === cmd)
 const flush = () => new Promise((r) => setTimeout(r, 0))
@@ -32,6 +34,24 @@ describe('enterClaude (команда `claude` в строке ввода)', () 
     expect(calls('claude_start')[0][1]).toMatchObject({ cwd: '/w', resume: null })
     expect(calls('claude_send')).toHaveLength(0)
     expect(items('p')).toEqual([{ type: 'session', cwd: '/w', mode: true }])
+  })
+
+  it('режим разрешений — из настроек на момент запуска (по умолчанию acceptEdits) и запоминается у сессии', async () => {
+    enterClaude('p', '/w')
+    await flush()
+    expect(calls('claude_start')[0][1]).toMatchObject({ permissionMode: 'acceptEdits' })
+    expect(useClaudeSessions.getState().sessions.p.permissionMode).toBe('acceptEdits')
+    stopClaude('p')
+    const prev = useSettings.getState().settings
+    useSettings.setState({ settings: { ...prev, claudePermissionMode: 'bypassPermissions' } })
+    try {
+      enterClaude('p', '/w')
+      await flush()
+      expect(calls('claude_start')[1][1]).toMatchObject({ permissionMode: 'bypassPermissions' })
+      expect(useClaudeSessions.getState().sessions.p.permissionMode).toBe('bypassPermissions')
+    } finally {
+      useSettings.setState({ settings: prev })
+    }
   })
 
   it('уже идущая сессия не перезапускается; вопрос потом идёт в неё же через claude_send', async () => {

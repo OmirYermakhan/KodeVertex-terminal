@@ -1,23 +1,32 @@
 // Запрос разрешения инструмента над строкой ввода (тот же блок AgentPrompt, что у вопросов):
-// инструмент и понятное описание (команда, путь, размер правки), варианты: разрешить,
-// разрешить всегда для сессии (если CLI предложил правило), запретить.
-import { forwardRef, useState } from 'react'
+// инструмент и всё, что будет разрешено (полная команда, запись и правка построчно, весь ввод
+// незнакомого инструмента), варианты: разрешить, разрешить всегда (если CLI предложил правила —
+// они показаны), запретить. Невидимые символы — видимыми метками (neutralize).
+import { forwardRef, useEffect, useState } from 'react'
 import { AgentPrompt } from './AgentPrompt'
 import { agentSignature } from './cards/AssistantCard'
-import { permissionSummary } from './questions'
+import { alwaysLabel, permissionView, suggestionLines, type ViewLine } from './questions'
 import type { Agent, FeedClaudeItem, PermissionDecision } from './reducer'
 
 type PermissionItem = Extract<FeedClaudeItem, { type: 'permission' }>
 
 export const PERMISSION_KEYS = '↑↓ 1–3 выбрать · ↵ ответить · esc к вводу'
 
+/**
+ * Сколько после появления запрос не принимает ↵ и щелчок: ↵, нажатый ради строки ввода в момент,
+ * когда запрос забрал фокус, не должен его разрешить.
+ */
+export const ARM_MS = 400
+
 export function permissionOptions(item: PermissionItem): { decision: PermissionDecision; label: string }[] {
   return [
     { decision: 'allow', label: 'Разрешить' },
-    ...(item.suggestions ? [{ decision: 'always' as const, label: 'Разрешить всегда для этой сессии' }] : []),
+    ...(item.suggestions ? [{ decision: 'always' as const, label: alwaysLabel(item.suggestions) }] : []),
     { decision: 'deny', label: 'Запретить' },
   ]
 }
+
+const MARK: Record<ViewLine['k'], string> = { a: '+ ', d: '- ', n: '' }
 
 export interface PermissionPromptProps {
   item: PermissionItem
@@ -29,7 +38,17 @@ export interface PermissionPromptProps {
 export const PermissionPrompt = forwardRef<HTMLDivElement, PermissionPromptProps>(function PermissionPrompt(p, ref) {
   const opts = permissionOptions(p.item)
   const [cur, setCur] = useState(0)
-  const { main, detail } = permissionSummary(p.item.tool, p.item.input)
+  // Блок монтируется на каждый запрос (key = requestId в TerminalPane): отсчёт — с появления.
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    const t = setTimeout(() => setArmed(true), ARM_MS)
+    return () => clearTimeout(t)
+  }, [])
+  const view = permissionView(p.item.tool, p.item.input)
+  const rules = p.item.suggestions ? suggestionLines(p.item.suggestions) : []
+  const decide = (d: PermissionDecision) => {
+    if (armed) p.onDecide(d)
+  }
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return
     const n = opts.length
@@ -37,7 +56,7 @@ export const PermissionPrompt = forwardRef<HTMLDivElement, PermissionPromptProps
     if (e.key === 'ArrowDown') setCur((cur + 1) % n)
     else if (e.key === 'ArrowUp') setCur((cur - 1 + n) % n)
     else if (/^[1-9]$/.test(e.key) && Number(e.key) <= n) setCur(Number(e.key) - 1)
-    else if (e.key === 'Enter') p.onDecide(opts[cur].decision)
+    else if (e.key === 'Enter') decide(opts[cur].decision)
     else if (e.key === 'Escape') p.onLeave()
     else handled = false
     if (handled) {
@@ -55,18 +74,49 @@ export const PermissionPrompt = forwardRef<HTMLDivElement, PermissionPromptProps
     >
       <div className="q-text">
         <span className="p-tool">{p.item.tool}</span>
-        {main && <code className="p-main">{main}</code>}
-        {detail && <span className="p-detail">{detail}</span>}
+        {view.target && <code className="p-main">{view.target}</code>}
+        {view.facts.length > 0 && <span className="p-detail">{view.facts.join(' · ')}</span>}
       </div>
-      <div className="q-opts" role="listbox">
+      {view.code && <pre className="p-code">{view.code}</pre>}
+      {view.lines.length > 0 && (
+        <div className="diff p-code">
+          {view.lines.map((l, i) => (
+            <div key={i} className={l.k}>
+              {MARK[l.k] + l.t}
+            </div>
+          ))}
+          {view.more > 0 && <span className="n diff-more">… ещё {view.more} строк — не показаны, но входят в разрешение</span>}
+        </div>
+      )}
+      {view.extra && (
+        <>
+          <div className="p-note">ещё поля ввода:</div>
+          <pre className="p-code">{view.extra}</pre>
+        </>
+      )}
+      {view.agentNote && <div className="p-note p-agent">со слов агента: {view.agentNote}</div>}
+      {rules.length > 0 && (
+        <div className="p-note p-rules">
+          «{alwaysLabel(p.item.suggestions ?? [])}» добавит:
+          <ul>
+            {rules.map((r, i) => (
+              <li key={i}>{r}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <div className={'q-opts' + (armed ? '' : ' p-wait')} role="listbox">
         {opts.map((o, i) => (
           <div
             key={o.decision}
             role="option"
             aria-selected={i === cur}
+            aria-disabled={!armed}
             className={'q-row' + (i === cur ? ' sel' : '') + (o.decision === 'deny' ? ' p-deny' : '')}
-            onMouseDown={(e) => {
-              e.preventDefault()
+            // Фокус остаётся, где был; решение — по отпусканию (click), а не по нажатию.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              if (!armed) return
               setCur(i)
               p.onDecide(o.decision)
             }}

@@ -35,6 +35,19 @@ describe('SettingsPanel', () => {
     expect(invoke).not.toHaveBeenCalled()
   })
 
+  it('Claude: режим разрешений — список, по умолчанию «Правки без вопросов», подсказка про следующий запуск', () => {
+    const { rerender } = render(<SettingsPanel open onClose={() => {}} />)
+    const select = screen.getByLabelText('Разрешения') as HTMLSelectElement
+    expect(opts(select)).toEqual(['Спрашивать всё', 'Правки без вопросов', 'Ничего не спрашивать'])
+    expect(select.value).toBe('acceptEdits')
+    expect(screen.getByText(/Действует со следующего запуска/)).toBeTruthy()
+    fireEvent.change(select, { target: { value: 'bypassPermissions' } })
+    expect(update).toHaveBeenCalledWith({ claudePermissionMode: 'bypassPermissions' })
+    useSettings.setState({ settings: { ...DEFAULTS, claudePermissionMode: 'bypassPermissions' } })
+    rerender(<SettingsPanel open onClose={() => {}} />)
+    expect(screen.getByText(/^Опасно:/)).toBeTruthy()
+  })
+
   it('shows all themes and selects one', () => {
     render(<SettingsPanel open onClose={() => {}} />)
     for (const t of Object.values(THEMES)) expect(screen.getByRole('button', { name: new RegExp(t.name) })).toBeTruthy()

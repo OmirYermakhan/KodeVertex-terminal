@@ -26,6 +26,8 @@ export default function StatusBar(p: {
   claude?: ClaudeState | null
   /** Значков в строке ввода панели в фокусе (макет 06: «вложения N»). */
   attachments?: number
+  /** Режим разрешений, с которым запущен процесс Claude этой панели. */
+  permissionMode?: string | null
 }) {
   const home = useHome()
   const now = useClock(p.now)
@@ -35,6 +37,11 @@ export default function StatusBar(p: {
   return (
     <div className="sbar">
       {c && <div className="sg v">◆ CLAUDE</div>}
+      {c && p.permissionMode === 'bypassPermissions' && (
+        <div className="sg danger" title="Режим «Ничего не спрашивать»: команды выполняются без разрешения. Меняется в настройках.">
+          ⚠ БЕЗ РАЗРЕШЕНИЙ
+        </div>
+      )}
       {current && (
         <div className="sg">
           сейчас <b>{current.name}</b>

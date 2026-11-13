@@ -104,6 +104,13 @@ body {
   font-weight: 500;
 }
 
+/* Claude запущен с bypassPermissions: та же плашка, что .sg.v, но цветом --del. */
+.sg.danger {
+  background: var(--del);
+  color: #fff;
+  font-weight: 500;
+}
+
 .sg.right {
   margin-left: auto;
   border-left: 1px solid var(--rule);
@@ -305,6 +312,16 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .diff .d { color: var(--del); }
 .diff .n { color: var(--com); }
 .diff-more { display: block; }
+/* Запрос разрешения: весь ввод инструмента (команда, запись, правка, JSON) — моно, со своей прокруткой,
+   фон и скругление как у .diff. Стоит после .diff, чтобы .diff.p-code брал отступы отсюда. */
+.p-code { box-sizing: border-box; margin: 0 16px 6px 14px; max-width: 76ch; max-height: 180px; overflow: auto; padding: 6px 10px; background: var(--bg); border-radius: 6px; font-family: var(--font-code); font-size: 12.5px; line-height: 1.5; color: var(--strong); white-space: pre-wrap; word-break: break-all; }
+.diff.p-code { color: var(--text); }
+.p-note { padding: 0 16px 6px 14px; max-width: 76ch; color: var(--muted); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.p-agent { font-style: italic; }
+.p-rules { font-family: var(--font-code); font-size: 11.5px; }
+.p-rules ul { margin: 2px 0 0; padding-left: 16px; }
+/* Первые ARM_MS после появления ↵ и щелчок не принимаются — варианты приглушены. */
+.q-opts.p-wait .q-row { opacity: 0.55; cursor: default; }
 .sum { box-sizing: border-box; background: var(--sumBg); border: 1px solid var(--sumRule); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; max-width: 76ch; color: var(--text); font-family: var(--font-text); }
 .sum .who { display: flex; justify-content: space-between; gap: 12px; color: var(--accText); }
 .sum .sum-meta { color: var(--muted); text-transform: none; letter-spacing: 0; }

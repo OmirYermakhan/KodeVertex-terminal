@@ -1,5 +1,13 @@
 import type { ThemeId } from '../theme/themes'
 
+/**
+ * Режим разрешений процесса `claude` (`--permission-mode`): `default` — спрашивать всё,
+ * `acceptEdits` — правки файлов без вопросов, команды и сеть — с разрешения,
+ * `bypassPermissions` — ничего не спрашивать (опасно: инъекция в подсказку молча выполнит команды).
+ */
+export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions'
+export const CLAUDE_PERMISSION_MODES: ClaudePermissionMode[] = ['default', 'acceptEdits', 'bypassPermissions']
+
 export interface Settings {
   theme: ThemeId
   textFont: string
@@ -17,6 +25,8 @@ export interface Settings {
   notifySubagents: boolean
   /** Уведомлять о командах дольше 10 с. */
   notifyLongCommands: boolean
+  /** Режим разрешений Claude: применяется к следующей запущенной сессии. */
+  claudePermissionMode: ClaudePermissionMode
 }
 
 export const DEFAULTS: Settings = {
@@ -32,6 +42,7 @@ export const DEFAULTS: Settings = {
   notifySound: true,
   notifySubagents: false,
   notifyLongCommands: true,
+  claudePermissionMode: 'acceptEdits',
 }
 
 const THEME_IDS: ThemeId[] = ['kv', 'warm', 'cold', 'light', 'as']
@@ -76,6 +87,9 @@ export function normalizeSettings(raw: unknown): Settings {
     notifySound: bool(r.notifySound, DEFAULTS.notifySound),
     notifySubagents: bool(r.notifySubagents, DEFAULTS.notifySubagents),
     notifyLongCommands: bool(r.notifyLongCommands, DEFAULTS.notifyLongCommands),
+    claudePermissionMode: CLAUDE_PERMISSION_MODES.includes(r.claudePermissionMode as ClaudePermissionMode)
+      ? (r.claudePermissionMode as ClaudePermissionMode)
+      : DEFAULTS.claudePermissionMode,
   }
 }
 

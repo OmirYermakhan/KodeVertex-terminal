@@ -68,6 +68,18 @@ describe('StatusBar', () => {
     expect((bar.firstChild as HTMLElement).style.width).toBe('42%')
   })
 
+  it('сессия с bypassPermissions — красная плашка сразу после ◆ CLAUDE; другие режимы и без сессии — нет', () => {
+    const c = initialClaude()
+    const now = new Date(2026, 0, 1, 9, 5)
+    const { container, rerender } = render(<StatusBar git={null} now={now} claude={c} permissionMode="bypassPermissions" />)
+    expect(segs(container).slice(0, 2)).toEqual(['◆ CLAUDE', '⚠ БЕЗ РАЗРЕШЕНИЙ'])
+    expect(container.querySelector('.sg.danger')).not.toBeNull()
+    rerender(<StatusBar git={null} now={now} claude={c} permissionMode="acceptEdits" />)
+    expect(container.querySelector('.sg.danger')).toBeNull()
+    rerender(<StatusBar git={null} now={now} claude={null} permissionMode="bypassPermissions" />)
+    expect(container.querySelector('.sg.danger')).toBeNull()
+  })
+
   it('контекст больше 80% — полоска желтеет; без текущего агента нет «сейчас»', () => {
     const c = { ...initialClaude(), model: 'claude-opus-5-5', contextUsed: 170_000, contextMax: 200_000 }
     const { container } = render(<StatusBar cwd="/x/y" git={null} claude={c} now={new Date(2026, 0, 1, 9, 5)} />)
