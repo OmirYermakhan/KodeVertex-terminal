@@ -83,7 +83,7 @@ export function parseClaudeCommand(text: string): ClaudeCommand {
   return { kind: 'ask', text: unquote(rest) }
 }
 
-/** В режиме Claude: `/exit` или `exit` — выйти из режима. */
+/** В режиме Claude: `/exit` или `exit` — закрыть Claude (`/exit` — и из оболочки). */
 export function isClaudeExit(text: string): boolean {
   const t = text.trim()
   return t === '/exit' || t === 'exit'
@@ -92,4 +92,14 @@ export function isClaudeExit(text: string): boolean {
 /** `/model` (режим Claude или ⌘↵): карточка выбора модели вместо вопроса. */
 export function isModelCommand(text: string): boolean {
   return text.trim() === '/model'
+}
+
+/** `/clear` (в любом режиме: в оболочке это не команда): новая сессия Claude и чистая лента. */
+export function isClearCommand(text: string): boolean {
+  return text.trim() === '/clear'
+}
+
+/** `clear` в оболочке: очистить ленту, как ⌃L (в PTY не уходит — экрана у блоков нет). */
+export function isShellClear(text: string): boolean {
+  return text.trim() === 'clear'
 }

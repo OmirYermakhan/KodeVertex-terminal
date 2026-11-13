@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTabs, type Tab } from '../layout/tabsStore'
 import { projectName, useHome, type GitInfo } from '../status/useGitInfo'
-import { useClaudeSessions } from '../claude/sessionStore'
+import { claudeOpen, useClaudeSessions } from '../claude/sessionStore'
 import { tabStatus } from './tabStatus'
 
 export function tabTitle(t: Tab, git: GitInfo | null = null, home = ''): string {
@@ -43,7 +43,7 @@ export default function TabBar({ activeGit = null }: { activeGit?: GitInfo | nul
         let dot: string | null = on ? 'on' : null
         if (st && st.status !== 'done') dot = st.status
         else if (st?.status === 'done' && !on && st.doneAt > (seen[t.id] ?? 0)) dot = 'done'
-        const claude = !!sessions[t.focused]
+        const claude = claudeOpen(sessions[t.focused])
         return (
           <div
             key={t.id}

@@ -9,7 +9,7 @@ import { CompletionPopup, LIST_WIDTH, PREVIEW_WIDTH, popupHeight } from '../comp
 import { useHints } from '../completion/useHints'
 import { HintsPopup } from '../completion/HintsPopup'
 import { shellEscape } from '../completion/completion'
-import { isClaudeExit, isModelCommand, parseClaudeCommand } from './claudeCommand'
+import { isClaudeExit, isClearCommand, isModelCommand, isShellClear, parseClaudeCommand } from './claudeCommand'
 import { ModelPicker } from '../claude/ModelPicker'
 import { initialPicker, pickerKey, type ModelChoice, type PickerState } from '../claude/models'
 import { getHistory, historyStep, loadHistory, NAV_START, pushHistory, type HistoryNav } from './history'
@@ -83,11 +83,18 @@ export interface InputBarProps {
    * false — строка очищается.
    */
   onInterrupt(empty: boolean, claude: boolean): boolean
-  /** ⌃L: очистить ленту. */
+  /** ⌃L (и `clear` в оболочке): очистить ленту. */
   onClearFeed(): void
+  /**
+   * `/clear` ↵ (в любом режиме): новая сессия Claude с чистой лентой. true — панель в режиме Claude;
+   * false — не удалось (каталог неизвестен). Нет — `/clear` уходит как набран.
+   */
+  onNewClaude?(): boolean
+  /** `/exit` (в любом режиме) или `exit` в режиме Claude: закрыть Claude панели. */
+  onExitClaude?(): void
   /** ⌃D на пустой строке: EOF в оболочку. */
   onEof?(): void
-  /** `/model` (режим Claude или ⌘↵): выбор модели. Нет — `/model` уходит вопросом. */
+  /** `/model` (в любом режиме: в оболочке это не команда): выбор модели. Нет — `/model` уходит как набран. */
   onChooseModel?(choice: ModelChoice): void
   /** Текущие модель (псевдоним, null — по умолчанию) и усилие панели — для карточки выбора. */
   modelInfo?(): { current: string | null; effort: string | null }
@@ -329,12 +336,18 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       // Строку не чистим: родитель сразу возвращает в неё черновик (restore).
       q.edit.onSubmit(d.text, d.tokens.length > 0 ? d.tokens : undefined)
       return
-    } else if ((ask || claudeRef.current) && isModelCommand(text) && q.onChooseModel) {
+    } else if (!q.continuation && isClearCommand(text) && q.onNewClaude) {
+      completionRef.current.close()
+      hintsRef.current.close()
+      if (q.onNewClaude()) setClaudeMode(true)
+    } else if (!q.continuation && isModelCommand(text) && q.onChooseModel) {
       const info = q.modelInfo?.() ?? { current: null, effort: null }
       completionRef.current.close()
       hintsRef.current.close()
       setPickerState(initialPicker(info.current, info.effort))
-    } else if (claudeRef.current && isClaudeExit(text)) {
+    } else if (!q.continuation && (text.trim() === '/exit' || (claudeRef.current && isClaudeExit(text)))) {
+      // Как выход из claude в терминале: сессия закрывается, строка — снова оболочка.
+      q.onExitClaude?.()
       setClaudeMode(false)
     } else if (ask || claudeRef.current) {
       const d = docOf(text, tokens)
@@ -348,6 +361,15 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     } else {
       // Значки бывают только в режиме Claude; на всякий случай — читаемым видом.
       const line = readable(docOf(text, tokens))
+      if (!props.current.continuation && isShellClear(line)) {
+        props.current.onClearFeed()
+        pushHistory(line)
+        nav.current = NAV_START
+        setLine('', 0)
+        completionRef.current.reset()
+        hintsRef.current.reset()
+        return
+      }
       // Продолжение незаконченной команды (PS2) — это не команда `claude`.
       const c = props.current.continuation ? { kind: 'shell' as const, cmd: line } : parseClaudeCommand(line)
       if (c.kind === 'shell') {

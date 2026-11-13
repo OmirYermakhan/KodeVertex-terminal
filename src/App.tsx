@@ -12,7 +12,7 @@ import { useUi } from './ui/uiStore'
 import { useGitInfo } from './status/useGitInfo'
 import Toasts from './notify/Toasts'
 import { installNotifications } from './notify/notify'
-import { useClaudeSessions } from './claude/sessionStore'
+import { claudeOpen, useClaudeSessions } from './claude/sessionStore'
 import { installDragDrop, useAttachCount } from './attach/dragDrop'
 
 const REPEATABLE = new Set<Action>(['fontBigger', 'fontSmaller'])
@@ -27,8 +27,14 @@ export default function App() {
   })
   const focusedPane = useTabs((s) => s.tabs.find((x) => x.id === s.active)?.focused)
   const git = useGitInfo(cwd)
-  const claude = useClaudeSessions((s) => (focusedPane ? s.sessions[focusedPane]?.state : undefined))
-  const permissionMode = useClaudeSessions((s) => (focusedPane ? s.sessions[focusedPane]?.permissionMode : undefined))
+  const claude = useClaudeSessions((s) => {
+    const p = focusedPane ? s.sessions[focusedPane] : undefined
+    return claudeOpen(p) ? p.state : undefined
+  })
+  const permissionMode = useClaudeSessions((s) => {
+    const p = focusedPane ? s.sessions[focusedPane] : undefined
+    return claudeOpen(p) ? p.permissionMode : undefined
+  })
   const settingsOpen = useUi((s) => s.settingsOpen)
   const attachments = useAttachCount((s) => (focusedPane ? (s.counts[focusedPane] ?? 0) : 0))
 

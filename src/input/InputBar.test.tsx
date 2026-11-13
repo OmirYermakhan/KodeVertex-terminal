@@ -263,17 +263,16 @@ describe('InputBar', () => {
       expect(p.onRun).toHaveBeenLastCalledWith('ls')
     })
 
-    it('⌘↵ с /exit в режиме тоже выходит; вне режима — вопрос', () => {
+    it('⌘↵ с /exit выходит и в режиме, и вне его — не вопрос агенту', () => {
       const { p, set, key, container } = setup()
       set('/exit')
       key('Enter', { metaKey: true })
-      expect(p.onAsk).toHaveBeenLastCalledWith('/exit')
       set('claude')
       key('Enter')
       set('/exit')
       key('Enter', { metaKey: true })
       expect(inMode(container)).toBe(false)
-      expect(p.onAsk).toHaveBeenCalledTimes(1)
+      expect(p.onAsk).not.toHaveBeenCalled()
     })
 
     it('во время продолжения команды (PS2) `claude` уходит в оболочку', () => {
@@ -1005,5 +1004,87 @@ describe('InputBar: правка отправленного сообщения',
     s.set('x')
     s.key('e', { code: 'KeyE' })
     expect(onEditSelected).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('InputBar: /clear и clear', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    invoke.mockResolvedValue([])
+    resetHistory()
+  })
+
+  it('`/clear` в оболочке — новая сессия Claude и режим Claude, в оболочку не уходит', () => {
+    const onNewClaude = vi.fn(() => true)
+    const s = setup({ onNewClaude })
+    s.set('/clear')
+    s.key('Enter')
+    expect(onNewClaude).toHaveBeenCalledTimes(1)
+    expect(s.p.onRun).not.toHaveBeenCalled()
+    expect(s.ta.value).toBe('')
+    expect(s.container.querySelector('.input .ph')!.textContent).toBe(CLAUDE_PLACEHOLDER)
+  })
+
+  it('`/clear` в режиме Claude — не вопрос агенту', () => {
+    const onNewClaude = vi.fn(() => true)
+    const s = setup({ onNewClaude })
+    s.set('claude')
+    s.key('Enter')
+    s.set('/clear')
+    s.key('Enter')
+    expect(onNewClaude).toHaveBeenCalledTimes(1)
+    expect(s.p.onAsk).not.toHaveBeenCalled()
+  })
+
+  it('`clear` в оболочке — очистка ленты, в PTY не уходит', () => {
+    const s = setup()
+    s.set('clear')
+    s.key('Enter')
+    expect(s.p.onClearFeed).toHaveBeenCalledTimes(1)
+    expect(s.p.onRun).not.toHaveBeenCalled()
+    expect(s.ta.value).toBe('')
+  })
+
+  it('`/model` в оболочке открывает выбор модели', () => {
+    const s = setup({ onChooseModel: vi.fn(), modelInfo: () => ({ current: null, effort: null }) })
+    s.set('/model')
+    s.key('Enter')
+    expect(s.p.onRun).not.toHaveBeenCalled()
+    expect(s.container.querySelector('.mp')).not.toBeNull()
+  })
+})
+
+describe('InputBar: /exit закрывает Claude', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    invoke.mockResolvedValue([])
+    resetHistory()
+  })
+
+  it('`/exit` и `exit` в режиме Claude — onExitClaude и снова оболочка', () => {
+    const onExitClaude = vi.fn()
+    const s = setup({ onExitClaude })
+    for (const cmd of ['/exit', 'exit']) {
+      s.set('claude')
+      s.key('Enter')
+      s.set(cmd)
+      s.key('Enter')
+    }
+    expect(onExitClaude).toHaveBeenCalledTimes(2)
+    expect(s.container.querySelector('.input .ph')!.textContent).toBe(PLACEHOLDER)
+    expect(s.p.onRun).not.toHaveBeenCalled()
+  })
+
+  it('`/exit` в оболочке тоже закрывает Claude и не уходит в zsh; `exit` — в оболочку', () => {
+    const onExitClaude = vi.fn()
+    const s = setup({ onExitClaude })
+    s.set('/exit')
+    s.key('Enter')
+    expect(onExitClaude).toHaveBeenCalledTimes(1)
+    expect(s.p.onRun).not.toHaveBeenCalled()
+    s.set('exit')
+    s.key('Enter')
+    expect(s.p.onRun).toHaveBeenCalledWith('exit')
+    expect(onExitClaude).toHaveBeenCalledTimes(1)
   })
 })

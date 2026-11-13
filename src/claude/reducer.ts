@@ -177,6 +177,29 @@ export function newSession(s: ClaudeState): ClaudeState {
   return { ...s, sessionId: null, chain: null, epoch: s.epoch + 1 }
 }
 
+/**
+ * `/clear`: новая сессия с чистого листа — недоигранное закрыто, вопросы и разрешения сняты,
+ * агенты и контекст как у новой сессии. Элементы остаются (их скрывает лента), индексы не сдвигаются.
+ */
+export function clearSession(s: ClaudeState): ClaudeState {
+  const fresh = initialClaude()
+  const items = s.items.map((it): FeedClaudeItem => {
+    if (it.type === 'assistant' && it.streaming) return { ...it, streaming: false }
+    if (it.type === 'action' && it.status === 'running') return { ...it, status: 'error' }
+    return it
+  })
+  return {
+    ...newSession(cancelPrompts({ ...s, items }, undefined, 'stop')),
+    busy: false,
+    pending: 0,
+    currentAgentId: null,
+    contextUsed: 0,
+    costUsd: 0,
+    agents: fresh.agents,
+    edits: {},
+  }
+}
+
 function patchAgent(s: ClaudeState, id: string, patch: Partial<Agent> | ((a: Agent) => Partial<Agent>)): ClaudeState {
   return {
     ...s,

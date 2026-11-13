@@ -24,7 +24,7 @@ export function tabStatus(tab: Tab, sessions: Record<string, PaneClaude>): { sta
   let best: { status: ClaudeStatus; doneAt: number } | null = null
   for (const id of leaves(tab.tree)) {
     const s = sessions[id]
-    const st = s ? sessionStatus(s.state) : null
+    const st = s && !s.closed ? sessionStatus(s.state) : null
     if (!st) continue
     if (!best || RANK[st.status] > RANK[best.status]) best = st
     else if (st.status === 'done' && best.status === 'done') best = { status: 'done', doneAt: Math.max(best.doneAt, st.doneAt) }

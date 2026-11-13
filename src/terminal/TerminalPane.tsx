@@ -22,7 +22,7 @@ import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
 import { applyShell, claudeIndex, claudeItemId, commandBytes, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
-import { editClaude, dismissQueueHint, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, enterClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
+import { editClaude, dismissQueueHint, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
 import { aliasOf } from '../claude/models'
 import { canEdit, editInfo, lastEditable, pendingPrompt, type PermissionDecision } from '../claude/reducer'
 import { EditChip } from '../claude/EditChip'
@@ -767,6 +767,18 @@ export function TerminalPane(p: TerminalPaneProps) {
     },
     [p.paneId, onClearFeed],
   )
+  // `/clear`: прежняя сессия остановлена, лента пуста целиком (недоигранный ответ тоже), дальше — новая сессия.
+  const onNewClaude = useCallback(() => {
+    if (claudeCwdKnown(p.paneId, cwdRef.current)) {
+      const n = useClaudeSessions.getState().sessions[p.paneId]?.state.items.length ?? 0
+      clearClaude(p.paneId)
+      claudeFrom.current = n
+      setItems((it) => it.filter((x) => (x.kind === 'shell' ? x.running : claudeIndex(x.id) >= n)))
+      setSelected(null)
+    }
+    return enterClaude(p.paneId, cwdRef.current)
+  }, [p.paneId])
+  const onExitClaude = useCallback(() => exitClaude(p.paneId), [p.paneId])
   const onChooseModel = useCallback((c: ModelChoice) => void chooseModel(p.paneId, cwdRef.current, c), [p.paneId])
   // Текущая модель: выбранная в `/model` для панели, иначе из настроек Claude Code, иначе Default.
   const modelInfo = useCallback(() => {
@@ -993,7 +1005,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       />
       </PreviewContext.Provider>
       <div className="dock">
-        {claude && !agentsHidden && (
+        {claudeOpen(claude) && !agentsHidden && (
           <ErrorBoundary name="панель агентов">
             <AgentsPanel ref={agentsRef} state={claude.state} queued={queue.length} onExit={() => inputRef.current?.focus()} />
           </ErrorBoundary>
@@ -1059,6 +1071,8 @@ export function TerminalPane(p: TerminalPaneProps) {
           onTokens={onTokens}
           onAcceptsTokens={setAcceptsTokens}
           onEnterClaude={onEnterClaude}
+          onNewClaude={onNewClaude}
+          onExitClaude={onExitClaude}
           onChooseModel={onChooseModel}
           modelInfo={modelInfo}
           onInterrupt={onInterrupt}

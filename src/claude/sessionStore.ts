@@ -2,7 +2,7 @@
 // чтобы его читали лента панели, панель агентов и статус-бар.
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { create } from 'zustand'
-import { canEdit, cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaude, newSession, questionSteps, recordAnswer, reduceClaude, replaceFrom, userSent, type ClaudeState } from './reducer'
+import { canEdit, cancelPrompts, clearSession, decidePermission, finishQuestion, gotoStep, initialClaude, newSession, questionSteps, recordAnswer, reduceClaude, replaceFrom, userSent, type ClaudeState } from './reducer'
 import { allowResponse, alwaysResponse, answerResponse, denyResponse, parsePermissionRequest } from './questions'
 import type { FeedClaudeItem, PermissionDecision } from './reducer'
 import { GET_SETTINGS, effortRequest, modelNote, persistedModel, setModelRequest, type ModelChoice } from './models'
@@ -50,6 +50,11 @@ export interface PaneClaude {
    * ответвлением (`--fork-session`). Сбрасывается запуском.
    */
   rewindAt?: string | null
+  /**
+   * `/exit`: Claude закрыт, как после выхода из claude в терминале — панели агентов и плашки нет,
+   * карточки остаются в ленте. Следующий вопрос или `claude` начинает новую сессию.
+   */
+  closed?: boolean
 }
 
 export interface QueuedMessage {
@@ -403,6 +408,7 @@ function switchCwd(paneId: string, paneCwd: string | undefined): string | null {
     patchState(paneId, (s) => ({ ...newSession(stopped(s, Date.now())), contextUsed: 0 }))
   }
   if (cur.cwd !== cwd) patch(paneId, (p) => ({ ...p, cwd }))
+  if (cur.closed) patch(paneId, (p) => ({ ...p, closed: false }))
   return cwd
 }
 
@@ -420,6 +426,25 @@ export function enterClaude(paneId: string, paneCwd: string | undefined): boolea
   if (!procs.has(paneId)) start(paneId)
   return true
 }
+
+/**
+ * `/clear`: процесс панели останавливается, очередь и правка забываются, дальше — новая сессия
+ * (без --resume). Модель и усилие из `/model` остаются.
+ */
+export function clearClaude(paneId: string): void {
+  dropProc(paneId)
+  patch(paneId, (p) => ({ ...p, procId: null, queue: [], paused: false, pauseHint: false, rewindAt: null, state: clearSession(p.state) }))
+}
+
+/** `/exit`: закрыть Claude панели (процесс остановлен, сессия забыта); лента не трогается. */
+export function exitClaude(paneId: string): void {
+  if (!(paneId in useClaudeSessions.getState().sessions)) return
+  clearClaude(paneId)
+  patch(paneId, (p) => ({ ...p, closed: true }))
+}
+
+/** Сессия панели открыта (не закрыта `/exit`): видны панель агентов, плашка и точка вкладки. */
+export const claudeOpen = (s: PaneClaude | undefined): s is PaneClaude => !!s && !s.closed
 
 /** Каталог для сессии панели известен (из панели или прежней сессии): askClaude не упадёт на NO_CWD. */
 export function claudeCwdKnown(paneId: string, paneCwd: string | undefined): boolean {

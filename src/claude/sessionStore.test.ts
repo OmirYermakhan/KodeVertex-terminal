@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
 }))
 
-const { editClaude, recallQueued, removeQueued, sendQueued, dismissQueueHint, answerPermission, answerQuestion, interruptClaude, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
+const { claudeOpen, clearClaude, exitClaude, editClaude, recallQueued, removeQueued, sendQueued, dismissQueueHint, answerPermission, answerQuestion, interruptClaude, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
 
 const { useSettings } = await import('../settings/store')
 
@@ -600,5 +600,66 @@ describe('editClaude (правка отправленного сообщения
     await flush()
     expect(calls('claude_send').map((c) => (c[1] as { text: string }).text)).toEqual(['первое', 'второе', 'второе!', 'потом'])
     expect(sess().queue).toEqual([])
+  })
+})
+
+describe('clearClaude (/clear)', () => {
+  beforeEach(() => {
+    stopClaude('p')
+    invoke.mockReset()
+    invoke.mockImplementation((cmd: string) => Promise.resolve(cmd === 'claude_start' ? 'proc-1' : undefined))
+  })
+
+  it('останавливает процесс и забывает сессию: следующий запуск — без --resume, очередь пуста', async () => {
+    enterClaude('p', '/w')
+    await askClaude('p', '/w', 'первый')
+    useClaudeSessions.setState((st) => ({
+      sessions: { ...st.sessions, p: { ...st.sessions.p, state: { ...st.sessions.p.state, sessionId: 'old', busy: true, contextUsed: 5000 } } },
+    }))
+    await askClaude('p', '/w', 'в очередь')
+    expect(useClaudeSessions.getState().sessions.p.queue).toHaveLength(1)
+    const before = items('p').length
+    clearClaude('p')
+    const p = useClaudeSessions.getState().sessions.p
+    expect(calls('claude_stop')).toEqual([['claude_stop', { id: 'proc-1' }]])
+    expect(p.state.sessionId).toBeNull()
+    expect(p.state.busy).toBe(false)
+    expect(p.state.contextUsed).toBe(0)
+    expect(p.queue).toEqual([])
+    // Индексы не сдвигаются: лента скрывает прежнее сама.
+    expect(items('p')).toHaveLength(before)
+    enterClaude('p', '/w')
+    await flush()
+    expect(calls('claude_start')).toHaveLength(2)
+    expect(calls('claude_start')[1][1]).toMatchObject({ cwd: '/w', resume: null })
+  })
+})
+
+describe('exitClaude (/exit)', () => {
+  beforeEach(() => {
+    stopClaude('p')
+    invoke.mockReset()
+    invoke.mockImplementation((cmd: string) => Promise.resolve(cmd === 'claude_start' ? 'proc-1' : undefined))
+  })
+
+  it('процесс остановлен, сессия закрыта, карточки остаются; следующий вопрос — новая сессия', async () => {
+    enterClaude('p', '/w')
+    await askClaude('p', '/w', 'привет')
+    const n = items('p').length
+    exitClaude('p')
+    expect(calls('claude_stop')).toHaveLength(1)
+    expect(claudeOpen(useClaudeSessions.getState().sessions.p)).toBe(false)
+    expect(items('p')).toHaveLength(n)
+    await askClaude('p', '/w', 'снова')
+    expect(claudeOpen(useClaudeSessions.getState().sessions.p)).toBe(true)
+    expect(calls('claude_start')).toHaveLength(2)
+    expect(calls('claude_start')[1][1]).toMatchObject({ resume: null })
+    // Новая сессия отмечена строкой в ленте.
+    expect(items('p').slice(n).some((i) => i.type === 'session')).toBe(true)
+  })
+
+  it('без сессии — ничего', () => {
+    exitClaude('p')
+    expect(useClaudeSessions.getState().sessions.p).toBeUndefined()
   })
 })
