@@ -1,4 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { formatDuration } from '../../feed/feed'
+import { formatCost } from '../../format'
 import { modelLabel } from '../labels'
 import { Markdown } from '../Markdown'
 import type { Agent } from '../reducer'
@@ -37,6 +39,7 @@ export const AssistantCard = memo(function AssistantCard({
   agent,
   text,
   streaming,
+  turn,
   id,
   selected,
   onAttach,
@@ -46,6 +49,8 @@ export const AssistantCard = memo(function AssistantCard({
   agent: Agent | undefined
   text: string
   streaming: boolean
+  /** Время и цена хода — у последнего ответа хода. */
+  turn?: { durationMs: number; costUsd: number }
   id?: string
   /** Выбран ⌘↑ (⌘L вложит его в сообщение). */
   selected?: boolean
@@ -119,6 +124,11 @@ export const AssistantCard = memo(function AssistantCard({
         <button type="button" className="blk-more ans-more" aria-expanded={!collapsed} onMouseDown={(e) => e.preventDefault()} onClick={() => (collapsed ? setExpanded(true) : collapse())}>
           {collapsed ? SHOW_ALL : COLLAPSE}
         </button>
+      )}
+      {turn && !streaming && (
+        <div className="turn-meta" data-testid="turn-meta">
+          {formatDuration(turn.durationMs)} · {formatCost(turn.costUsd)}
+        </div>
       )}
     </div>
   )

@@ -1,11 +1,7 @@
 import { memo } from 'react'
 import { formatDuration } from '../../feed/feed'
+import { formatCost } from '../../format'
 import { Markdown } from '../Markdown'
-
-export function formatCost(usd: number): string {
-  if (usd > 0 && usd < 0.01) return `$${usd.toFixed(3)}`
-  return `$${usd.toFixed(2)}`
-}
 
 /** Итог хода (макет 02, вариант B, .sum): «✓ Итог», время и стоимость; без текста — «✓ Готово». */
 export const SummaryCard = memo(function SummaryCard({

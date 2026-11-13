@@ -2,7 +2,7 @@
 // чтобы его читали лента панели, панель агентов и статус-бар.
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { create } from 'zustand'
-import { canEdit, cancelPrompts, clearSession, dropSuggestion, decidePermission, finishQuestion, gotoStep, initialClaude, newSession, questionSteps, recordAnswer, reduceClaude, replaceFrom, userSent, type ClaudeState } from './reducer'
+import { canEdit, cancelPrompts, clearSession, dropSuggestion, decidePermission, finishQuestion, gotoStep, initialClaude, newProcess, newSession, questionSteps, recordAnswer, reduceClaude, replaceFrom, userSent, type ClaudeState } from './reducer'
 import { allowResponse, alwaysResponse, answerResponse, denyResponse, parsePermissionRequest } from './questions'
 import type { FeedClaudeItem, PermissionDecision } from './reducer'
 import { GET_SETTINGS, effortRequest, modelNote, persistedModel, setModelRequest, type ModelChoice } from './models'
@@ -188,7 +188,7 @@ function start(paneId: string): Proc {
   const permissionMode = (prev.rewindAt ? prev.permissionMode : null) ?? useSettings.getState().settings.claudePermissionMode
   // Подсказка следующего сообщения (`--prompt-suggestions`): из настроек на момент запуска.
   const promptSuggestions = useSettings.getState().settings.claudePromptSuggestions
-  patch(paneId, (p) => ({ ...p, permissionMode, rewindAt: null }))
+  patch(paneId, (p) => ({ ...p, permissionMode, rewindAt: null, state: newProcess(p.state) }))
   let gotLine = false
   const onLine = new Channel<string>((line) => {
     gotLine = true

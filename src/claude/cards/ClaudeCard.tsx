@@ -69,7 +69,7 @@ export const ClaudeCard = memo(function ClaudeCard({
     case 'user':
       return <UserBubble id={item.id} text={it.text} tokens={it.tokens} selected={selected} editing={editing} onEdit={onEdit} />
     case 'assistant':
-      return <AssistantCard id={item.id} agent={agent} text={it.text} streaming={it.streaming} selected={selected} onAttach={onAttach} onCopy={onCopy} onRead={onRead} />
+      return <AssistantCard id={item.id} agent={agent} text={it.text} streaming={it.streaming} turn={it.turn} selected={selected} onAttach={onAttach} onCopy={onCopy} onRead={onRead} />
     case 'action':
       // Вопрос агента показывает своя карточка (question), действие «AskUserQuestion» не дублируем.
       if (it.tool === 'AskUserQuestion') return null

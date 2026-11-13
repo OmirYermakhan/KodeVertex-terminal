@@ -12,7 +12,7 @@ export type FeedClaudeItem =
    * порядку (хранятся как есть, не разбираются из текста: правка сообщения вернёт их в строку).
    */
   | { type: 'user'; text: string; tokens?: Attachment[] }
-  | { type: 'assistant'; agentId: string; text: string; streaming: boolean }
+  | { type: 'assistant'; agentId: string; text: string; streaming: boolean; turn?: { durationMs: number; costUsd: number } }
   | {
       type: 'action'
       agentId: string
@@ -110,7 +110,12 @@ export interface ClaudeState {
   defaultModel: string | null
   contextUsed: number
   contextMax: number
+  /** Стоимость сессии целиком: costBase (завершённые процессы) + costProc (нарастающий итог текущего). */
   costUsd: number
+  /** Сумма итогов прежних процессов `claude`: у перезапущенного (--resume, правка) итог идёт с нуля. */
+  costBase?: number
+  /** `total_cost_usd` последнего result текущего процесса. */
+  costProc?: number
   busy: boolean
   /** Отправленные и ещё не завершённые ходы (сообщения в очереди claude); busy = pending > 0. */
   pending: number
@@ -200,6 +205,11 @@ export function initialClaude(): ClaudeState {
   }
 }
 
+/** Запуск нового процесса `claude`: его `total_cost_usd` начнётся с нуля, набранное сохраняется. */
+export function newProcess(s: ClaudeState): ClaudeState {
+  return { ...s, costBase: s.costUsd, costProc: 0 }
+}
+
 /** Новая сессия (другой каталог, --resume не удался): прежние сообщения больше не правятся. */
 export function newSession(s: ClaudeState): ClaudeState {
   return { ...s, sessionId: null, chain: null, epoch: s.epoch + 1, suggestion: null }
@@ -223,6 +233,8 @@ export function clearSession(s: ClaudeState): ClaudeState {
     currentAgentId: null,
     contextUsed: 0,
     costUsd: 0,
+    costBase: 0,
+    costProc: 0,
     agents: fresh.agents,
     edits: {},
   }
@@ -453,7 +465,14 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
   // Ход закончен — его вопросы и запросы разрешений больше не ждут ответа.
   const s = cancelPrompts(prev)
   const isError = ev.is_error === true
-  const cost = typeof ev.total_cost_usd === 'number' ? ev.total_cost_usd : s.costUsd
+  const prevProc = s.costProc ?? 0
+  const procTotal = typeof ev.total_cost_usd === 'number' && ev.total_cost_usd >= 0 ? ev.total_cost_usd : prevProc
+  // Ход стоит разницу нарастающих итогов процесса; итог сессии — с учётом прежних процессов.
+  // Итог процесса не растёт, а стал меньше — это уже другой процесс: прежний итог уходит в базу.
+  const reset = procTotal < prevProc
+  const costBase = (s.costBase ?? 0) + (reset ? prevProc : 0)
+  const turnCost = reset ? procTotal : procTotal - prevProc
+  const cost = costBase + procTotal
   let contextMax = s.contextMax
   if (isRec(ev.modelUsage)) {
     const windows = Object.values(ev.modelUsage)
@@ -465,7 +484,18 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
     it.type === 'assistant' && it.streaming ? { ...it, streaming: false } : it,
   )
   const result = strOr(ev.result)
-  items.push({ type: 'summary', text: repeatsAnswer(items, result) ? '' : result, durationMs: num(ev.duration_ms), costUsd: cost, isError })
+  const durationMs = num(ev.duration_ms)
+  items.push({ type: 'summary', text: repeatsAnswer(items, result) ? '' : result, durationMs, costUsd: turnCost, isError })
+  // Время и цена хода — в подвале последнего ответа главного агента этого хода.
+  for (let i = items.length - 2; i >= 0; i--) {
+    const it = items[i]
+    // Граница хода — итог предыдущего; сообщение «Вы» из очереди между ответом и result не мешает.
+    if (it.type === 'summary') break
+    if (it.type === 'assistant' && it.agentId === MAIN) {
+      items[i] = { ...it, turn: { durationMs, costUsd: turnCost } }
+      break
+    }
+  }
   // Ход закончен: его незавершённые действия и субагенты больше не идут.
   const closed: FeedClaudeItem[] = items.map((it) =>
     it.type === 'action' && it.status === 'running' ? { ...it, status: isError ? 'error' : 'done' } : it,
@@ -477,6 +507,8 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
     pending,
     busy: pending > 0,
     costUsd: cost,
+    costBase,
+    costProc: procTotal,
     contextMax,
     // Подсказка прежнего хода устарела; новая придёт после этого result.
     suggestion: null,

@@ -131,6 +131,14 @@ describe('карточки', () => {
     expect(screen.getByText('Сделай модуль оплаты')).toBeInTheDocument()
   })
 
+  it('подвал хода: время и цена у готового ответа, не во время стрима', () => {
+    const turn = { durationMs: 3000, costUsd: 0.15 }
+    const { getByTestId, rerender, queryByTestId } = render(<AssistantCard agent={agent()} text="Готово" streaming={false} turn={turn} />)
+    expect(getByTestId('turn-meta').textContent).toContain('$0.15')
+    rerender(<AssistantCard agent={agent()} text="Готово" streaming turn={turn} />)
+    expect(queryByTestId('turn-meta')).toBeNull()
+  })
+
   it('ответ: подпись «Имя агента · Модель»', () => {
     const { container } = render(<AssistantCard agent={agent()} text="Готово" streaming={false} />)
     expect(container.querySelector('.card .who')?.textContent).toBe('Главный · Opus 5.5')
