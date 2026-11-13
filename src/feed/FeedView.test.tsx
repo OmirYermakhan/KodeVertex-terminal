@@ -71,6 +71,11 @@ describe('Feed', () => {
 })
 
 describe('ShellBlockView', () => {
+  it('блок, прерванный закрытием приложения, — «прервано» и длительность', () => {
+    const { container } = render(<ShellBlockView block={blk({ interrupted: true, exitCode: null, html: null, lines: 0, durationMs: 2000 })} selected={false} />)
+    expect(container.querySelector('.bh')?.textContent).toContain('прервано · 2.0 с')
+  })
+
   it('заголовок ❯ команда и длительность', () => {
     const { container } = render(<ShellBlockView block={blk()} selected={false} />)
     expect(container.querySelector('.bh .p')!.textContent).toBe('❯')
@@ -93,6 +98,21 @@ describe('ShellBlockView', () => {
     fireEvent.click(screen.getByRole('button', { name: `Показать всё (${n} строк)` }))
     expect(container.querySelectorAll('.out > div')).toHaveLength(n)
     expect(screen.queryByRole('button')).toBeNull()
+  })
+
+  it('действия в заголовке: «Повторить» есть, если передан; «Спросить Claude» — только при коде ≠ 0; у идущего — ничего', () => {
+    const onRepeat = vi.fn()
+    const onAsk = vi.fn()
+    const ok = render(<ShellBlockView block={blk()} selected={false} onRepeat={onRepeat} onAsk={onAsk} />)
+    expect(ok.container.querySelector('.bh .bh-act')!.textContent).toBe('Повторить')
+    ok.unmount()
+    const bad = render(<ShellBlockView block={blk({ exitCode: 1 })} selected={false} onAsk={onAsk} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Спросить Claude' }))
+    expect(onAsk).toHaveBeenCalledWith('b1')
+    expect(screen.queryByRole('button', { name: 'Повторить' })).toBeNull()
+    bad.unmount()
+    const run = render(<ShellBlockView block={blk({ running: true, exitCode: null })} selected={false} onRepeat={onRepeat} onAsk={onAsk} />)
+    expect(run.container.querySelector('.bh-act')).toBeNull()
   })
 
   it(`ровно ${COLLAPSE_LINES} строк — не свёрнут`, () => {

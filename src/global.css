@@ -208,6 +208,10 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .hp-n { color: var(--strong); font-family: var(--font-code); font-size: 13px; }
 .hp-n b { color: var(--accText); font-weight: 700; }
 .hp-d { color: var(--muted); font-family: var(--font-text); font-size: 12.5px; max-width: 52ch; }
+/* Поиск ⌃R по истории: одна колонка — команда целиком. */
+.cp.hs { min-width: min(420px, calc(100% - 24px)); }
+.hp-row.hs-row { grid-template-columns: minmax(0, 1fr); }
+.hs-empty { color: var(--muted); cursor: default; }
 .hp-keys { padding: 6px 14px; border-top: 1px solid var(--rule); font-family: var(--font-code); font-size: 10.5px; line-height: normal; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Выбор модели (`/model`): та же рамка .cp.hp, номера, ✓ текущей (--add), Fable — золотом, строка усилия. */
 .mp .hp-h { padding-bottom: 2px; }
@@ -265,6 +269,12 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .hover-act button.on { cursor: grab; }
 .hover-act button { font: inherit; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 3px 8px; color: var(--text); cursor: pointer; }
 .hover-act button.on { border-color: var(--acc); color: var(--strong); background: color-mix(in srgb, var(--acc) 12%, var(--bg)); }
+/* Действия в заголовке замороженного блока (перед длительностью): при наведении и у выбранного. */
+.blk .bh-act { display: none; gap: 4px; margin-right: 8px; vertical-align: middle; }
+.blk:hover .bh-act, .blk.sel .bh-act { display: inline-flex; }
+.bh-act button { font: inherit; font-size: 11px; line-height: normal; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 0 8px; color: var(--text); cursor: pointer; }
+.bh-act button:hover { border-color: var(--acc); }
+.bh-act button.ask { border-color: var(--acc); color: var(--accText); background: color-mix(in srgb, var(--acc) 12%, var(--bg)); }
 .blk.sel { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 6%, transparent); }
 .blk.err { border-left: 2px solid var(--del); padding-left: 11px; }
 .blk .exit { color: var(--del); }
@@ -423,6 +433,10 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .in-field { position: relative; flex: 1; min-width: 0; display: flex; }
 .in-ta { flex: 1; min-width: 0; display: block; box-sizing: border-box; margin: 0; padding: 0; border: 0; outline: none; resize: none; background: transparent; color: var(--strong); font: inherit; line-height: var(--input-lh, 18px); min-height: var(--input-lh, 18px); max-height: calc(var(--input-lh, 18px) * 8); caret-color: var(--accText); white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; font-variant-ligatures: var(--liga); -webkit-user-modify: read-write-plaintext-only; }
 .in-ta.empty { caret-color: transparent; }
+/* Подсказка-призрак: копия набранного (невидимая) + остаток записи истории тусклым, поверх поля. */
+.in-ghost { position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: none; white-space: pre-wrap; overflow-wrap: anywhere; line-height: var(--input-lh, 18px); overflow: hidden; font-variant-ligatures: var(--liga); }
+.in-ghost-pre { visibility: hidden; }
+.in-ghost-rest { color: var(--muted); opacity: 0.55; }
 .in-ta[aria-disabled='true'] { background: transparent; color: var(--muted); -webkit-user-modify: read-only; }
 .clip { flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; display: grid; place-items: center; background: transparent; color: var(--muted); cursor: pointer; }
 .clip:hover:not(:disabled) { color: var(--strong); background: color-mix(in srgb, var(--strong) 8%, transparent); }

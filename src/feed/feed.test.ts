@@ -1,8 +1,24 @@
 import { describe, expect, it } from 'vitest'
-import { applyShell, commandBytes, COLLAPSE_LINES, formatDuration, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from './feed'
+import { applyShell, ASK_TAIL_LINES, commandBytes, COLLAPSE_LINES, failurePrompt, formatDuration, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from './feed'
 import type { FeedClaudeItem } from '../claude/reducer'
 
 const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
+
+describe('failurePrompt', () => {
+  it('команда, код, каталог и вывод в блоке кода', () => {
+    expect(failurePrompt('npm test', 1, '/w/app', 'FAIL a\nFAIL b')).toBe(
+      'Команда `npm test` завершилась с кодом 1 в /w/app. Вывод:\n```\nFAIL a\nFAIL b\n```\nПомоги понять причину и исправить.',
+    )
+  })
+
+  it(`из длинного вывода — последние ${ASK_TAIL_LINES} строк`, () => {
+    const out = Array.from({ length: ASK_TAIL_LINES + 50 }, (_, i) => `l${i}`).join('\n')
+    const body = /```\n([\s\S]*)\n```/.exec(failurePrompt('x', 2, '/', out))![1].split('\n')
+    expect(body).toHaveLength(ASK_TAIL_LINES)
+    expect(body[0]).toBe('l50')
+    expect(body.at(-1)).toBe(`l${ASK_TAIL_LINES + 49}`)
+  })
+})
 
 describe('parseOsc133', () => {
   it('A -> prompt', () => expect(parseOsc133('A')).toEqual({ t: 'prompt' }))
@@ -132,5 +148,15 @@ describe('commandBytes и PS2', () => {
   it('133;A;k=s — вторичное приглашение', () => {
     expect(parseOsc133('A;k=s')).toEqual({ t: 'continue' })
     expect(parseOsc133('A;aid=1')).toEqual({ t: 'prompt' })
+  })
+})
+
+describe('failurePrompt: длина и ограждение', () => {
+  it('хвост вывода не длиннее ASK_TAIL_CHARS; ``` в выводе не закрывает блок', async () => {
+    const { failurePrompt, ASK_TAIL_CHARS } = await import('./feed')
+    const huge = 'x'.repeat(ASK_TAIL_CHARS * 3)
+    expect(failurePrompt('make', 2, '/w', huge).length).toBeLessThan(ASK_TAIL_CHARS + 300)
+    const msg = failurePrompt('make', 2, '/w', 'a\n```\nb')
+    expect(msg).toContain('````\na\n```\nb\n````')
   })
 })

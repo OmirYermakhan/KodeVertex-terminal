@@ -20,7 +20,7 @@ import { isLocalHost, parseOsc7Url, unmark } from './osc'
 import { useHome } from '../status/useGitInfo'
 import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
-import { applyShell, claudeIndex, claudeItemId, commandBytes, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
+import { applyShell, claudeIndex, claudeItemId, commandBytes, failurePrompt, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
 import { editClaude, dismissQueueHint, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
 import { aliasOf } from '../claude/models'
@@ -29,10 +29,12 @@ import { EditChip } from '../claude/EditChip'
 import { docOf } from '../attach/doc'
 import { PermissionPrompt } from '../claude/PermissionPrompt'
 import { QuestionPrompt } from '../claude/QuestionPrompt'
+import { dropPaneFeed, restoredPane, scheduleSave, setPaneFeed } from '../persist/session'
 import { InputBar, type InputBarHandle, type InputSnapshot } from '../input/InputBar'
 import { QueuePanel, type QueuePanelHandle } from '../claude/QueuePanel'
 import { AgentsPanel, type AgentsPanelHandle } from '../claude/AgentsPanel'
-import { blockText, cleanSerializedHtml } from '../feed/blockHtml'
+import { blockText, blockTextOf, cleanSerializedHtml } from '../feed/blockHtml'
+import { pushHistory } from '../input/history'
 import { Feed } from '../feed/FeedView'
 import { LiveTerminal } from '../feed/LiveTerminal'
 import { registerPaneCommands, type PaneAction } from '../feed/paneCommands'
@@ -169,7 +171,9 @@ export function TerminalPane(p: TerminalPaneProps) {
     return () => clearTimeout(t)
   }, [agentRequest])
 
-  const [items, setItems] = useState<FeedItem[]>([])
+  // Лента, восстановленная после перезапуска приложения (до монтирования панели).
+  const [restored] = useState(() => restoredPane(p.paneId))
+  const [items, setItems] = useState<FeedItem[]>(() => (restored ? [...restored.items] : []))
   const itemsRef = useRef(items)
   useEffect(() => {
     itemsRef.current = items
@@ -177,6 +181,10 @@ export function TerminalPane(p: TerminalPaneProps) {
   const [selected, setSelected] = useState<string | null>(null)
   /** Ответ, открытый в режиме чтения (id элемента ленты). */
   const [readerId, setReaderId] = useState<string | null>(null)
+  const readerIdRef = useRef(readerId)
+  useLayoutEffect(() => {
+    readerIdRef.current = readerId
+  })
   const selectedRef = useRef(selected)
   useEffect(() => {
     selectedRef.current = selected
@@ -221,9 +229,10 @@ export function TerminalPane(p: TerminalPaneProps) {
   // Claude-сессия панели (стор по paneId): её элементы — в той же ленте, по времени появления.
   const claude = useClaudeSessions((st) => st.sessions[p.paneId])
   const claudeItems = claude?.state.items ?? NO_CLAUDE_ITEMS
-  const claudePrev = useRef<readonly FeedClaudeItem[]>(NO_CLAUDE_ITEMS)
+  // Восстановленная лента уже содержит карточки сессии: синхронизация — от них.
+  const claudePrev = useRef<readonly FeedClaudeItem[]>(restored ? claudeItems : NO_CLAUDE_ITEMS)
   // ⌃L: элементы Claude с индексом меньше этого в ленте больше не показываются.
-  const claudeFrom = useRef(0)
+  const claudeFrom = useRef(restored?.claudeFrom ?? 0)
   useEffect(() => {
     const prev = claudePrev.current
     const from = claudeFrom.current
@@ -234,6 +243,14 @@ export function TerminalPane(p: TerminalPaneProps) {
     const paneId = p.paneId
     return () => stopClaude(paneId)
   }, [p.paneId])
+  // Сессия окна между запусками: лента панели читается в момент снимка, изменения — автосохранение.
+  useEffect(() => {
+    const paneId = p.paneId
+    const feed = () => ({ items: itemsRef.current, claudeFrom: claudeFrom.current, claudeMode: inputRef.current?.claudeMode() ?? false })
+    setPaneFeed(paneId, feed)
+    return () => dropPaneFeed(paneId, feed)
+  }, [p.paneId])
+  useEffect(() => scheduleSave(), [items])
 
   // Create xterm + PTY once per pane.
   useEffect(() => {
@@ -640,6 +657,8 @@ export function TerminalPane(p: TerminalPaneProps) {
       const h = handleRef.current
       if (!h) return false
       sentRef.current = cmd
+      // Отправка из строки — выбор блока снят: позже ⌘R не повторит давно выбранную команду.
+      setSelected(null)
       setAwaitingShell(true)
       h.write(commandBytes(cmd))
       return true
@@ -649,7 +668,10 @@ export function TerminalPane(p: TerminalPaneProps) {
   // ⌃D на пустой строке — EOF в оболочку, как в обычном терминале (zsh с ignoreeof его проигнорирует).
   const onEof = useCallback(() => handleRef.current?.write('\x04'), [])
   const onAsk = useCallback(
-    (text: string, tokens?: Attachment[]) => void askClaude(p.paneId, cwdRef.current, text, tokens),
+    (text: string, tokens?: Attachment[]) => {
+      setSelected(null)
+      void askClaude(p.paneId, cwdRef.current, text, tokens)
+    },
     [p.paneId],
   )
   const onTokens = useCallback((n: number) => setAttachCount(p.paneId, n), [p.paneId])
@@ -696,11 +718,46 @@ export function TerminalPane(p: TerminalPaneProps) {
     }
     return { blocks, messages }
   }, [])
+  /** Отправленные сообщения Claude панели без значков (старые первыми) — поиск ⌃R в режиме Claude. */
+  const claudeHistory = useCallback((): string[] => {
+    const items = useClaudeSessions.getState().sessions[callbacks.current.paneId]?.state.items ?? []
+    const out: string[] = []
+    for (const it of items) if (it.type === 'user' && !it.tokens?.length && it.text.trim()) out.push(it.text)
+    return out
+  }, [])
 
   const copyItem = useCallback((id: string | null) => {
     const it = id ? itemsRef.current.find((x) => x.id === id) : undefined
     const text = it?.kind === 'shell' ? (it.html ? blockText(it.html) : '') : it?.item.type === 'assistant' ? it.item.text : ''
     if (text) navigator.clipboard?.writeText(text).catch(() => {})
+  }, [])
+
+  // Оболочка в простое: строка ввода активна и не ждёт продолжения (PS2) — команду можно повторить.
+  const shellIdle = !running && !alt && !awaiting && !cont
+  const shellIdleRef = useRef(shellIdle)
+  useLayoutEffect(() => {
+    shellIdleRef.current = shellIdle
+  })
+  /** «Повторить»: команда блока — как набранная и ↵ (в историю, черновик строки не трогаем). */
+  const repeatBlock = useCallback(
+    (id: string | null) => {
+      const it = id ? itemsRef.current.find((x) => x.id === id) : undefined
+      if (it?.kind !== 'shell' || it.running || !shellIdleRef.current) return false
+      if (!onRun(it.command)) return false
+      pushHistory(it.command)
+      return true
+    },
+    [onRun],
+  )
+  const repeatBlockClick = useCallback((id: string) => void repeatBlock(id), [repeatBlock])
+  /** «Спросить Claude»: код, каталог и хвост вывода упавшего блока — в Claude-сессию панели (занята — в очередь). */
+  const askBlock = useCallback((id: string | null) => {
+    const it = id ? itemsRef.current.find((x) => x.id === id) : undefined
+    if (it?.kind !== 'shell' || it.running || it.exitCode === null || it.exitCode === 0) return
+    const paneId = callbacks.current.paneId
+    // Каталог неизвестен — askClaude покажет ошибку карточкой, режим не включаем.
+    if (claudeCwdKnown(paneId, cwdRef.current)) inputRef.current?.claudeOn()
+    void askClaude(paneId, cwdRef.current, failurePrompt(it.command, it.exitCode, it.cwd, blockTextOf(it)))
   }, [])
 
   // Перетаскивание блока (за строку команды) или ответа (за подпись) в строку ввода — значком.
@@ -923,6 +980,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         if (a === 'clearFeed') return onClearFeed()
         if (a === 'claudeToggle') return inputRef.current?.toggleClaude()
         if (a === 'chooseModel') return inputRef.current?.openModelPicker()
+        if (a === 'historySearch') return inputRef.current?.openHistorySearch()
         // ⌘F: строка поиска; уже открыта — фокус в неё.
         if (a === 'find') {
           if (findRef.current) findRef.current.focus()
@@ -932,6 +990,19 @@ export function TerminalPane(p: TerminalPaneProps) {
         if (a === 'blockCopy') {
           copyItem(selectedRef.current)
           return
+        }
+        // ⌘⇧A: выбранный упавший блок — «Спросить Claude».
+        if (a === 'blockAsk') {
+          askBlock(selectedRef.current)
+          return
+        }
+        // ⌘R на выбранном блоке оболочки (режим чтения закрыт) — «Повторить».
+        if (a === 'blockRead' && !readerIdRef.current) {
+          const sel = itemsRef.current.find((it) => it.id === selectedRef.current)
+          if (sel?.kind === 'shell') {
+            if (!repeatBlock(sel.id)) inputRef.current?.note('Повторить можно, когда оболочка свободна')
+            return
+          }
         }
         // ⌘R: выбранный ответ (или последний ответ в ленте) — в режиме чтения; повторно — закрыть.
         if (a === 'blockRead') {
@@ -974,7 +1045,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         // ⌘↓ с последнего блока или из строки ввода — фокус в панель агентов (если она показана).
         if (m.leave) agentsRef.current?.focus()
       }, () => ({ claude: inputRef.current?.claudeMode() ?? false })),
-    [p.paneId, focusPrompt, attachItem, copyItem, onClearFeed],
+    [p.paneId, focusPrompt, attachItem, copyItem, onClearFeed, askBlock, repeatBlock],
   )
 
   const readerItem = readerId ? items.find((it) => it.id === readerId) : undefined
@@ -1029,6 +1100,8 @@ export function TerminalPane(p: TerminalPaneProps) {
         onScroll={onFeedScroll}
         onAttach={attachItem}
         onCopy={copyItem}
+        onRepeat={shellIdle ? repeatBlockClick : undefined}
+        onAsk={askBlock}
         onRead={setReaderId}
         editable={editable}
         onEdit={onEditItem}
@@ -1093,6 +1166,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         )}
         <InputBar
           ref={inputRef}
+          initialClaudeMode={restored?.claudeMode}
           queue={queueInput}
           answer={answerMode}
           edit={editMode}
@@ -1119,6 +1193,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           onClearFeed={onClearFeed}
           preview={preview.api}
           atFeed={atFeed}
+          claudeHistory={claudeHistory}
         />
       </div>
       {alt && (

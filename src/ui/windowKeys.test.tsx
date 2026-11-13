@@ -265,12 +265,12 @@ describe('⌘P — палитра команд', () => {
     expect(handles[0].write).not.toHaveBeenCalled()
   })
 
-  it('«Найти в ленте» открывает поиск; тема меняется; ⌘J — подпись по состоянию; ⌃R нет', async () => {
+  it('«Найти в ленте» открывает поиск; тема меняется; ⌘J — подпись по состоянию; есть поиск по истории', async () => {
     render(<App />)
     await flush()
     cmdKey('KeyP', 'p')
     expect(palRows()).toContain('Скрыть панель агентов')
-    expect(palRows().some((r) => /истори/i.test(r!))).toBe(false)
+    expect(palRows().some((r) => /Поиск по истории/.test(r!))).toBe(true)
     expect(document.querySelector('.kbd')).not.toBeNull()
     fireEvent.change(palInput()!, { target: { value: 'найти' } })
     palKey('Enter')

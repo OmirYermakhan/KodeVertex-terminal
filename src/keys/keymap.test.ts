@@ -45,6 +45,9 @@ describe('matchKey', () => {
     expect(matchKey(ev({ code: 'Equal', metaKey: true, shiftKey: true }))).toBe('fontBigger')
     expect(matchKey(ev({ code: 'Minus', metaKey: true }))).toBe('fontSmaller')
     expect(matchKey(ev({ code: 'Comma', metaKey: true }))).toBe('openSettings')
+    expect(matchKey(ev({ code: 'KeyA', metaKey: true, shiftKey: true }))).toBe('blockAsk')
+    // ⌘A (выделить всё) не занят.
+    expect(matchKey(ev({ code: 'KeyA', metaKey: true }))).toBeNull()
   })
   it('leaves shell and clipboard keys alone', () => {
     expect(matchKey(ev({ code: 'KeyD', ctrlKey: true }))).toBeNull()
