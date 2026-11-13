@@ -26,6 +26,7 @@ import { atRows, type AtFeed, type AtRow } from '../attach/atSearch'
 import { AtPicker } from '../attach/AtPicker'
 import { blockAttachment, messageAttachment } from '../attach/fromFeed'
 import type { PreviewApi } from '../attach/preview/usePreview'
+import { INPUT_BINDINGS, isBinding } from '../keys/keymap'
 
 /** Поле растёт до стольких строк, дальше — прокрутка внутри. */
 export const MAX_ROWS = 8
@@ -734,7 +735,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
   function historySearchKey(e: React.KeyboardEvent<HTMLDivElement>): boolean {
     const q = props.current
-    const ctrlR = e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === 'KeyR'
+    const ctrlR = isBinding(INPUT_BINDINGS.history, e)
     const cur = hsRef.current
     if (!cur) {
       // Правка сообщения и продолжение команды (PS2): ↵ из поиска ушёл бы не туда.

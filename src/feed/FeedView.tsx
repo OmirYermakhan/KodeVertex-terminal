@@ -5,6 +5,7 @@ import { ErrorBoundary } from '../diag/ErrorBoundary'
 import { agentOf, type Agent } from '../claude/reducer'
 import type { ClaudeItem, FeedItem, ShellBlock } from './feed'
 import { ShellBlockView } from './ShellBlockView'
+import { EmptyHint } from './EmptyHint'
 
 const NO_AGENTS: readonly Agent[] = []
 
@@ -113,6 +114,8 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
           )}
         </ErrorBoundary>
       ))}
+      {/* Пустая лента — подсказка с клавишами; исчезает с первым блоком или карточкой. */}
+      {items.length === 0 && <EmptyHint />}
       {park}
     </div>
   )
