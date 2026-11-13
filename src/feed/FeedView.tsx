@@ -95,15 +95,30 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
   }
   const blocks = items.reduce((n, it) => (it.kind === 'shell' ? n + 1 : n), 0)
   useLayoutEffect(restick, [blocks, restick])
+  const ro = useRef<ResizeObserver | null>(null)
   useLayoutEffect(() => {
     const f = own.current
-    const ro = f && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(restick) : null
-    ro?.observe(f!)
+    const r = f && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(restick) : null
+    r?.observe(f!)
+    ro.current = r
     return () => {
-      ro?.disconnect()
+      r?.disconnect()
+      ro.current = null
       cancelAnimationFrame(frame.current)
     }
   }, [restick])
+  // И размер самих блоков: вывод вырос или заморозился без прокрутки — линия .stuck не устаревает.
+  // Карточки Claude не наблюдаем: стрим ответа пересчёт не вызывает.
+  useLayoutEffect(() => {
+    const f = own.current
+    const r = ro.current
+    if (!f || !r) return
+    const blks = Array.from(f.children).filter((c) => c.classList.contains('blk'))
+    for (const b of blks) r.observe(b)
+    return () => {
+      for (const b of blks) r.unobserve(b)
+    }
+  }, [blocks])
   // Элементы, что уже есть при монтировании (восстановленная сессия), появляются без анимации:
   // CSS-анимацию появления у них сразу доводим до конца, до первой отрисовки.
   useLayoutEffect(() => {

@@ -1321,7 +1321,7 @@ describe('подсказка следующего сообщения (режим
   })
 
   it('гонка: ⌘X до прихода подсказки — правка поля, подсказка не покажется в опустевшем поле', () => {
-    const { ref, ed, ta, shown, rerender, onDismissSuggestion } = mount({ suggestion: null })
+    const { ref, ed, ta, rerender, onDismissSuggestion } = mount({ suggestion: null })
     const turnEnd = Date.now() - 1000
     act(() => ref.current!.restore({ doc: { text: 'черновик', tokens: [] }, claude: true }))
     setSelection(ed, 0, ta.value.length)

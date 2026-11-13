@@ -87,6 +87,43 @@ describe('пересчёт прилипшего заголовка', () => {
   })
 })
 
+describe('пересчёт при росте содержимого', () => {
+  const RO = globalThis.ResizeObserver
+  afterEach(() => {
+    globalThis.ResizeObserver = RO
+    vi.restoreAllMocks()
+  })
+
+  it('наблюдаются лента и её блоки (не карточки Claude): вырос вывод — пересчёт', () => {
+    let cb: () => void = () => {}
+    const observed = new Set<Element>()
+    globalThis.ResizeObserver = class {
+      constructor(c: () => void) {
+        cb = c
+      }
+      observe(el: Element) {
+        observed.add(el)
+      }
+      unobserve(el: Element) {
+        observed.delete(el)
+      }
+      disconnect() {
+        observed.clear()
+      }
+    } as unknown as typeof ResizeObserver
+    const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 0)
+    const { container, rerender } = render(<Feed items={[block('b1'), answer('При')]} selectedId={null} renderLive={() => null} />)
+    const kinds = () => [...observed].map((e) => e.className.split(' ')[0]).sort()
+    expect(kinds()).toEqual(['blk', 'feed'])
+    rerender(<Feed items={[block('b1'), answer('При'), block('b2')]} selectedId={null} renderLive={() => null} />)
+    expect(kinds()).toEqual(['blk', 'blk', 'feed'])
+    expect([...observed].filter((e) => e.classList.contains('blk')).every((e) => e.parentElement === container.querySelector('.feed'))).toBe(true)
+    raf.mockClear()
+    cb()
+    expect(raf).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('появление при восстановлении сессии', () => {
   it('у элементов, что есть при монтировании, анимация появления сразу доводится до конца', () => {
     const finish = vi.fn()
