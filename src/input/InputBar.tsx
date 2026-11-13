@@ -247,7 +247,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const [caretEnd, setCaretEnd] = useState(true)
   /** Идёт набор IME — подсказка-призрак не показывается. */
   const [composing, setComposing] = useState(false)
-  /** Когда строку последний раз меняли: подсказка хода, пришедшая после начала набора, не показывается. */
+  /**
+   * Когда пользователь последний раз менял строку (набор, клавиши, вставка — не программные
+   * load/restore): подсказка хода, пришедшая после начала набора, не показывается.
+   */
   const lastEdit = useRef(0)
   /** Текст, на котором подсказку-призрак скрыли по esc: до правки строки не показываем. */
   const [ghostHidden, setGhostHidden] = useState<string | null>(null)
@@ -301,7 +304,6 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   /** Новая модель строки: поле перерисуется, курсор встанет в cursor. */
   const setDoc = useCallback((d: Doc, cursor: number, selected: string | null = null) => {
     if (d.tokens.length > 0) lastTokens.current = d.tokens
-    lastEdit.current = Date.now()
     docRef.current = d
     selTok.current = selected
     pendingCursor.current = cursor
@@ -1053,9 +1055,17 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     }
   }
 
+  /** Клавиша поменяла строку — это правка пользователя (для подсказки следующего сообщения). */
+  const onKeyDownUser = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const before = docRef.current
+    onKeyDown(e)
+    if (docRef.current !== before) lastEdit.current = Date.now()
+  }
+
   const onPaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
     e.preventDefault()
     if (props.current.disabled) return
+    lastEdit.current = Date.now()
     if (props.current.suggestion) props.current.onDismissSuggestion?.()
     const cd = e.clipboardData
     const text = cd?.getData('text/plain') ?? ''
@@ -1164,6 +1174,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     !picker && !hs
       ? p.suggestion
       : null
+  /** Первая буква подсказки (по кодовым точкам, без разрыва суррогатной пары) — под курсором. */
+  const suggHead = suggShown ? (Array.from(suggShown.text)[0] ?? '') : ''
   const placeholder = p.answer ? ANSWER_PLACEHOLDER : p.edit ? EDIT_PLACEHOLDER : claudeMode ? CLAUDE_PLACEHOLDER : PLACEHOLDER
   return (
     <div className="input-wrap" ref={wrapRef}>
@@ -1260,7 +1272,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
             onInput={onInput}
             onCompositionStart={() => setComposing(true)}
             onCompositionEnd={() => setComposing(false)}
-            onKeyDown={onKeyDown}
+            onKeyDown={onKeyDownUser}
             onPaste={onPaste}
             onCopy={(e) => onCopy(e, false)}
             onCut={(e) => onCopy(e, true)}
@@ -1320,8 +1332,15 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           )}
           {suggShown && (
             <span className="ph in-sugg" data-testid="suggestion" aria-hidden="true">
-              <span className="in-ghost-rest">{suggShown.text}</span>
-              {focused && <span className="caret" />}
+              {focused ? (
+                <>
+                  {/* Курсор в начале — блоком с первой буквой подсказки внутри, инвертированной (как в CLI). */}
+                  <span className="caret">{suggHead}</span>
+                  <span className="in-ghost-rest">{suggShown.text.slice(suggHead.length)}</span>
+                </>
+              ) : (
+                <span className="in-ghost-rest">{suggShown.text}</span>
+              )}
             </span>
           )}
           {ghost && (

@@ -1599,6 +1599,24 @@ describe('TerminalPane: правка отправленного сообщени
       expect(sugg()).toBeNull()
     })
 
+    it('при открытом запросе разрешения или вопросе агента не показывается', async () => {
+      await twoTurns()
+      suggest('спасибо')
+      expect(sugg()).toBe('спасибо')
+      line({ type: 'control_request', request_id: 'rq1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'rm -rf build' }, tool_use_id: 'tb' } })
+      expect(document.querySelector('.dock .aprompt .p-tool')!.textContent).toBe('Bash')
+      expect(sugg()).toBeNull()
+      act(() =>
+        useClaudeSessions.setState((st) => {
+          const s = st.sessions.p
+          return { sessions: { ...st.sessions, p: { ...s, state: { ...s.state, items: s.state.items.filter((i) => i.type !== 'permission') } } } }
+        }),
+      )
+      expect(sugg()).toBe('спасибо')
+      line({ type: 'control_request', request_id: 'rq2', request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input: { questions: [{ question: 'Удалить?', header: 'API', multiSelect: false, options: [{ label: 'Да', description: '' }, { label: 'Нет', description: '' }] }] }, tool_use_id: 'tq' } })
+      expect(sugg()).toBeNull()
+    })
+
     it('esc убирает подсказку, второй esc — выход из режима Claude', async () => {
       await twoTurns()
       suggest('спасибо')

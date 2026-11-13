@@ -1226,6 +1226,23 @@ describe('подсказка следующего сообщения (режим
     expect(container.querySelector('.in-sugg .caret')).not.toBeNull()
   })
 
+  it('в фокусе первая буква — внутри курсора (видна, инвертирована), остальное серым', () => {
+    const { container, ref } = mount()
+    act(() => ref.current!.focus())
+    expect(container.querySelector('.in-sugg .caret')!.textContent).toBe('с')
+    expect(container.querySelector('.in-sugg .in-ghost-rest')!.textContent).toBe('пасибо, до завтра')
+    expect(container.querySelector('.in-sugg')!.textContent).toBe('спасибо, до завтра')
+  })
+
+  it('программная смена строки (restore после отмены правки, load) — не набор: подсказку не глушит', () => {
+    const { ref, shown, rerender, onDismissSuggestion } = mount({ suggestion: null })
+    const turnEnd = Date.now() - 1000
+    act(() => ref.current!.restore({ doc: { text: '', tokens: [] }, claude: true }))
+    rerender({ suggestion: sugg('спасибо', turnEnd) })
+    expect(shown()).toBe('спасибо')
+    expect(onDismissSuggestion).not.toHaveBeenCalled()
+  })
+
   it('в оболочке не показывается', () => {
     expect(mount({ initialClaudeMode: false }).shown()).toBeNull()
   })
