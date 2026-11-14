@@ -96,6 +96,31 @@ describe('refresh', () => {
   })
 })
 
+describe('setRoot', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    reset()
+  })
+  it('ответ на прежний cwd, пришедший позже, не перебивает новый корень', async () => {
+    const answers: Record<string, (v: string) => void> = {}
+    invoke.mockImplementation((cmd: string, a: { cwd?: string }) =>
+      cmd === 'project_root' ? new Promise((r) => (answers[a.cwd!] = r)) : Promise.resolve([]),
+    )
+    useProject.getState().setRoot('/a')
+    useProject.getState().setRoot('/b')
+    answers['/b']('/b')
+    await Promise.resolve()
+    answers['/a']('/a')
+    await Promise.resolve()
+    expect(useProject.getState().root).toBe('/b')
+  })
+  it('clearClaudeTouched очищает «Claude менял»', () => {
+    useProject.setState({ claudeTouched: new Set(['a.ts']) })
+    useProject.getState().clearClaudeTouched()
+    expect(useProject.getState().claudeTouched.size).toBe(0)
+  })
+})
+
 const ch = (path: string, status: Change['status']): Change => ({ path, status })
 describe('statusOf / dirHasChanges', () => {
   const c = [ch('src/a.ts', 'M'), ch('src/new.ts', '?'), ch('b.ts', 'A'), ch('old.ts', 'D'), ch('r.ts', 'R')]

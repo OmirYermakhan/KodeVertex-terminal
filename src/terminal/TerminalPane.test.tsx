@@ -393,6 +393,22 @@ describe('TerminalPane', () => {
       expect(write).not.toHaveBeenCalled()
     })
 
+    it('конец команды (133;D) — панель проекта обновляется', async () => {
+      const { useProject } = await import('../project/store')
+      const refresh = vi.fn()
+      const prev = useProject.getState().refresh
+      useProject.setState({ refresh })
+      try {
+        const { term } = await mounted()
+        act(() => void oscHandler(term, 133)('C;' + btoa('touch x')))
+        expect(refresh).not.toHaveBeenCalled()
+        act(() => void oscHandler(term, 133)('D;0'))
+        expect(refresh).toHaveBeenCalledTimes(1)
+      } finally {
+        useProject.setState({ refresh: prev })
+      }
+    })
+
     it('⌃C очищает строку; ⌃L очищает ленту, id новых блоков не повторяются', async () => {
       const { term } = await mounted()
       type('abc')

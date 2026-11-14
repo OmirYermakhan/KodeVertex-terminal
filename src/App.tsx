@@ -20,6 +20,7 @@ import ToolWindow from './project/ToolWindow'
 import Viewer from './project/Viewer'
 import { useProject } from './project/store'
 import { localSummary } from './project/changeRow'
+import { installAutoRefresh } from './project/autoRefresh'
 
 /** Подсказка клавиш окна инструмента в строке состояния (макет 07, окна 2–3). */
 const TOOL_HINT = {
@@ -69,6 +70,11 @@ export default function App() {
   }, [])
 
   useEffect(() => installNotifications(), [])
+  // Панель проекта показывает проект панели в фокусе: смена вкладки, панели или cd меняют корень.
+  useEffect(() => {
+    if (cwd) useProject.getState().setRoot(cwd)
+  }, [cwd])
+  useEffect(() => installAutoRefresh(), [])
   // Файлы из Finder: оверлей и вставка — в панели под курсором (иначе в панели в фокусе).
   useEffect(
     () =>

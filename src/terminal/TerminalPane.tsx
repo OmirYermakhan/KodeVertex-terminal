@@ -20,6 +20,7 @@ import { isLocalHost, parseOsc7Url, unmark } from './osc'
 import { useHome } from '../status/useGitInfo'
 import { spawnPty, type PtyHandle } from './ptyClient'
 import { notifyCommandEnd } from '../notify/notify'
+import { useProject } from '../project/store'
 import { applyShell, claudeIndex, claudeItemId, commandBytes, failurePrompt, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
 import { editClaude, dismissQueueHint, dismissSuggestion, feedCleared, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, listSessions, resumeClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
@@ -328,6 +329,8 @@ export function TerminalPane(p: TerminalPaneProps) {
         notifyCommandEnd(callbacks.current.paneId, cur.command, Math.max(0, at - cur.startedAt), exitCode, altUsedRef.current)
       }
       setItems((it) => applyShell(it, { t: 'end', exitCode, at, html, lines }))
+      // Команда могла поменять файлы — панель проекта обновляется (из любой панели).
+      useProject.getState().refresh()
     }
 
     // Блоки: zsh сообщает начало (C) и конец (D) команды.

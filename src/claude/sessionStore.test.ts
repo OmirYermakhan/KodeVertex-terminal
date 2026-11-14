@@ -855,3 +855,35 @@ describe('resumeClaude (/resume)', () => {
     expect(items('p').at(-1)).toMatchObject({ type: 'error', text: NO_CWD })
   })
 })
+
+describe('события для панели проекта', () => {
+  beforeEach(() => {
+    stopClaude('p')
+    invoke.mockReset()
+    invoke.mockImplementation((cmd: string) => Promise.resolve(cmd === 'claude_start' ? 'proc-1' : undefined))
+  })
+
+  it('закончилось действие Edit — событие tools с путём; повтор строки — без события; /clear — cleared', async () => {
+    const { onClaudeEvent } = await import('./toolEvents')
+    const got: unknown[] = []
+    const off = onClaudeEvent((e) => got.push(e))
+    try {
+      enterClaude('p', '/w')
+      await flush()
+      await askClaude('p', '/w', 'поправь')
+      const onLine = calls('claude_start')[0][1].onLine as { onmessage(m: string): void }
+      onLine.onmessage(
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Edit', input: { file_path: '/w/a.ts', old_string: 'a', new_string: 'b' } }] } }),
+      )
+      expect(got).toEqual([])
+      const done = JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } })
+      onLine.onmessage(done)
+      onLine.onmessage(done)
+      expect(got).toEqual([{ kind: 'tools', tools: [{ tool: 'Edit', path: '/w/a.ts', ok: true }] }])
+      clearClaude('p')
+      expect(got.at(-1)).toEqual({ kind: 'cleared' })
+    } finally {
+      off()
+    }
+  })
+})

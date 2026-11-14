@@ -33,6 +33,8 @@ export function actionTitle(tool: string, input: any): { title: string; detail: 
     case 'Write':
     case 'MultiEdit':
       return { title: 'Изменил файл', detail: str(i.file_path) }
+    case 'NotebookEdit':
+      return { title: 'Изменил файл', detail: str(i.notebook_path) }
     case 'Grep':
     case 'Glob':
       return { title: 'Искал', detail: str(i.pattern) }

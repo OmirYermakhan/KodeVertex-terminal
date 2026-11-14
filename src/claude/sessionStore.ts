@@ -12,6 +12,7 @@ import { serialize } from '../attach/serialize'
 import type { Attachment, Doc } from '../attach/types'
 import type { ClaudePermissionMode } from '../settings/settings'
 import { useSettings } from '../settings/store'
+import { emitClaudeEvent, finishedTools } from './toolEvents'
 
 export type { ModelChoice }
 
@@ -204,8 +205,12 @@ function start(paneId: string): Proc {
         invoke('claude_respond', { id: proc.id, requestId: r.requestId, response: denyResponse() }).catch(() => {})
       }
     }
-    const before = get(paneId).state.pending
+    const prevState = get(paneId).state
+    const before = prevState.pending
     patchState(paneId, (s) => reduceClaude(s, line, Date.now()))
+    // Закончились правки файлов или команды — панель проекта обновляется.
+    const tools = finishedTools(prevState, get(paneId).state)
+    if (tools.length > 0) emitClaudeEvent({ kind: 'tools', tools })
     // Ход закончился (не прерван) — следующее сообщение из очереди.
     if (before > 0 && get(paneId).state.pending === 0 && !proc.interrupted) sendNextQueued(paneId, undefined)
   })
@@ -214,6 +219,7 @@ function start(paneId: string): Proc {
     if (proc.id) rejectControls(proc.id)
     if (!alive()) return
     procs.delete(paneId)
+    const prevState = get(paneId).state
     const ok = e.code === 0 || proc.interrupted
     patch(paneId, (p) => {
       const now = Date.now()
@@ -232,6 +238,9 @@ function start(paneId: string): Proc {
       // Очередь не уходит сама в новый процесс: пауза до ↵.
       return { ...p, procId: null, state, ...pause(p) }
     })
+    // Прерванные действия (⌃C посреди команды) тоже могли поменять файлы.
+    const tools = finishedTools(prevState, get(paneId).state)
+    if (tools.length > 0) emitClaudeEvent({ kind: 'tools', tools })
   })
   const rewind = rewindAt ? { resumeAt: rewindAt, fork: true } : {}
   proc.ready = invoke<string>('claude_start', { cwd, resume, model, effort, permissionMode, ...rewind, promptSuggestions, diagramsHint, onLine, onExit })
@@ -473,6 +482,7 @@ export function enterClaude(paneId: string, paneCwd: string | undefined): boolea
 export function clearClaude(paneId: string): void {
   dropProc(paneId)
   patch(paneId, (p) => ({ ...p, procId: null, queue: [], paused: false, pauseHint: false, rewindAt: null, restored: false, state: clearSession(p.state) }))
+  emitClaudeEvent({ kind: 'cleared' })
 }
 
 /** `/resume`: прошлые разговоры каталога панели (новые первыми) и id текущего разговора панели. */

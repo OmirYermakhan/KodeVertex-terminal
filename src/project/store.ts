@@ -53,12 +53,16 @@ interface ProjectState {
   closeTab(i: number): void
   setCursor(rel: string, line: number): void
   markClaudeTouched(absPath: string): void
+  /** Новая сессия Claude: «Claude менял» начинается заново. */
+  clearClaudeTouched(): void
 }
 
 let lastRefresh = 0
 let pending: ReturnType<typeof setTimeout> | null = null
 /** Номер запроса: ответ устаревшего (после смены корня или более нового refresh) отбрасываем. */
 let seq = 0
+/** Номер запроса корня: применяется только ответ на последний setRoot. */
+let rootSeq = 0
 
 const sameTab = (a: ViewerTab, b: ViewerTab) =>
   a.kind === b.kind && a.rel === b.rel && (a.kind === 'file' || (b.kind === 'diff' && a.rev === b.rev))
@@ -111,9 +115,11 @@ export const useProject = create<ProjectState>((set, get) => {
       }
     },
     setRoot: (cwd) => {
+      const id = ++rootSeq
       projectRoot(cwd).then(
         (root) => {
-          if (root === get().root) return
+          // Ответ на прежний cwd пришёл позже нового — не перебивает его.
+          if (id !== rootSeq || root === get().root) return
           seq++
           set({ root, changes: null, notGit: false, gitError: null, commitStat: null, tabs: [], active: 0, focusLine: null, cursors: {}, claudeTouched: new Set() })
           run()
@@ -151,7 +157,12 @@ export const useProject = create<ProjectState>((set, get) => {
       if (!root) return
       const base = root.endsWith('/') ? root : root + '/'
       if (!absPath.startsWith(base)) return
-      set((s) => ({ claudeTouched: new Set(s.claudeTouched).add(absPath.slice(base.length)) }))
+      const rel = absPath.slice(base.length)
+      if (get().claudeTouched.has(rel)) return
+      set((s) => ({ claudeTouched: new Set(s.claudeTouched).add(rel) }))
+    },
+    clearClaudeTouched: () => {
+      if (get().claudeTouched.size > 0) set({ claudeTouched: new Set() })
     },
   }
 })

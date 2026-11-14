@@ -115,4 +115,24 @@ describe('App', () => {
     expect(useTabs.getState().tabs).toHaveLength(1)
     expect(screen.queryByRole('alert')).toBeNull()
   })
+  it('корень проекта — из cwd панели в фокусе: смена вкладки и cd меняют root', () => {
+    const setRoot = vi.fn()
+    const prev = useProject.getState().setRoot
+    useProject.setState({ setRoot })
+    try {
+      useTabs.getState().newTab('/a')
+      const first = useTabs.getState().active
+      useTabs.getState().newTab('/b/sub')
+      render(<App />)
+      expect(setRoot).toHaveBeenLastCalledWith('/b/sub')
+      act(() => useTabs.getState().activate(first))
+      expect(setRoot).toHaveBeenLastCalledWith('/a')
+      const s = useTabs.getState()
+      act(() => s.setCwd(s.tabs.find((t) => t.id === first)!.focused, '/c'))
+      expect(setRoot).toHaveBeenLastCalledWith('/c')
+      expect(setRoot).toHaveBeenCalledTimes(3)
+    } finally {
+      useProject.setState({ setRoot: prev })
+    }
+  })
 })
