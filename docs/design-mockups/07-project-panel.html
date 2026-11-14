@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KodeVertex Terminal — панель проекта</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#08090a;color:#f1f0eb;font-family:"Geist",system-ui,sans-serif;padding:40px 32px 80px}
+  .wrap{max-width:1360px;margin:0 auto}
+  .eyebrow{font-family:"Geist Mono",monospace;font-size:12px;color:#636972;letter-spacing:.08em;text-transform:uppercase}
+  h1{font-weight:500;font-size:30px;margin:10px 0 8px}
+  h2{font-weight:500;font-size:20px;margin:46px 0 6px}
+  .lead{color:#8a9199;font-size:16px;max-width:980px;line-height:1.6;margin:0 0 22px}
+  .kbd{display:inline-block;font-family:"Geist Mono",monospace;font-size:11.5px;color:#e4e3dd;background:#16191d;border:1px solid #262a2f;border-bottom-width:2px;border-radius:4px;padding:0 5px}
+
+  /* Окно — тема AS (Android Studio, New UI) */
+  .win{--bg:#1e1f22;--panel:#2b2d30;--panel2:#26282b;--rule:#393b40;--text:#bcbec4;--strong:#dfe1e5;--muted:#6f737a;--you:#2e436e;--acc:#3574f0;--accText:#548af7;--info:#56a8f5;--add:#6aab73;--del:#f75464;--warn:#e0b05a;
+    --vcsMod:#6c9fef;--vcsAdd:#73bd79;--vcsNew:#d1675a;--vcsDel:#6f737a;--sel:#2e436e;--selDim:#2a3346;--hover:#2f3136;
+    --kw:#cf8e6d;--str:#6aab73;--fn:#56a8f5;--num:#2aacb8;--com:#7a7e85;--ann:#b3ae60;--typ:#c77dbb;
+    --sans:"Inter",system-ui,sans-serif;--mono:"JetBrains Mono",monospace;
+    border-radius:12px;overflow:hidden;background:var(--bg);color:var(--text);border:1px solid var(--rule);font-family:var(--sans);display:flex;flex-direction:column;height:720px}
+  .bar{display:flex;align-items:center;gap:8px;height:38px;padding:0 10px 0 14px;background:var(--panel);border-bottom:1px solid var(--rule);flex:none}
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--rule)}
+  /* Кнопка «Проект» — слева вверху, сразу после светофора */
+  .proj{display:flex;align-items:center;gap:7px;margin-left:12px;height:26px;padding:0 9px;border-radius:6px;font-size:12.5px;color:var(--strong);font-weight:500}
+  .proj.on{background:var(--hover)}
+  .proj .pi{width:16px;height:16px;border-radius:4px;background:#3e8f5a;color:#fff;font-size:9.5px;font-weight:600;display:grid;place-items:center;font-family:var(--sans)}
+  .proj .br{color:var(--muted);font-weight:400;display:flex;align-items:center;gap:5px}
+  .proj .chev{color:var(--muted);font-size:10px}
+  .tabs{display:flex;gap:4px;margin-left:10px}
+  .tab{font-family:var(--mono);font-size:12px;color:var(--muted);padding:5px 11px;border-radius:6px;display:flex;align-items:center;gap:7px}
+  .tab.on{color:var(--strong);background:var(--bg)}
+  .tab.on i{width:6px;height:6px;border-radius:50%;background:var(--acc)}
+
+  .body{flex:1;display:flex;min-height:0}
+  /* Полоса инструментов слева (как в AS) */
+  .stripe{width:40px;flex:none;background:var(--panel);border-right:1px solid var(--rule);display:flex;flex-direction:column;align-items:center;gap:4px;padding-top:8px}
+  .sb{width:30px;height:30px;border-radius:6px;display:grid;place-items:center;color:#a8adb5}
+  .sb.on{background:var(--acc);color:#fff}
+  .sb svg{width:16px;height:16px}
+  .stripe .sep{width:20px;height:1px;background:var(--rule);margin:4px 0}
+
+  /* Окно инструмента */
+  .tw{width:290px;flex:none;background:var(--panel2);border-right:1px solid var(--rule);display:flex;flex-direction:column;min-height:0}
+  .twh{display:flex;align-items:center;gap:8px;height:34px;padding:0 10px 0 12px;font-size:12.5px;font-weight:600;color:var(--strong);flex:none}
+  .twh .sub{font-weight:400;color:var(--muted);font-size:12px}
+  .twh .acts{margin-left:auto;display:flex;gap:2px;color:var(--muted)}
+  .twh .acts span{width:22px;height:22px;display:grid;place-items:center;border-radius:4px;font-size:12px}
+  .tree{flex:1;overflow:hidden;padding:2px 0;font-size:13px}
+  .n{display:flex;align-items:center;gap:5px;height:24px;padding-right:10px;white-space:nowrap;color:var(--text)}
+  .n .tw-a{width:12px;color:var(--muted);font-size:9px;text-align:center;flex:none}
+  .n .ic{width:16px;height:16px;flex:none;display:grid;place-items:center}
+  .n .hint{color:var(--muted);font-size:12px;margin-left:4px}
+  .n.sel{background:var(--sel)}
+  .n.mod{color:var(--vcsMod)} .n.add{color:var(--vcsAdd)} .n.new{color:var(--vcsNew)} .n.del{color:var(--vcsDel);text-decoration:line-through}
+  .n.dirm .lbl{color:var(--vcsMod)}
+  .fold{width:15px;height:12px;border-radius:2px;background:#87939a;position:relative}
+  .fold::before{content:"";position:absolute;left:0;top:-2px;width:7px;height:3px;border-radius:2px 2px 0 0;background:#87939a}
+  .fold.src{background:#4f8bd6}.fold.src::before{background:#4f8bd6}
+  .fold.res{background:#c9a34e}.fold.res::before{background:#c9a34e}
+  .fi{font-family:var(--sans);font-size:8.5px;font-weight:700;width:14px;height:14px;border-radius:3px;display:grid;place-items:center;color:#fff}
+  .fi.kt{background:linear-gradient(135deg,#7f52ff,#c711e1)}
+  .fi.xml{background:#e8a33d;color:#1e1f22}
+  .fi.gr{background:#5ea06a}
+  .fi.md{background:#5f7a99}
+  .fi.txt{background:#6f737a}
+
+  /* Основная область: лента терминала */
+  .main{flex:1;display:flex;min-width:0}
+  .feed{flex:1;overflow:hidden;padding:14px 18px;min-width:0;display:flex;flex-direction:column}
+  .feed .sp{flex:1}
+  .who{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px}
+  .you{margin:0 0 12px auto;max-width:78%;background:var(--you);border-radius:10px 10px 2px 10px;padding:9px 14px;font-size:14px;color:var(--strong)}
+  .you .who{color:#9fb6e8;text-align:right}
+  .card{background:var(--panel);border:1px solid var(--rule);border-left:2px solid var(--acc);border-radius:8px;padding:10px 14px;margin-bottom:10px}
+  .card .who{color:var(--accText);display:flex;justify-content:space-between}
+  .card .who em{font-style:normal;color:var(--muted);text-transform:none;letter-spacing:0}
+  .card p{margin:0;font-size:14px;line-height:1.6}
+  .card code{font-family:var(--mono);font-size:12.5px;background:var(--bg);color:var(--accText);padding:1px 5px;border-radius:4px}
+  .act{border:1px dashed var(--rule);border-radius:8px;padding:7px 12px;margin-bottom:10px;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+  .act .who{color:var(--info)} .act b{color:var(--strong);font-weight:500}
+  .input{display:flex;align-items:center;gap:10px;margin:8px 0 0;padding:10px 14px;background:var(--bg);border:1px solid var(--rule);border-radius:9px;font-family:var(--mono);font-size:13px;color:var(--muted)}
+  .input .ph{flex:1}
+
+  /* Просмотр файла (справа, только чтение) */
+  .ed{flex:1.15;min-width:0;border-left:1px solid var(--rule);display:flex;flex-direction:column;background:var(--bg)}
+  .etabs{display:flex;height:34px;background:var(--panel2);border-bottom:1px solid var(--rule);flex:none;font-size:12.5px}
+  .et{display:flex;align-items:center;gap:6px;padding:0 10px 0 12px;color:var(--text);border-right:1px solid var(--rule);position:relative}
+  .et.on{background:var(--bg);color:var(--strong)}
+  .et.on::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--acc)}
+  .et.mod{color:var(--vcsMod)}
+  .et .x{color:var(--muted);font-size:11px;margin-left:4px}
+  .ebar{display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--rule);flex:none}
+  .ebar .crumb b{color:var(--text);font-weight:400}
+  .ro{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;font-family:var(--mono);color:var(--muted);border:1px solid var(--rule);border-radius:4px;padding:1px 7px}
+  .ebtn{font-size:11.5px;color:var(--text);border:1px solid var(--rule);border-radius:4px;padding:1px 8px}
+  .code{flex:1;overflow:hidden;font-family:var(--mono);font-size:13px;line-height:21px;padding-top:6px}
+  .ln{display:block;white-space:pre}
+  .ln .g{display:inline-block;width:46px;text-align:right;padding-right:10px;color:#4b5059}
+  .ln .vc{display:inline-block;width:3px;height:21px;vertical-align:top;margin-right:12px}
+  .ln .vc.m{background:var(--vcsMod)} .ln .vc.a{background:var(--vcsAdd)}
+  .ln.cur{background:#26282e} .ln.cur .g{color:#a1a3ab}
+  .k{color:var(--kw)} .s{color:var(--str)} .f{color:var(--fn)} .nu{color:var(--num)} .c{color:var(--com)} .an{color:var(--ann)} .t{color:var(--typ)}
+
+  /* Изменения (локальные) и коммиты */
+  .grp{display:flex;align-items:center;gap:6px;height:24px;padding:0 10px;font-size:12.5px;color:var(--strong)}
+  .grp .cnt{color:var(--muted)}
+  .cb{width:13px;height:13px;border:1px solid #5a5d63;border-radius:3px;flex:none}
+  .ch{display:flex;align-items:center;gap:6px;height:24px;padding:0 10px 0 28px;font-size:13px;white-space:nowrap}
+  .ch .dir{color:var(--muted);font-size:12px;margin-left:4px;overflow:hidden;text-overflow:ellipsis}
+  .ch.sel{background:var(--sel)}
+  .ch.mod{color:var(--vcsMod)} .ch.add{color:var(--vcsAdd)} .ch.new{color:var(--vcsNew)} .ch.del{color:var(--vcsDel);text-decoration:line-through}
+  .ch .st{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .twf{border-top:1px solid var(--rule);padding:8px 12px;font-size:12px;color:var(--muted);flex:none;display:flex;justify-content:space-between}
+
+  .log{flex:1;overflow:hidden}
+  .cm{display:grid;grid-template-columns:14px 1fr;gap:8px;padding:6px 10px 6px 12px;font-size:12.5px;border-left:2px solid transparent}
+  .cm .gr{position:relative}
+  .cm .gr::before{content:"";position:absolute;left:5px;top:-6px;bottom:-6px;width:2px;background:#4b5059}
+  .cm .gr i{position:absolute;left:1px;top:4px;width:10px;height:10px;border-radius:50%;background:var(--bg);border:2px solid var(--accText)}
+  .cm .msg{color:var(--strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cm .meta{font-size:11.5px;color:var(--muted);margin-top:2px;display:flex;gap:8px;align-items:center;white-space:nowrap}
+  .cm .h{font-family:var(--mono);font-size:11px}
+  .cm .ref{font-size:10.5px;padding:0 5px;border-radius:3px;border:1px solid #4a6a3f;color:#8fbf7f}
+  .cm .ref.head{border-color:#3e5c8f;color:#86a9ea}
+  .cm.sel{background:var(--selDim);border-left-color:var(--acc)}
+  .cfiles{padding:2px 0 6px}
+  .cfiles .ch{padding-left:34px}
+  .local{display:flex;align-items:center;gap:8px;padding:6px 12px;font-size:12.5px;color:var(--warn)}
+
+  /* Просмотр изменений в правой области */
+  .dvh{display:flex;align-items:center;gap:10px;height:30px;padding:0 12px;border-bottom:1px solid var(--rule);font-size:12px;color:var(--muted);flex:none}
+  .dvh b{color:var(--strong);font-weight:500;font-family:var(--mono);font-size:12px}
+  .dvh .pa{color:var(--add);font-family:var(--mono)} .dvh .pd{color:var(--del);font-family:var(--mono)}
+  .dl{display:block;font-family:var(--mono);font-size:13px;line-height:21px;white-space:pre}
+  .dl .g{display:inline-block;width:38px;text-align:right;padding-right:8px;color:#4b5059}
+  .dl .mk{display:inline-block;width:16px;text-align:center;color:var(--muted)}
+  .dl.a{background:rgba(106,171,115,.13)} .dl.a .mk{color:var(--add)}
+  .dl.d{background:rgba(247,84,100,.12)} .dl.d .mk{color:var(--del)}
+  .dl.gap{color:var(--muted);background:var(--panel2);font-size:12px;padding-left:12px}
+
+  .sbar{display:flex;height:26px;background:var(--panel);border-top:1px solid var(--rule);font-family:var(--mono);font-size:11px;color:var(--muted);flex:none}
+  .sg{display:flex;align-items:center;gap:6px;padding:0 12px;border-right:1px solid var(--rule)}
+  .sg b{color:var(--strong);font-weight:500}
+  .sg.right{margin-left:auto;border-left:1px solid var(--rule);border-right:0}
+
+  .notes{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:16px}
+  .ks{border:1px solid #262a2f;border-radius:10px;padding:14px 16px;background:#0f1113}
+  .ks h3{margin:0 0 8px;font-size:13px;font-weight:500;color:#c6f24e;font-family:"Geist Mono",monospace;letter-spacing:.04em;text-transform:uppercase}
+  .ks li{display:flex;justify-content:space-between;gap:12px;color:#8a9199;font-size:13.5px;padding:3px 0}
+  .ks ul{list-style:none;margin:0;padding:0}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:13.5px;color:#8a9199;margin:6px 0 0}
+  .legend span b{font-weight:500}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">KodeVertex Terminal · Лист 07 · панель проекта как в Android Studio</div>
+  <h1>Проект, изменения и коммиты — слева, как в Android Studio</h1>
+  <p class="lead">Слева вверху — кнопка проекта (имя и ветка), по ней <span class="kbd">⌘1</span> выезжает дерево файлов. Слева — полоса инструментов как в AS: <b>Проект</b>, <b>Изменения</b>, <b>Git</b>. Файлы окрашены по git: <span style="color:#6c9fef">изменён</span>, <span style="color:#73bd79">добавлен</span>, <span style="color:#d1675a">не отслеживается</span>, <span style="color:#6f737a;text-decoration:line-through">удалён</span>. Файл открывается справа от ленты — только просмотр, Claude продолжает работать рядом.</p>
+  <div class="legend">
+    <span><span class="kbd">⌘1</span> Проект</span><span><span class="kbd">⌘0</span> Изменения</span><span><span class="kbd">⌘9</span> Git</span><span><span class="kbd">esc</span> закрыть панель</span><span><span class="kbd">⌘W</span> закрыть файл</span>
+  </div>
+
+  <!-- ═════════ 1. Дерево проекта ═════════ -->
+  <h2>1 · Дерево проекта и открытый файл</h2>
+  <div class="win">
+    <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <div class="proj on"><span class="pi">SA</span>shop-app<span class="br"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="3.5" r="1.7"/><circle cx="4" cy="12.5" r="1.7"/><circle cx="12" cy="5.5" r="1.7"/><path d="M4 5.2v5.6M12 7.2c0 3-4 2.5-7.4 4"/></svg>feature/payments</span><span class="chev">▾</span></div>
+      <div class="tabs"><div class="tab on"><i></i>shop-app · claude</div><div class="tab">landing</div><div class="tab">+</div></div>
+    </div>
+    <div class="body">
+      <div class="stripe">
+        <div class="sb on" title="Проект ⌘1"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.5 3.5h5l1.5 1.5h6.5v8h-13z"/></svg></div>
+        <div class="sb" title="Изменения ⌘0"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.4"/><path d="M1 8h4.6M10.4 8H15"/></svg></div>
+        <div class="sb" title="Git ⌘9"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="4" cy="3.5" r="1.7"/><circle cx="4" cy="12.5" r="1.7"/><circle cx="12" cy="5.5" r="1.7"/><path d="M4 5.2v5.6M12 7.2c0 3-4 2.5-7.4 4"/></svg></div>
+      </div>
+      <div class="tw">
+        <div class="twh">Проект <span class="sub">▾</span><div class="acts"><span>⌖</span><span>⇕</span><span>⋮</span><span>—</span></div></div>
+        <div class="tree">
+          <div class="n dirm" style="padding-left:6px"><span class="tw-a">▾</span><span class="ic"><span class="fold"></span></span><span class="lbl"><b style="font-weight:600">shop-app</b></span><span class="hint">~/projects/shop-app</span></div>
+          <div class="n" style="padding-left:22px"><span class="tw-a">▸</span><span class="ic"><span class="fold"></span></span>.gradle</div>
+          <div class="n dirm" style="padding-left:22px"><span class="tw-a">▾</span><span class="ic"><span class="fold"></span></span><span class="lbl">app</span></div>
+          <div class="n dirm" style="padding-left:38px"><span class="tw-a">▾</span><span class="ic"><span class="fold src"></span></span><span class="lbl">src/main/java</span></div>
+          <div class="n dirm" style="padding-left:54px"><span class="tw-a">▾</span><span class="ic"><span class="fold"></span></span><span class="lbl">com.shop.payments</span></div>
+          <div class="n mod" style="padding-left:70px"><span class="tw-a"></span><span class="ic"><span class="fi kt">K</span></span>PaymentApi.kt</div>
+          <div class="n add sel" style="padding-left:70px"><span class="tw-a"></span><span class="ic"><span class="fi kt">K</span></span>PaymentService.kt</div>
+          <div class="n new" style="padding-left:70px"><span class="tw-a"></span><span class="ic"><span class="fi kt">K</span></span>RetryPolicy.kt</div>
+          <div class="n del" style="padding-left:70px"><span class="tw-a"></span><span class="ic"><span class="fi kt">K</span></span>LegacyPay.kt</div>
+          <div class="n" style="padding-left:54px"><span class="tw-a">▸</span><span class="ic"><span class="fold"></span></span>com.shop.cart</div>
+          <div class="n" style="padding-left:38px"><span class="tw-a">▸</span><span class="ic"><span class="fold res"></span></span>res</div>
+          <div class="n mod" style="padding-left:38px"><span class="tw-a"></span><span class="ic"><span class="fi xml">X</span></span>AndroidManifest.xml</div>
+          <div class="n" style="padding-left:38px"><span class="tw-a"></span><span class="ic"><span class="fi gr">G</span></span>build.gradle.kts</div>
+          <div class="n" style="padding-left:22px"><span class="tw-a">▸</span><span class="ic"><span class="fold"></span></span>gradle</div>
+          <div class="n" style="padding-left:22px"><span class="tw-a"></span><span class="ic"><span class="fi gr">G</span></span>settings.gradle.kts</div>
+          <div class="n mod" style="padding-left:22px"><span class="tw-a"></span><span class="ic"><span class="fi md">M</span></span>README.md</div>
+          <div class="n" style="padding-left:22px"><span class="tw-a"></span><span class="ic"><span class="fi txt">≡</span></span>.gitignore</div>
+        </div>
+      </div>
+      <div class="main">
+        <div class="feed">
+          <div class="you"><div class="who">Вы</div>Добавь ретраи в PaymentService</div>
+          <div class="act"><div class="who">▶ Главный · Opus 5.5</div>Пишет <b>PaymentService.kt</b> +18 −2</div>
+          <div class="card"><div class="who"><span>Главный · Opus 5.5</span><em>0м 48с · $0.09</em></div><p>Добавил <code>RetryPolicy</code> и обернул вызов <code>charge()</code> — три попытки с паузой 200 мс.</p></div>
+          <div class="sp"></div>
+          <div class="input"><span class="ph">Команда или вопрос Claude…</span><span>⌘↵</span></div>
+        </div>
+        <div class="ed">
+          <div class="etabs">
+            <div class="et mod"><span class="fi kt">K</span>PaymentApi.kt<span class="x">✕</span></div>
+            <div class="et on" style="color:var(--vcsAdd)"><span class="fi kt">K</span>PaymentService.kt<span class="x">✕</span></div>
+          </div>
+          <div class="ebar"><span class="crumb">app › … › payments › <b>PaymentService.kt</b></span><span class="ro">🔒 только чтение</span><span class="ebtn">Открыть в редакторе</span></div>
+          <div class="code">
+            <div class="ln"><span class="g">1</span><span class="vc"></span><span class="k">package</span> com.shop.payments</div>
+            <div class="ln"><span class="g">2</span><span class="vc"></span></div>
+            <div class="ln"><span class="g">3</span><span class="vc"></span><span class="k">import</span> kotlinx.coroutines.delay</div>
+            <div class="ln"><span class="g">4</span><span class="vc"></span></div>
+            <div class="ln"><span class="g">5</span><span class="vc"></span><span class="c">/** Оплата заказа: API + ретраи. */</span></div>
+            <div class="ln"><span class="g">6</span><span class="vc"></span><span class="k">class</span> <span class="t">PaymentService</span>(</div>
+            <div class="ln"><span class="g">7</span><span class="vc"></span>    <span class="k">private val</span> api: <span class="t">PaymentApi</span>,</div>
+            <div class="ln"><span class="g">8</span><span class="vc a"></span>    <span class="k">private val</span> retry: <span class="t">RetryPolicy</span> = <span class="t">RetryPolicy</span>(<span class="nu">3</span>),</div>
+            <div class="ln"><span class="g">9</span><span class="vc"></span>) {</div>
+            <div class="ln cur"><span class="g">10</span><span class="vc m"></span>    <span class="k">suspend fun</span> <span class="f">charge</span>(order: <span class="t">Order</span>): <span class="t">Receipt</span> =</div>
+            <div class="ln"><span class="g">11</span><span class="vc a"></span>        retry.<span class="f">run</span> { api.<span class="f">charge</span>(order.id, order.total) }</div>
+            <div class="ln"><span class="g">12</span><span class="vc"></span></div>
+            <div class="ln"><span class="g">13</span><span class="vc"></span>    <span class="k">fun</span> <span class="f">refund</span>(id: <span class="t">String</span>) = api.<span class="f">refund</span>(id)</div>
+            <div class="ln"><span class="g">14</span><span class="vc"></span>}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="sbar"><div class="sg">shop-app</div><div class="sg"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="3.5" r="1.7"/><circle cx="4" cy="12.5" r="1.7"/><circle cx="12" cy="5.5" r="1.7"/><path d="M4 5.2v5.6M12 7.2c0 3-4 2.5-7.4 4"/></svg> <b>feature/payments</b></div><div class="sg">3 изменено · 1 новый</div><div class="sg right">PaymentService.kt · 10:5 · Kotlin · UTF-8</div></div>
+  </div>
+
+  <!-- ═════════ 2. Изменения ═════════ -->
+  <h2>2 · Изменения — что поменялось локально (не закоммичено)</h2>
+  <div class="win">
+    <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <div class="proj"><span class="pi">SA</span>shop-app<span class="br"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="3.5" r="1.7"/><circle cx="4" cy="12.5" r="1.7"/><circle cx="12" cy="5.5" r="1.7"/><path d="M4 5.2v5.6M12 7.2c0 3-4 2.5-7.4 4"/></svg>feature/payments</span><span class="chev">▾</span></div>
+      <div class="tabs"><div class="tab on"><i></i>shop-app · claude</div><div class="tab">landing</div><div class="tab">+</div></div>
+    </div>
+    <div class="body">
+      <div class="stripe">
+        <div class="sb"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.5 3.5h5l1.5 1.5h6.5v8h-13z"/></svg></div>
+        <div class="sb on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.4"/><path d="M1 8h4.6M10.4 8H15"/></svg></div>
+        <div class="sb"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="4" cy="3.5" r="1.7"/><circle cx="4" cy="12.5" r="1.7"/><circle cx="12" cy="5.5" r="1.7"/><path d="M4 5.2v5.6M12 7.2c0 3-4 2.5-7.4 4"/></svg></div>
+      </div>
+      <div class="tw">
+        <div class="twh">Изменения <span class="sub">feature/payments</span><div class="acts"><span>↻</span><span>⇕</span><span>—</span></div></div>
+        <div class="tree">
+          <div class="grp"><span class="tw-a" style="color:var(--muted);font-size:9px">▾</span>Изменения <span class="cnt">4 файла</span></div>
+          <div class="ch mod"><span class="fi kt">K</span>PaymentApi.kt<span class="dir">app/…/payments</span><span class="st">+4 −1</span></div>
+          <div class="ch add sel"><span class="fi kt">K</span>PaymentService.kt<span class="dir">app/…/payments</span><span class="st">+18 −2</span></div>
+          <div class="ch del"><span class="fi kt">K</span>LegacyPay.kt<span class="dir">app/…/payments</span><span class="st">−64</span></div>
+          <div class="ch mod"><span class="fi xml">X</span>AndroidManifest.xml<span class="dir">app/src/main</span><span class="st">+1</span></div>
+          <div class="grp" style="margin-top:6px"><span class="tw-a" style="color:var(--muted);font-size:9px">▾</span>Не отслеживаются <span class="cnt">1 файл</span></div>
+          <div class="ch new"><span class="fi kt">K</span>RetryPolicy.kt<span class="dir">app/…/payments</span><span class="st">новый</span></div>
+        </div>
+        <div class="twf"><span>+23 −67 · 5 файлов</span><span>Claude менял 4 из 5</span></div>
+      </div>
+      <div class="main">
+        <div class="ed" style="flex:1">
+          <div class="etabs"><div class="et on"><span class="fi kt">K</span>PaymentService.kt · изменения<span class="x">✕</span></div></div>
+          <div class="dvh"><b>app/src/main/java/com/shop/payments/PaymentService.kt</b><span class="pa">+18</span><span class="pd">−2</span><span class="ro" style="margin-left:auto">HEAD → рабочая копия</span><span class="ebtn">Открыть файл</span></div>
+          <div class="code" style="padding-top:4px">
+            <div class="dl"><span class="g">6</span><span class="g">6</span><span class="mk"> </span><span class="k">class</span> <span class="t">PaymentService</span>(</div>
+            <div class="dl"><span class="g">7</span><span class="g">7</span><span class="mk"> </span>    <span class="k">private val</span> api: <span class="t">PaymentApi</span>,</div>
+            <div class="dl a"><span class="g"></span><span class="g">8</span><span class="mk">+</span>    private val retry: RetryPolicy = RetryPolicy(3),</div>
+            <div class="dl"><span class="g">8</span><span class="g">9</span><span class="mk"> </span>) {</div>
+            <div class="dl d"><span class="g">9</span><span class="g"></span><span class="mk">−</span>    suspend fun charge(order: Order): Receipt = api.charge(order.id, order.total)</div>
+            <div class="dl a"><span class="g"></span><span class="g">10</span><span class="mk">+</span>    suspend fun charge(order: Order): Receipt =</div>
+            <div class="dl a"><span class="g"></span><span class="g">11</span><span class="mk">+</span>        retry.run { api.charge(order.id, order.total) }</div>
+            <div class="dl"><span class="g">10</span><span class="g">12</span><span class="mk"> </span></div>
+            <div class="dl gap">… 14 строк без изменений</div>
+            <div class="dl"><span class="g">25</span><span class="g">27</span><span class="mk"> </span>    <span class="k">fun</span> <span class="f">refund</span>(id: <span class="t">String</span>) = api.<span class="f">refund</span>(id)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="sbar"><div class="sg">shop-app</div><div class="sg"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="3.5" r="1.7"/><circle cx="4" cy="12.5" r="1.7"/><circle cx="12" cy="5.5" r="1.7"/><path d="M4 5.2v5.6M12 7.2c0 3-4 2.5-7.4 4"/></svg> <b>feature/payments</b></div><div class="sg">4 изменено · 1 новый</div><div class="sg right">↑↓ выбрать · ↵ открыть изменения · ⌘↓ открыть файл</div></div>
+  </div>
+
+  <!-- ═════════ 3. Git: коммиты ═════════ -->
+  <h2>3 · Git — коммиты и какие файлы они тронули</h2>
+  <div class="win">
+    <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <div class="proj"><span class="pi">SA</span>shop-app<span class="br"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="3.5" r="1.7"/><circle cx="4" cy="12.5" r="1.7"/><circle cx="12" cy="5.5" r="1.7"/><path d="M4 5.2v5.6M12 7.2c0 3-4 2.5-7.4 4"/></svg>feature/payments</span><span class="chev">▾</span></div>
+      <div class="tabs"><div class="tab on"><i></i>shop-app · claude</div><div class="tab">landing</div><div class="tab">+</div></div>
+    </div>
+    <div class="body">
+      <div class="stripe">
+        <div class="sb"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.5 3.5h5l1.5 1.5h6.5v8h-13z"/></svg></div>
+        <div class="sb"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.4"/><path d="M1 8h4.6M10.4 8H15"/></svg></div>
+        <div class="sb on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="4" cy="3.5" r="1.7"/><circle cx="4" cy="12.5" r="1.7"/><circle cx="12" cy="5.5" r="1.7"/><path d="M4 5.2v5.6M12 7.2c0 3-4 2.5-7.4 4"/></svg></div>
+      </div>
+      <div class="tw" style="width:330px">
+        <div class="twh">Git <span class="sub">лог · feature/payments</span><div class="acts"><span>⌕</span><span>↻</span><span>—</span></div></div>
+        <div class="log">
+          <div class="local">● Локальные изменения · 5 файлов <span style="margin-left:auto;color:var(--muted)">⌘0</span></div>
+          <div class="cm sel"><span class="gr"><i></i></span><div><div class="msg">Оплата: PaymentApi и экран оплаты</div><div class="meta"><span class="ref head">HEAD</span><span class="ref">feature/payments</span><span class="h">a41c9e2</span><span>сегодня 14:20</span></div></div></div>
+          <div class="cfiles">
+            <div class="ch add"><span class="fi kt">K</span>PaymentApi.kt<span class="dir">app/…/payments</span><span class="st">+52</span></div>
+            <div class="ch add sel"><span class="fi kt">K</span>PayScreen.kt<span class="dir">app/…/ui</span><span class="st">+88</span></div>
+            <div class="ch mod"><span class="fi xml">X</span>strings.xml<span class="dir">res/values</span><span class="st">+6 −1</span></div>
+          </div>
+          <div class="cm"><span class="gr"><i></i></span><div><div class="msg">Корзина: пересчёт итога при скидке</div><div class="meta"><span class="h">7d02b11</span><span>вчера 19:05</span></div></div></div>
+          <div class="cm"><span class="gr"><i></i></span><div><div class="msg">Слияние: каталог товаров</div><div class="meta"><span class="ref">main</span><span class="h">e93f4a0</span><span>вчера 11:40</span></div></div></div>
+          <div class="cm"><span class="gr"><i></i></span><div><div class="msg">Каталог: фильтр по цене</div><div class="meta"><span class="h">5be81c3</span><span>12 нояб.</span></div></div></div>
+          <div class="cm"><span class="gr"><i></i></span><div><div class="msg">Первая версия магазина</div><div class="meta"><span class="h">01af7d9</span><span>10 нояб.</span></div></div></div>
+        </div>
+      </div>
+      <div class="main">
+        <div class="ed" style="flex:1">
+          <div class="etabs"><div class="et on"><span class="fi kt">K</span>PayScreen.kt · a41c9e2<span class="x">✕</span></div></div>
+          <div class="dvh"><b>app/src/main/java/com/shop/ui/PayScreen.kt</b><span class="pa">+88</span><span class="ro" style="margin-left:auto">новый файл в a41c9e2</span><span class="ebtn">Копировать хэш</span></div>
+          <div class="code" style="padding-top:4px">
+            <div class="dl a"><span class="g"></span><span class="g">1</span><span class="mk">+</span>package com.shop.ui</div>
+            <div class="dl a"><span class="g"></span><span class="g">2</span><span class="mk">+</span></div>
+            <div class="dl a"><span class="g"></span><span class="g">3</span><span class="mk">+</span>import androidx.compose.runtime.Composable</div>
+            <div class="dl a"><span class="g"></span><span class="g">4</span><span class="mk">+</span>import com.shop.payments.PaymentService</div>
+            <div class="dl a"><span class="g"></span><span class="g">5</span><span class="mk">+</span></div>
+            <div class="dl a"><span class="g"></span><span class="g">6</span><span class="mk">+</span>@Composable</div>
+            <div class="dl a"><span class="g"></span><span class="g">7</span><span class="mk">+</span>fun PayScreen(service: PaymentService, onDone: () -&gt; Unit) {</div>
+            <div class="dl a"><span class="g"></span><span class="g">8</span><span class="mk">+</span>    val state = rememberPayState(service)</div>
+            <div class="dl gap">… ещё 80 строк · Показать всё</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="sbar"><div class="sg">shop-app</div><div class="sg"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="3.5" r="1.7"/><circle cx="4" cy="12.5" r="1.7"/><circle cx="12" cy="5.5" r="1.7"/><path d="M4 5.2v5.6M12 7.2c0 3-4 2.5-7.4 4"/></svg> <b>feature/payments</b></div><div class="sg">a41c9e2 · 3 файла · +146 −1</div><div class="sg right">↑↓ коммиты · → файлы · ↵ изменения</div></div>
+  </div>
+
+  <div class="notes">
+    <div class="ks"><h3>Как открывается</h3><ul>
+      <li><span>Кнопка «shop-app · ветка» слева вверху</span><span>⌘1</span></li>
+      <li><span>Значки на полосе слева</span><span>клик</span></li>
+      <li><span>Повторный клик / esc</span><span>скрыть</span></li>
+      <li><span>Ширина панели</span><span>тянуть край</span></li>
+    </ul></div>
+    <div class="ks"><h3>Файлы</h3><ul>
+      <li><span>Открыть файл справа</span><span>↵ / клик</span></li>
+      <li><span>Найти файл по имени</span><span>набор в дереве</span></li>
+      <li><span>Показать текущий файл в дереве</span><span>⌖</span></li>
+      <li><span>Во внешнем редакторе</span><span>⌘↓</span></li>
+    </ul></div>
+    <div class="ks"><h3>Только просмотр</h3><ul>
+      <li><span>Ничего не коммитит и не меняет</span><span></span></li>
+      <li><span>Обновляется сам, когда Claude правит файлы</span><span></span></li>
+      <li><span>Значок файла — в сообщение Claude</span><span>⌘L</span></li>
+    </ul></div>
+  </div>
+</div>
+</body>
+</html>
