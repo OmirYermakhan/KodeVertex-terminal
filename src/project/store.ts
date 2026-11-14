@@ -28,6 +28,10 @@ interface ProjectState {
   /** null — ещё не загружено. */
   changes: Change[] | null
   notGit: boolean
+  /** Ошибка git_status (кроме «не git»): при changes === null — показать её вместо загрузки. */
+  gitError: string | null
+  /** Строка состояния окна «Git»: «хэш · N файла · +a −d» выбранного коммита. */
+  commitStat: string | null
   tabs: ViewerTab[]
   active: number
   focusLine: number | null
@@ -70,11 +74,12 @@ export const useProject = create<ProjectState>((set, get) => {
     const id = ++seq
     gitStatus(root).then(
       (changes) => {
-        if (id === seq) set({ changes, notGit: false })
+        if (id === seq) set({ changes, notGit: false, gitError: null })
       },
       (e) => {
         if (id !== seq) return
-        if (String(e).includes('not-git')) set({ changes: [], notGit: true })
+        if (String(e).includes('not-git')) set({ changes: [], notGit: true, gitError: null })
+        else set({ gitError: String(e) })
       },
     )
   }
@@ -84,6 +89,8 @@ export const useProject = create<ProjectState>((set, get) => {
     root: null,
     changes: null,
     notGit: false,
+    gitError: null,
+    commitStat: null,
     tabs: [],
     active: 0,
     focusLine: null,
@@ -105,7 +112,7 @@ export const useProject = create<ProjectState>((set, get) => {
         (root) => {
           if (root === get().root) return
           seq++
-          set({ root, changes: null, notGit: false, tabs: [], active: 0, focusLine: null, cursors: {}, claudeTouched: new Set() })
+          set({ root, changes: null, notGit: false, gitError: null, commitStat: null, tabs: [], active: 0, focusLine: null, cursors: {}, claudeTouched: new Set() })
           run()
         },
         () => {},

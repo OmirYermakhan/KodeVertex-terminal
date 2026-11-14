@@ -6,7 +6,7 @@ const ids = ['kv', 'warm', 'cold', 'light', 'as'] as ThemeId[]
 describe('themes', () => {
   it('every theme has all tokens as hex colors', () => {
     const keys = Object.keys(THEMES.as.tokens)
-    expect(keys).toHaveLength(63)
+    expect(keys).toHaveLength(67)
     for (const id of ids) {
       expect(Object.keys(THEMES[id].tokens).sort()).toEqual([...keys].sort())
       for (const v of Object.values(THEMES[id].tokens)) expect(v).toMatch(/^#[0-9a-f]{6}$/i)
@@ -21,6 +21,9 @@ describe('themes', () => {
   })
   it('поля кода в просмотре файла как в макете 07 (тема AS)', () => {
     expect(THEMES.as.tokens).toMatchObject({ edLn: '#4b5059', edCur: '#26282e', edCurLn: '#a1a3ab' })
+  })
+  it('метки веток в логе как в макете 07 (тема AS)', () => {
+    expect(THEMES.as.tokens).toMatchObject({ refRule: '#4a6a3f', refText: '#8fbf7f', headRule: '#3e5c8f', headText: '#86a9ea' })
   })
   it('only light is not dark', () => {
     expect(THEMES.light.dark).toBe(false)

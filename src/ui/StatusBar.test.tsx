@@ -103,6 +103,19 @@ describe('StatusBar', () => {
     expect(container.querySelector('.sg.right')!.textContent).toBe('14:32')
   })
 
+  it('панель проекта: сводка git после ветки, подсказка клавиш справа (макет 07)', () => {
+    const now = new Date(2026, 0, 1, 14, 32)
+    const { container, rerender } = render(
+      <StatusBar cwd="/Users/me/shop-app" git={git} now={now} project="4 изменено · 1 новый" hint="↑↓ коммиты · → файлы · ↵ изменения" />,
+    )
+    const s = segs(container)
+    expect(s[s.indexOf('⎇ feature/form●') + 1]).toBe('4 изменено · 1 новый')
+    expect(container.querySelector('.sg.right')!.textContent).toBe('↑↓ коммиты · → файлы · ↵ изменения')
+    rerender(<StatusBar cwd="/Users/me/shop-app" git={git} now={now} project={null} hint={null} />)
+    expect(container.textContent).not.toContain('изменено')
+    expect(container.querySelector('.sg.right')!.textContent).toBe('14:32')
+  })
+
   it('omits the branch segment without git', () => {
     const { container } = render(<StatusBar cwd="/tmp/x" git={null} now={new Date(2026, 0, 1, 9, 5)} />)
     expect(container.textContent).not.toContain('⎇')

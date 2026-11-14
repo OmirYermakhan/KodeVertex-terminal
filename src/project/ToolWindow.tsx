@@ -86,9 +86,16 @@ export default function ToolWindow({ git }: { git: GitInfo | null }) {
       <div className="twh">
         {head.title} <span className="sub">{head.sub(branch)}</span>
         <div className="acts">
-          {head.acts.map((a) => (
-            <span key={a}>{a}</span>
-          ))}
+          {head.acts.map((a) =>
+            // ↻ — перечитать git-статус (лог перечитается вслед за ним).
+            a === '↻' ? (
+              <button key={a} type="button" aria-label="Обновить" title="Обновить" onClick={() => useProject.getState().refresh()}>
+                {a}
+              </button>
+            ) : (
+              <span key={a}>{a}</span>
+            ),
+          )}
           <button type="button" aria-label="Скрыть" title="Скрыть" onClick={hide}>
             —
           </button>

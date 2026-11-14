@@ -76,6 +76,11 @@ export interface ThemeTokens {
   edLn: string
   edCur: string
   edCurLn: string
+  /** Метки веток в логе (макет 07 .ref): рамка и текст; HEAD (.ref.head) — свои. */
+  refRule: string
+  refText: string
+  headRule: string
+  headText: string
 }
 
 export interface Theme {
@@ -154,6 +159,10 @@ export const THEMES: Record<ThemeId, Theme> = {
       edLn: '#4b5157',
       edCur: '#171a1e',
       edCurLn: '#a8aeb5',
+      refRule: '#4a6a3f',
+      refText: '#8fbf7f',
+      headRule: '#3e5c8f',
+      headText: '#86a9ea',
     },
   },
   warm: {
@@ -224,6 +233,10 @@ export const THEMES: Record<ThemeId, Theme> = {
       edLn: '#58544d',
       edCur: '#272523',
       edCurLn: '#aaa397',
+      refRule: '#4a6a3f',
+      refText: '#8fbf7f',
+      headRule: '#3e5c8f',
+      headText: '#86a9ea',
     },
   },
   cold: {
@@ -294,6 +307,10 @@ export const THEMES: Record<ThemeId, Theme> = {
       edLn: '#4c5563',
       edCur: '#1f2630',
       edCurLn: '#a3adba',
+      refRule: '#4a6a3f',
+      refText: '#8fbf7f',
+      headRule: '#3e5c8f',
+      headText: '#86a9ea',
     },
   },
   light: {
@@ -364,6 +381,10 @@ export const THEMES: Record<ThemeId, Theme> = {
       edLn: '#a9acaf',
       edCur: '#ebeae2',
       edCurLn: '#4f545a',
+      refRule: '#9cc29a',
+      refText: '#2e6b34',
+      headRule: '#9db3dd',
+      headText: '#2f5aa8',
     },
   },
   as: {
@@ -434,6 +455,10 @@ export const THEMES: Record<ThemeId, Theme> = {
       edLn: '#4b5059',
       edCur: '#26282e',
       edCurLn: '#a1a3ab',
+      refRule: '#4a6a3f',
+      refText: '#8fbf7f',
+      headRule: '#3e5c8f',
+      headText: '#86a9ea',
     },
   },
 }

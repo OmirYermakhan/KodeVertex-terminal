@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from 'react'
+import DiffTab from './DiffTab'
 import FileView from './FileView'
 import { fileIcon } from './fileIcon'
 import { statusOf, useProject, type ViewerTab } from './store'
@@ -13,7 +14,7 @@ export function viewerTabTitle(t: ViewerTab): string {
 }
 
 /**
- * Просмотр справа (макет 07 `.ed`): вкладки файлов и изменений. Файл — FileView; изменения — Task 7.
+ * Просмотр справа (макет 07 `.ed`): вкладки файлов и изменений. Файл — FileView; изменения — DiffTab.
  * data-viewer: ⌘W при фокусе здесь закрывает вкладку.
  * Вкладка изменений скрывает панели терминала — фокус переводим сюда (иначе он пропал бы со скрытой панелью).
  */
@@ -67,7 +68,8 @@ export default function Viewer() {
           )
         })}
       </div>
-      {cur?.kind === 'file' ? <FileView key={cur.rel} rel={cur.rel} /> : <div className="ed-body" />}
+      {cur?.kind === 'file' && <FileView key={cur.rel} rel={cur.rel} />}
+      {cur?.kind === 'diff' && <DiffTab key={`${cur.rel}\0${cur.rev ?? ''}`} rel={cur.rel} rev={cur.rev} />}
     </div>
   )
 }

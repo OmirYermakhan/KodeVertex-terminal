@@ -19,6 +19,13 @@ import Stripe from './project/Stripe'
 import ToolWindow from './project/ToolWindow'
 import Viewer from './project/Viewer'
 import { useProject } from './project/store'
+import { localSummary } from './project/changeRow'
+
+/** Подсказка клавиш окна инструмента в строке состояния (макет 07, окна 2–3). */
+const TOOL_HINT = {
+  changes: '↑↓ выбрать · ↵ открыть изменения · ⌘↓ открыть файл',
+  git: '↑↓ коммиты · → файлы · ↵ изменения',
+} as const
 
 const REPEATABLE = new Set<Action>(['fontBigger', 'fontSmaller'])
 
@@ -50,6 +57,11 @@ export default function App() {
     return t?.kind === 'file' ? t.rel : null
   })
   const viewerLine = useProject((s) => (viewerFile ? (s.cursors[viewerFile] ?? 1) : 1))
+  // Сводка git при открытой панели: «N изменено · M новый»; в «Git» — выбранный коммит.
+  const tool = useProject((s) => s.tool)
+  const projectSeg = useProject((s) =>
+    s.tool === null ? null : ((s.tool === 'git' ? s.commitStat : null) ?? localSummary(s.changes)),
+  )
   const attachments = useAttachCount((s) => (focusedPane ? (s.counts[focusedPane] ?? 0) : 0))
 
   useEffect(() => {
@@ -118,6 +130,8 @@ export default function App() {
           claude={claude}
           attachments={attachments}
           permissionMode={permissionMode}
+          project={projectSeg}
+          hint={tool === 'changes' || tool === 'git' ? TOOL_HINT[tool] : null}
           file={
             viewerFile
               ? {

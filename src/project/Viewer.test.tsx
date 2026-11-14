@@ -70,6 +70,13 @@ describe('Viewer', () => {
     expect(document.querySelector('.ed-body .code')).not.toBeNull()
   })
 
+  it('вкладка изменений — просмотр изменений файла', async () => {
+    act(() => useProject.setState({ tabs: [{ kind: 'diff', rel: 'a.kt', rev: null }], active: 0 }))
+    render(<Viewer />)
+    expect(document.querySelector('.ed.full .dvh .ro')?.textContent).toBe('HEAD → рабочая копия')
+    expect(await screen.findByText('Изменений нет')).toBeInTheDocument()
+  })
+
   it('открылась вкладка изменений — фокус в просмотре', () => {
     act(() => useProject.setState({ tabs: [{ kind: 'file', rel: 'a.kt' }], active: 0 }))
     render(<Viewer />)

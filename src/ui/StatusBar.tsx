@@ -32,6 +32,10 @@ export default function StatusBar(p: {
   permissionMode?: string | null
   /** Активная вкладка просмотра — файл (макет 07): справа «Имя · строка:столбец · Язык · UTF-8» вместо часов. */
   file?: { name: string; line: number; col: number } | null
+  /** Открыта панель проекта (макет 07): «N изменено · M новый» или «хэш · N файла · +a −d» после ветки. */
+  project?: string | null
+  /** Подсказка клавиш окна «Изменения»/«Git» справа (макет 07), если не открыт файл. */
+  hint?: string | null
 }) {
   const home = useHome()
   const now = useClock(p.now)
@@ -74,6 +78,7 @@ export default function StatusBar(p: {
           )}
         </div>
       )}
+      {p.project && <div className="sg">{p.project}</div>}
       {c?.model && (
         <div className="sg">
           модель <b>{modelLabel(c.model)}</b>
@@ -96,7 +101,9 @@ export default function StatusBar(p: {
         </div>
       )}
       <div className="sg right">
-        {p.file ? `${p.file.name} · ${p.file.line}:${p.file.col} · ${languageName(p.file.name)} · UTF-8` : hhmm(now)}
+        {p.file
+          ? `${p.file.name} · ${p.file.line}:${p.file.col} · ${languageName(p.file.name)} · UTF-8`
+          : (p.hint ?? hhmm(now))}
       </div>
     </div>
   )
