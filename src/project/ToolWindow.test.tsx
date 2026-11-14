@@ -40,6 +40,25 @@ describe('ToolWindow', () => {
     expect(useProject.getState().tool).toBeNull()
   })
 
+  it('открылось — фокус в окне (esc работает сразу); закрылось — фокус вернулся, откуда пришёл', () => {
+    const input = document.createElement('textarea')
+    document.body.appendChild(input)
+    input.focus()
+    render(<ToolWindow git={git} />)
+    act(() => useProject.getState().toggle('project'))
+    const tw = screen.getByTestId('toolwindow')
+    expect(document.activeElement).toBe(tw)
+    act(() => useProject.getState().toggle('git'))
+    expect(document.activeElement).toBe(tw)
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape', code: 'Escape' })
+    expect(useProject.getState().tool).toBeNull()
+    expect(document.activeElement).toBe(input)
+    act(() => useProject.getState().toggle('changes'))
+    act(() => useProject.getState().toggle('changes'))
+    expect(document.activeElement).toBe(input)
+    input.remove()
+  })
+
   it('край окна тянется — ширина меняется (в пределах 200–600)', () => {
     act(() => useProject.setState({ tool: 'project', width: 290 }))
     render(<ToolWindow git={git} />)

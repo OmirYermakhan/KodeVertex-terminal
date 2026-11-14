@@ -91,6 +91,7 @@ const { useUi } = await import('./uiStore')
 const { CLOSE_PANE_TITLE } = await import('./PaneView')
 const { resetRecent } = await import('../palette/recent')
 const { CLAUDE_PLACEHOLDER } = await import('../input/InputBar')
+const { useProject } = await import('../project/store')
 
 const flush = () => act(() => new Promise((r) => setTimeout(r, 0)))
 const activeTab = () => {
@@ -304,6 +305,48 @@ describe('⌘P — палитра команд', () => {
     palKey('Enter')
     await flush()
     expect(document.querySelector('[role="dialog"][aria-label="Выбор модели"]')).not.toBeNull()
+    expect(document.activeElement).toBe(inputOf(a))
+  })
+})
+
+describe('панель проекта и фокус', () => {
+  beforeEach(() => {
+    terms.length = 0
+    handles.length = 0
+    useTabs.setState(initialTabsState())
+    useUi.setState({ settingsOpen: false, agentsHidden: false })
+    useSettings.setState({ settings: { ...DEFAULTS }, loaded: true, load: async () => {}, update: vi.fn() })
+    useProject.setState({ tool: null, tabs: [], active: 0 })
+  })
+
+  it('вкладка изменений: фокус в просмотр; ⌘W закрывает её, панели целы, фокус вернулся в строку ввода', async () => {
+    render(<App />)
+    await flush()
+    act(() => useTabs.getState().split('row'))
+    await flush()
+    const [, b] = panes()
+    expect(document.activeElement).toBe(inputOf(b))
+    act(() => useProject.getState().openDiff('a.kt', null))
+    await flush()
+    expect(document.activeElement?.closest('[data-viewer]')).not.toBeNull()
+    cmdW()
+    await flush()
+    expect(useProject.getState().tabs).toHaveLength(0)
+    expect(panes()).toHaveLength(2)
+    expect(document.activeElement).toBe(inputOf(b))
+  })
+
+  it('⌥⌘1 — фокус в окне «Проект», esc — скрыть и вернуть фокус в строку ввода', async () => {
+    render(<App />)
+    await flush()
+    const [a] = panes()
+    expect(document.activeElement).toBe(inputOf(a))
+    fireEvent.keyDown(document.activeElement!, { key: '¡', code: 'Digit1', metaKey: true, altKey: true })
+    await flush()
+    expect(document.activeElement).toBe(document.querySelector('[data-testid="toolwindow"]'))
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape', code: 'Escape' })
+    await flush()
+    expect(useProject.getState().tool).toBeNull()
     expect(document.activeElement).toBe(inputOf(a))
   })
 })

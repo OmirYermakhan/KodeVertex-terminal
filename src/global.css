@@ -176,9 +176,9 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .win-main { flex: 1; display: flex; min-width: 0; }
 .win-main > .panes { min-width: 0; }
 
-/* Полоса инструментов слева (макет 07 .stripe/.sb). Значки — #a8adb5 макета; в светлой теме — тёмнее. */
+/* Полоса инструментов слева (макет 07 .stripe/.sb). Значки — токен --sbIcon (#a8adb5 макета; в светлой теме — тёмнее). */
 .stripe { width: 40px; flex: none; box-sizing: border-box; background: var(--panel); border-right: 1px solid var(--rule); display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 8px; }
-.sb { width: 30px; height: 30px; flex: none; padding: 0; border: 0; border-radius: 6px; background: transparent; display: grid; place-items: center; color: light-dark(#5f646b, #a8adb5); cursor: default; }
+.sb { width: 30px; height: 30px; flex: none; padding: 0; border: 0; border-radius: 6px; background: transparent; display: grid; place-items: center; color: var(--sbIcon); cursor: default; }
 .sb:hover { background: var(--hover); }
 .sb.on { background: var(--acc); color: #fff; }
 .sb svg { width: 16px; height: 16px; }

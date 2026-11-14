@@ -36,4 +36,12 @@ describe('Viewer', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Закрыть вкладку' })[2])
     expect(useProject.getState().tabs).toHaveLength(2)
   })
+
+  it('открылась вкладка изменений — фокус в просмотре', () => {
+    act(() => useProject.setState({ tabs: [{ kind: 'file', rel: 'a.kt' }], active: 0 }))
+    render(<Viewer />)
+    expect(document.activeElement?.closest('[data-viewer]')).toBeNull()
+    act(() => useProject.getState().openDiff('a.kt', null))
+    expect(document.activeElement).toBe(screen.getByTestId('viewer'))
+  })
 })

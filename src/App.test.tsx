@@ -77,19 +77,33 @@ describe('App', () => {
     expect(screen.queryByTestId('toolwindow')).toBeNull()
   })
 
-  it('просмотр справа от панелей; при вкладке изменений панели скрыты, но смонтированы', () => {
+  it('просмотр справа от панелей; при вкладке изменений панели скрыты как неактивная вкладка и доводят анимации при возврате', () => {
     useProject.setState({ tool: null, tabs: [], active: 0 })
+    useSettings.setState({ loaded: true })
     render(<App />)
+    const id = useTabs.getState().active
+    const host = screen.getByTestId(`tab-${id}`)
     expect(screen.queryByTestId('viewer')).toBeNull()
     act(() => useProject.setState({ tabs: [{ kind: 'file', rel: 'a.kt' }], active: 0 }))
-    const panes = screen.getByTestId('panes')
     expect(screen.getByTestId('viewer')).toBeInTheDocument()
-    expect(panes.style.display).not.toBe('none')
-    act(() => useProject.setState({ tabs: [{ kind: 'file', rel: 'a.kt' }, { kind: 'diff', rel: 'a.kt', rev: null }], active: 1 }))
-    expect(screen.getByTestId('panes')).toBe(panes)
-    expect(panes.style.display).toBe('none')
-    act(() => useProject.setState({ active: 0 }))
-    expect(panes.style.display).not.toBe('none')
+    expect(host.style.display).toBe('block')
+    const inTab = document.createElement('div')
+    host.appendChild(inTab)
+    const appear = { animationName: 'kv-in', effect: { target: inTab }, finish: vi.fn() }
+    const doc = document as unknown as { getAnimations?: () => unknown[] }
+    doc.getAnimations = () => [appear]
+    try {
+      act(() => useProject.setState({ tabs: [{ kind: 'file', rel: 'a.kt' }, { kind: 'diff', rel: 'a.kt', rev: null }], active: 1 }))
+      expect(screen.getByTestId(`tab-${id}`)).toBe(host)
+      expect(host.style.display).toBe('none')
+      expect(screen.getByTestId('panes').style.display).toBe('')
+      expect(appear.finish).not.toHaveBeenCalled()
+      act(() => useProject.getState().closeTab(1))
+      expect(host.style.display).toBe('block')
+      expect(appear.finish).toHaveBeenCalledTimes(1)
+    } finally {
+      delete doc.getAnimations
+    }
   })
 
   it('shows the stalled-shell message and reopens a tab', () => {

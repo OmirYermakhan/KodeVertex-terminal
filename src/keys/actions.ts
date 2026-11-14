@@ -18,9 +18,11 @@ export function runAction(a: Action): void {
       return tabs.newTab(t?.cwd[t.focused])
     }
     case 'closePane': {
-      // Фокус в просмотре файла/изменений — закрыть его вкладку, панели терминала не трогать.
+      // Фокус в просмотре — закрыть его вкладку, панели терминала не трогать. Активна вкладка изменений —
+      // панели скрыты, закрывать невидимую нельзя: закрываем вкладку при любом фокусе.
       const p = useProject.getState()
-      if (p.tabs.length > 0 && document.activeElement?.closest('[data-viewer]')) return p.closeTab(p.active)
+      const diff = p.tabs[p.active]?.kind === 'diff'
+      if (p.tabs.length > 0 && (diff || document.activeElement?.closest('[data-viewer]'))) return p.closeTab(p.active)
       return tabs.closeFocused()
     }
     case 'toolProject': return useProject.getState().toggle('project')

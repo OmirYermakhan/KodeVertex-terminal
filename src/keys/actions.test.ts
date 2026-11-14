@@ -94,4 +94,13 @@ describe('окна инструментов и ⌘W в просмотре', () =
     expect(count()).toBe(1)
     expect(useProject.getState().tabs).toHaveLength(1)
   })
+  it('вкладка изменений активна (панели скрыты) — ⌘W закрывает её при любом фокусе', () => {
+    useTabs.getState().split('row')
+    const count = () => leaves(useTabs.getState().tabs[0].tree).length
+    useProject.setState({ tabs: [{ kind: 'file', rel: 'a.kt' }, { kind: 'diff', rel: 'a.kt', rev: null }], active: 1 })
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    runAction('closePane')
+    expect(useProject.getState().tabs).toEqual([{ kind: 'file', rel: 'a.kt' }])
+    expect(count()).toBe(2)
+  })
 })

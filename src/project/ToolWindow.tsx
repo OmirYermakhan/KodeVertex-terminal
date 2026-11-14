@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import type { GitInfo } from '../status/useGitInfo'
 import ChangesView from './ChangesView'
 import GitLog from './GitLog'
@@ -14,7 +14,8 @@ const HEAD: Record<Tool, { title: string; sub: (branch: string | null) => string
 
 /**
  * Окно инструмента слева (макет 07 `.tw`): ширина из стора (тянуть за правый край, 200–600),
- * esc внутри — скрыть и вернуть фокус туда, откуда пришли.
+ * Открылось (клавишей, полосой, кнопкой) — фокус в окно, чтобы esc работал сразу; esc внутри — скрыть.
+ * Закрылось — фокус возвращается туда, откуда пришёл (строка ввода), если он не ушёл сам в другое место.
  */
 export default function ToolWindow({ git }: { git: GitInfo | null }) {
   const tool = useProject((s) => s.tool)
@@ -22,15 +23,30 @@ export default function ToolWindow({ git }: { git: GitInfo | null }) {
   const prevFocus = useRef<HTMLElement | null>(null)
   const stopDrag = useRef<(() => void) | null>(null)
   useEffect(() => () => stopDrag.current?.(), [])
+  const twRef = useRef<HTMLDivElement>(null)
+  const wasOpen = useRef(false)
+  // Кнопки полосы и кнопка проекта — не «откуда пришли»: фокус с них возвращаем дальше.
+  const passing = (a: Element | null) => !a || a === document.body || !!a.closest('.stripe, .proj')
+  useLayoutEffect(() => {
+    if (tool) {
+      const tw = twRef.current
+      const a = document.activeElement as HTMLElement | null
+      if (tw && !tw.contains(a)) {
+        if (!passing(a)) prevFocus.current = a
+        tw.focus()
+      }
+      wasOpen.current = true
+    } else if (wasOpen.current) {
+      wasOpen.current = false
+      const p = prevFocus.current
+      if (passing(document.activeElement) && p?.isConnected) p.focus()
+    }
+  }, [tool])
   if (!tool) return null
   const head = HEAD[tool]
   const branch = git?.branch ?? null
 
-  const hide = (restore: boolean) => {
-    useProject.getState().close()
-    const p = prevFocus.current
-    if (restore && p?.isConnected) p.focus()
-  }
+  const hide = () => useProject.getState().close()
 
   const onResizeStart = (e: React.MouseEvent) => {
     if (e.button !== 0) return
@@ -52,6 +68,7 @@ export default function ToolWindow({ git }: { git: GitInfo | null }) {
 
   return (
     <div
+      ref={twRef}
       className="tw"
       data-testid="toolwindow"
       tabIndex={-1}
@@ -63,7 +80,7 @@ export default function ToolWindow({ git }: { git: GitInfo | null }) {
       onKeyDown={(e) => {
         if (e.key !== 'Escape' || e.defaultPrevented) return
         e.preventDefault()
-        hide(true)
+        hide()
       }}
     >
       <div className="twh">
@@ -72,7 +89,7 @@ export default function ToolWindow({ git }: { git: GitInfo | null }) {
           {head.acts.map((a) => (
             <span key={a}>{a}</span>
           ))}
-          <button type="button" aria-label="Скрыть" title="Скрыть" onClick={() => hide(false)}>
+          <button type="button" aria-label="Скрыть" title="Скрыть" onClick={hide}>
             —
           </button>
         </div>

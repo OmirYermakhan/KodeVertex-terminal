@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from 'react'
 import { useProject, type ViewerTab } from './store'
 
 const baseName = (rel: string) => rel.slice(rel.lastIndexOf('/') + 1)
@@ -12,14 +13,21 @@ export function viewerTabTitle(t: ViewerTab): string {
 /**
  * Просмотр справа (макет 07 `.ed`): вкладки файлов и изменений. Пока — только оболочка вкладок;
  * содержимое файла и изменений — Task 6/7. data-viewer: ⌘W при фокусе здесь закрывает вкладку.
+ * Вкладка изменений скрывает панели терминала — фокус переводим сюда (иначе он пропал бы со скрытой панелью).
  */
 export default function Viewer() {
   const tabs = useProject((s) => s.tabs)
   const active = useProject((s) => s.active)
-  if (tabs.length === 0) return null
+  const edRef = useRef<HTMLDivElement>(null)
   const cur = tabs[active]
+  const diffKey = cur?.kind === 'diff' ? `${cur.rel}\0${cur.rev ?? ''}` : null
+  useLayoutEffect(() => {
+    const ed = edRef.current
+    if (diffKey !== null && ed && !ed.contains(document.activeElement)) ed.focus()
+  }, [diffKey])
+  if (tabs.length === 0) return null
   return (
-    <div className={cur?.kind === 'diff' ? 'ed full' : 'ed'} data-testid="viewer" data-viewer="" tabIndex={-1}>
+    <div ref={edRef} className={cur?.kind === 'diff' ? 'ed full' : 'ed'} data-testid="viewer" data-viewer="" tabIndex={-1}>
       <div className="etabs" role="tablist">
         {tabs.map((t, i) => (
           <div

@@ -67,6 +67,8 @@ export interface ThemeTokens {
   vcsDel: string
   /** Фон под наведением / открытой кнопкой в полосе окна (макет 07 --hover). */
   hover: string
+  /** Значки полосы инструментов (макет 07 .sb: #a8adb5). */
+  sbIcon: string
 }
 
 export interface Theme {
@@ -139,6 +141,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       vcsNew: '#d1675a',
       vcsDel: '#8a9199',
       hover: '#1d2126',
+      sbIcon: '#a8adb5',
     },
   },
   warm: {
@@ -203,6 +206,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       vcsNew: '#d1675a',
       vcsDel: '#948d82',
       hover: '#2c2a27',
+      sbIcon: '#a8adb5',
     },
   },
   cold: {
@@ -267,6 +271,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       vcsNew: '#d1675a',
       vcsDel: '#8592a3',
       hover: '#242b35',
+      sbIcon: '#a8adb5',
     },
   },
   light: {
@@ -331,6 +336,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       vcsNew: '#b8483a',
       vcsDel: '#6d737b',
       hover: '#e2e1d9',
+      sbIcon: '#5f646b',
     },
   },
   as: {
@@ -395,6 +401,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       vcsNew: '#d1675a',
       vcsDel: '#6f737a',
       hover: '#2f3136',
+      sbIcon: '#a8adb5',
     },
   },
 }

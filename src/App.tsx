@@ -42,7 +42,8 @@ export default function App() {
   })
   const settingsOpen = useUi((s) => s.settingsOpen)
   const paletteOpen = useUi((s) => s.paletteOpen)
-  // Вкладка изменений занимает всю область справа: панели терминала скрыты, но живут (как неактивная вкладка).
+  // Вкладка изменений занимает всю область справа: панели терминала скрыты как неактивная вкладка
+  // (смонтированы; при возврате — фокус в строку ввода и доведённые анимации, см. PaneView).
   const diffOpen = useProject((s) => s.tabs[s.active]?.kind === 'diff')
   const attachments = useAttachCount((s) => (focusedPane ? (s.counts[focusedPane] ?? 0) : 0))
 
@@ -90,10 +91,10 @@ export default function App() {
         <Stripe />
         <ToolWindow git={git} />
         <div className="win-main">
-          <div data-testid="panes" className="panes" style={diffOpen ? { display: 'none' } : undefined}>
+          <div data-testid="panes" className="panes">
             {/* Все вкладки остаются смонтированными: неактивные скрыты, сессии живут. */}
-            {loaded && tabs.map((t) => <PaneView key={t.id} tab={t} visible={t.id === active} />)}
-            {loaded && tabs.length === 0 && (
+            {loaded && tabs.map((t) => <PaneView key={t.id} tab={t} visible={t.id === active && !diffOpen} />)}
+            {loaded && tabs.length === 0 && !diffOpen && (
               <div className="stalled" role="alert">
                 <p>Оболочка завершается сразу после запуска. Проверьте ~/.zprofile / ~/.zshrc.</p>
                 <button type="button" onClick={() => useTabs.getState().newTab()}>
