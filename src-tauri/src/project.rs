@@ -6,7 +6,8 @@ use crate::preview::{io_message, looks_binary};
 use serde::Serialize;
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -46,12 +47,16 @@ pub enum FileText {
 /// (`..`, абсолютный путь, симлинк наружу) или не существует.
 pub fn inside_root(root: &Path, rel: &str) -> Option<PathBuf> {
   let rel_path = Path::new(rel);
-  if rel_path.is_absolute() {
+  if rel_path.is_absolute() || has_parent(rel_path) {
     return None;
   }
   let root = root.canonicalize().ok()?;
   let full = root.join(rel_path).canonicalize().ok()?;
   full.starts_with(&root).then_some(full)
+}
+
+fn has_parent(p: &Path) -> bool {
+  p.components().any(|c| matches!(c, Component::ParentDir))
 }
 
 /// Корень проекта: toplevel git-репозитория или сам `cwd`.
@@ -77,12 +82,14 @@ pub fn list_dir(root: &Path, rel: &str) -> Result<DirList, String> {
       if name == ".git" {
         return None;
       }
+      // Тип берём из записи каталога; metadata (с переходом по ссылке) — только для симлинков.
       // Симлинк на папку показываем папкой; битый — файлом.
-      let is_dir = fs::metadata(e.path()).map(|m| m.is_dir()).unwrap_or(false);
+      let ft = e.file_type().ok()?;
+      let is_dir = if ft.is_symlink() { fs::metadata(e.path()).map(|m| m.is_dir()).unwrap_or(false) } else { ft.is_dir() };
       Some(Entry { name, is_dir })
     })
     .collect();
-  all.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())).then_with(|| a.name.cmp(&b.name)));
+  all.sort_by_cached_key(|e| (!e.is_dir, e.name.to_lowercase(), e.name.clone()));
   let more = all.len().saturating_sub(LIST_MAX) as u32;
   all.truncate(LIST_MAX);
   Ok(DirList { entries: all, more })
@@ -90,13 +97,20 @@ pub fn list_dir(root: &Path, rel: &str) -> Result<DirList, String> {
 
 pub fn read_file(root: &Path, rel: &str) -> FileText {
   let Some(path) = inside_root(root, rel) else {
-    // Несуществующий файл — не ошибка (его могли удалить), всё остальное — выход за корень.
-    let exists = !Path::new(rel).is_absolute() && root.join(rel).symlink_metadata().is_ok();
-    return if exists || Path::new(rel).is_absolute() { FileText::Error { message: "Путь вне проекта".to_string() } } else { FileText::Missing };
+    // Несуществующий файл — не ошибка (его могли удалить); всё остальное, включая `..`,
+    // — выход за корень (иначе по Missing/Error можно узнать, что лежит снаружи).
+    let rp = Path::new(rel);
+    let exists = root.join(rp).symlink_metadata().is_ok();
+    return if rp.is_absolute() || has_parent(rp) || exists { FileText::Error { message: "Путь вне проекта".to_string() } } else { FileText::Missing };
   };
-  let meta = match fs::metadata(&path) {
-    Ok(m) => m,
+  // O_NONBLOCK: открытие FIFO, подложенного вместо файла, не повиснет; тип проверяем по открытому дескриптору.
+  let f = match fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(&path) {
+    Ok(f) => f,
     Err(e) if e.kind() == std::io::ErrorKind::NotFound => return FileText::Missing,
+    Err(e) => return FileText::Error { message: io_message(&e) },
+  };
+  let meta = match f.metadata() {
+    Ok(m) => m,
     Err(e) => return FileText::Error { message: io_message(&e) },
   };
   if meta.is_dir() {
@@ -107,10 +121,6 @@ pub fn read_file(root: &Path, rel: &str) -> FileText {
     return FileText::Error { message: "Особый файл".to_string() };
   }
   let size = meta.len();
-  let f = match fs::File::open(&path) {
-    Ok(f) => f,
-    Err(e) => return FileText::Error { message: io_message(&e) },
-  };
   let mut data = Vec::new();
   if let Err(e) = f.take(READ_MAX_BYTES).read_to_end(&mut data) {
     return FileText::Error { message: io_message(&e) };
@@ -120,7 +130,8 @@ pub fn read_file(root: &Path, rel: &str) -> FileText {
   }
   let text = String::from_utf8_lossy(&data);
   let mut truncated = size > READ_MAX_BYTES;
-  let mut lines: Vec<String> = text.split('\n').map(|l| l.trim_end_matches('\r').to_string()).collect();
+  // +2: лишняя строка нужна, чтобы понять, что строк больше лимита; ещё одна — на пустой хвост после последнего \n.
+  let mut lines: Vec<String> = text.split('\n').take(READ_MAX_LINES + 2).map(|l| l.trim_end_matches('\r').to_string()).collect();
   // Завершающий перевод строки не открывает новую строку.
   if lines.last().is_some_and(String::is_empty) {
     lines.pop();
@@ -235,6 +246,35 @@ mod tests {
       FileText::Text { lines, truncated, .. } => assert!(!truncated && lines.len() == 20_000),
       o => panic!("{o:?}"),
     }
+  }
+
+  #[test]
+  fn read_newlines_only_is_bounded() {
+    let d = tempfile::tempdir().unwrap();
+    touch(d.path(), "nl", &"\n".repeat(2 * 1024 * 1024));
+    match read_file(d.path(), "nl") {
+      FileText::Text { lines, truncated, .. } => assert!(truncated && lines.len() == 20_000),
+      o => panic!("{o:?}"),
+    }
+  }
+
+  #[test]
+  fn parent_component_is_always_error() {
+    let outer = tempfile::tempdir().unwrap();
+    let root = outer.path().join("root");
+    fs::create_dir(&root).unwrap();
+    touch(outer.path(), "real", "x");
+    assert!(matches!(read_file(&root, "../real"), FileText::Error { .. }));
+    assert!(matches!(read_file(&root, "../nope"), FileText::Error { .. }));
+    assert!(list_dir(&root, "../nope").is_err());
+  }
+
+  #[test]
+  fn fifo_is_error_without_hang() {
+    let d = tempfile::tempdir().unwrap();
+    let p = std::ffi::CString::new(d.path().join("pipe").to_str().unwrap()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(p.as_ptr(), 0o600) }, 0);
+    assert!(matches!(read_file(d.path(), "pipe"), FileText::Error { .. }));
   }
 
   #[test]
