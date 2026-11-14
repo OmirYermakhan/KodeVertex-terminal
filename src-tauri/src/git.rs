@@ -15,13 +15,16 @@ pub struct GitInfo {
   pub dirty: bool,
 }
 
-/// Переменные окружения для git: без системного конфига, без блокировок индекса и без
-/// вопросов о паролях (stdin закрыт — git повис бы до таймаута).
-pub(crate) const GIT_ENV: &[(&str, &str)] = &[("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_OPTIONAL_LOCKS", "0"), ("GIT_TERMINAL_PROMPT", "0")];
+/// Переменные окружения для git: без системного конфига, без блокировок индекса, без
+/// вопросов о паролях (stdin закрыт — git повис бы до таймаута) и без докачки недостающих
+/// объектов частичного клона (её транспорт — `core.sshCommand` из чужого конфига).
+pub(crate) const GIT_ENV: &[(&str, &str)] =
+  &[("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_OPTIONAL_LOCKS", "0"), ("GIT_TERMINAL_PROMPT", "0"), ("GIT_NO_LAZY_FETCH", "1")];
 
 /// Настройки, перекрывающие конфиг репозитория. git запускается сам при каждом `cd`, а
 /// `.git/config` чужого репозитория (скачанный архив, клон) может назначить команды:
-/// `core.fsmonitor` выполняется прямо из `git status`, хуки — из `hooksPath`.
+/// `core.fsmonitor` выполняется прямо из `git status`, хуки — из `hooksPath`. Сеть не нужна
+/// никогда: `protocol.allow=never` запрещает любой транспорт (вторая защита от докачки).
 pub(crate) const GIT_SAFE_CONFIG: &[&str] = &[
   "-c",
   "core.fsmonitor=false",
@@ -29,6 +32,8 @@ pub(crate) const GIT_SAFE_CONFIG: &[&str] = &[
   "core.hooksPath=/dev/null",
   "-c",
   "core.untrackedCache=false",
+  "-c",
+  "protocol.allow=never",
 ];
 
 /// Запускает `program args` в `cwd` с окружением `env`; убивает процесс по `deadline`.
@@ -244,12 +249,13 @@ mod tests {
     #[rustfmt::skip]
     let want = [
       "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.untrackedCache=false",
-      "-c", "filter.x.clean=", "-C", "/r", "status", "--porcelain",
+      "-c", "protocol.allow=never", "-c", "filter.x.clean=", "-C", "/r", "status", "--porcelain",
     ];
     assert_eq!(a, want);
     assert!(GIT_ENV.contains(&("GIT_CONFIG_NOSYSTEM", "1")));
     assert!(GIT_ENV.contains(&("GIT_OPTIONAL_LOCKS", "0")));
     assert!(GIT_ENV.contains(&("GIT_TERMINAL_PROMPT", "0")));
+    assert!(GIT_ENV.contains(&("GIT_NO_LAZY_FETCH", "1")));
   }
 
   #[test]

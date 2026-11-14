@@ -321,13 +321,14 @@ fn parse_name_status(out: &str) -> Vec<Change> {
 
 pub fn git_status_at(root: &Path) -> Result<Vec<Change>, String> {
   let g = Git::new(root)?;
-  let st = g.run(&["status", "--porcelain=v1", "-z", "--untracked-files=all"]).ok_or("Не удалось получить состояние git")?;
+  // Подмодули не трогаем: их конфиг (фильтры) не перекрыт, а панель зовёт status часто.
+  let st = g.run(&["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=all"]).ok_or("Не удалось получить состояние git")?;
   let mut changes = parse_status(&st);
   // Без коммитов сравниваем индекс с пустым деревом.
   let numstat = if g.has_head() {
-    g.run(&["diff", "HEAD", "--numstat", "-z", "-M", "--no-ext-diff", "--no-textconv"])
+    g.run(&["diff", "HEAD", "--numstat", "-z", "-M", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all"])
   } else {
-    g.run(&["diff", "--cached", "--numstat", "-z", "-M", "--no-ext-diff", "--no-textconv"])
+    g.run(&["diff", "--cached", "--numstat", "-z", "-M", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all"])
   };
   let nums = parse_numstat(&numstat.unwrap_or_default());
   changes = changes.into_iter().map(|c| with_counts(c, &nums)).collect();
@@ -425,7 +426,7 @@ pub fn git_diff_pair(root: &Path, rel: &str, old_rel: Option<&str>, rev: Option<
   }
   let mut a = vec!["diff"];
   a.push(if g.has_head() { "HEAD" } else { "--cached" });
-  a.push("-M");
+  a.extend(["-M", "--ignore-submodules=all"]);
   a.extend(opts());
   a.push("--");
   a.extend(&paths);
@@ -899,5 +900,62 @@ mod tests {
     touch(p, "t", "A\nb\n\n");
     let s = git_diff_at(p, "t", None).unwrap();
     assert!(s.ends_with("\n \n"), "{s:?}");
+  }
+
+  /// Частичный клон из чужого архива: недостающий объект git докачивает с promisor-remote,
+  /// а `core.sshCommand` из `.git/config` — произвольная команда. Ни diff, ни status её не запускают.
+  #[test]
+  fn promisor_lazy_fetch_never_runs_ssh_command() {
+    let d = new_repo();
+    let p = d.path();
+    touch(p, "a.txt", "a\n");
+    commit_all(p, "c");
+    let out = std::process::Command::new("git").arg("-C").arg(p).args(["rev-parse", "HEAD:a.txt"]).output().unwrap();
+    let blob = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    fs::remove_file(p.join(".git/objects").join(&blob[..2]).join(&blob[2..])).unwrap();
+    let marker = p.join("SSH_RAN");
+    for (k, v) in [
+      ("core.repositoryformatversion", "1".to_string()),
+      ("extensions.partialClone", "origin".to_string()),
+      ("remote.origin.url", "ssh://example.invalid/x".to_string()),
+      ("remote.origin.promisor", "true".to_string()),
+      ("core.sshCommand", format!("touch '{}'; false", marker.display())),
+    ] {
+      git(p, &["config", k, &v]);
+    }
+    touch(p, "a.txt", "b\n");
+    let _ = git_status_at(p);
+    let _ = git_diff_at(p, "a.txt", None);
+    assert!(!marker.exists(), "git докачал объект и запустил core.sshCommand из конфига репозитория");
+    // Без защиты тот же репозиторий действительно запускает команду — тест что-то проверяет.
+    let _ = std::process::Command::new("git").arg("-C").arg(p).args(["diff", "HEAD"]).env("GIT_CONFIG_GLOBAL", "/dev/null").output().unwrap();
+    assert!(marker.exists());
+  }
+
+  /// Вложенный репозиторий (подмодуль) с фильтром в своём `.git/config`: status и diff в него не спускаются.
+  #[test]
+  fn submodules_are_not_entered() {
+    let d = new_repo();
+    let p = d.path();
+    let sub = p.join("sub");
+    fs::create_dir(&sub).unwrap();
+    git(&sub, &["init", "-q", "-b", "main"]);
+    touch(&sub, ".gitattributes", "*.txt filter=evil\n");
+    touch(&sub, "a.txt", "a\n");
+    git(&sub, &["-c", "filter.evil.clean=cat", "add", "-A"]);
+    git(&sub, &["-c", "filter.evil.clean=cat", "commit", "-q", "-m", "s"]);
+    touch(p, "top.txt", "t\n");
+    git(p, &["add", "top.txt", "sub"]);
+    git(p, &["commit", "-q", "-m", "top"]);
+    let marker = p.join("FILTER_RAN");
+    git(&sub, &["config", "filter.evil.clean", &format!("touch '{}'; cat", marker.display())]);
+    touch(&sub, "a.txt", "b\n");
+    touch(p, "top.txt", "u\n");
+    let s = git_status_at(p).unwrap();
+    assert!(!marker.exists(), "status спустился в подмодуль и запустил его фильтр");
+    assert!(s.iter().all(|c| c.path != "sub"), "{s:?}");
+    assert_eq!(find(&s, "top.txt").status, "M");
+    assert!(git_diff_at(p, "top.txt", None).unwrap().contains("+u"));
+    assert!(!marker.exists());
   }
 }
