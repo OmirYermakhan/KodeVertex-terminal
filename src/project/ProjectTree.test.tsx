@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Change, DirList } from './api'
 
@@ -42,7 +42,7 @@ beforeEach(() => {
   }
   list.mockClear()
   openFile.mockClear()
-  useProject.setState({ root: '/Users/me/projects/shop-app', changes: [], notGit: false, openFile })
+  useProject.setState({ root: '/Users/me/projects/shop-app', changes: [], notGit: false, openFile, treeExpanded: new Set(['']), treeSel: null })
 })
 
 async function mount(changes: Change[] = []) {
@@ -304,5 +304,23 @@ describe('ProjectTree', () => {
     await screen.findByText('README.md')
     expect(document.activeElement).toBe(tree())
     tw.remove()
+  })
+
+  it('раскрытые папки и выбор переживают смену окна инструмента', async () => {
+    await mount()
+    fireEvent.click(row('app'))
+    await screen.findByText('AndroidManifest.xml')
+    cleanup()
+    render(<ProjectTree />)
+    expect(await screen.findByText('AndroidManifest.xml')).toBeInTheDocument()
+    expect(sel()).toBe('app')
+  })
+
+  it('не git: каждое обновление перечитывает раскрытые папки — новый файл появляется', async () => {
+    act(() => useProject.setState({ notGit: true, tick: 0 }))
+    await mount()
+    fs[''] = ls(d('.gradle'), d('app'), f('new.txt'), f('README.md'), f('settings.gradle.kts'))
+    act(() => useProject.setState((s) => ({ tick: s.tick + 1 })))
+    expect(await screen.findByText('new.txt')).toBeInTheDocument()
   })
 })

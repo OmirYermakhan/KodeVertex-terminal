@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import type { Change } from './api'
 import { ChangeRow, filesWord, sumStat } from './changeRow'
 import { useProject } from './store'
@@ -24,8 +24,13 @@ export default function ChangesView() {
   const notGit = useProject((s) => s.notGit)
   const gitError = useProject((s) => s.gitError)
   const touched = useProject((s) => s.claudeTouched)
-  const [sel, setSel] = useState<string | null>(null)
-  const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set())
+  const more = useProject((s) => s.moreUntracked)
+  // Выбор и свёрнутые группы — в сторе (свои у корня): окно размонтируется при смене инструмента.
+  const sel = useProject((s) => s.changesSel)
+  const closed = useProject((s) => s.changesClosed)
+  const setSel = (changesSel: string | null) => useProject.setState({ changesSel })
+  const setClosed = (f: (s: ReadonlySet<string>) => ReadonlySet<string>) =>
+    useProject.setState((s) => ({ changesClosed: f(s.changesClosed) }))
 
   const groups = useMemo(() => {
     const all = changes ?? []
@@ -36,6 +41,7 @@ export default function ChangesView() {
     if (untracked.length) out.push({ id: 'untracked', title: 'Не отслеживаются', items: untracked })
     return out
   }, [changes])
+  const count = (g: Group) => g.items.length + (g.id === 'untracked' ? more : 0)
   const nav = groups.flatMap((g) => (closed.has(g.id) ? [] : g.items))
 
   // Выбранная строка — в видимой области.
@@ -78,6 +84,7 @@ export default function ChangesView() {
         ? 'Изменений нет'
         : null
   const { add, del } = sumStat(all)
+  const total = all.length + more
   const byClaude = all.filter((c) => touched.has(c.path)).length
 
   return (
@@ -109,7 +116,7 @@ export default function ChangesView() {
                   }
                 >
                   <span className="tw-a">{open ? '▾' : '▸'}</span>
-                  {g.title} <span className="cnt">{`${g.items.length} ${filesWord(g.items.length)}`}</span>
+                  {g.title} <span className="cnt">{`${count(g)} ${filesWord(count(g))}`}</span>
                 </div>
                 {open &&
                   g.items.map((c) => (
@@ -123,14 +130,15 @@ export default function ChangesView() {
                       }}
                     />
                   ))}
+                {open && g.id === 'untracked' && more > 0 && <div className="ch-more">{`ещё ${more} не отслеживаются`}</div>}
               </div>
             )
           })}
       </div>
       {!notGit && all.length > 0 && (
         <div className="twf">
-          <span>{`+${add} −${del} · ${all.length} ${filesWord(all.length)}`}</span>
-          {byClaude > 0 && <span>{`Claude менял ${byClaude} из ${all.length}`}</span>}
+          <span>{`+${add} −${del} · ${total} ${filesWord(total)}`}</span>
+          {byClaude > 0 && <span>{`Claude менял ${byClaude} из ${total}`}</span>}
         </div>
       )}
     </>

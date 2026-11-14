@@ -41,11 +41,13 @@ export function sumStat(changes: Change[]): { add: number; del: number } {
   return { add, del }
 }
 
-/** Строка состояния при открытой панели (макет 07): «N изменено · M новый»; изменений нет — null. */
-export function localSummary(changes: Change[] | null): string | null {
+/** Строка состояния при открытой панели (макет 07): «N изменено · M новый»; изменений нет — null.
+ *  moreUntracked — неотслеживаемые сверх потолка бэкенда, в changes их нет. */
+export function localSummary(changes: Change[] | null, moreUntracked = 0): string | null {
   if (!changes?.length) return null
-  const fresh = changes.filter((c) => c.status === '?').length
-  const tracked = changes.length - fresh
+  const listed = changes.filter((c) => c.status === '?').length
+  const tracked = changes.length - listed
+  const fresh = listed + moreUntracked
   const out: string[] = []
   if (tracked) out.push(`${tracked} изменено`)
   if (fresh) out.push(`${fresh} ${plural(fresh, 'новый', 'новых', 'новых')}`)

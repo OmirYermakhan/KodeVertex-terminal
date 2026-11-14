@@ -37,6 +37,7 @@ describe('helpers', () => {
     expect(localSummary(CHANGES)).toBe('4 изменено · 1 новый')
     expect(localSummary(CHANGES.slice(0, 2))).toBe('2 изменено')
     expect(localSummary([CHANGES[4], { ...CHANGES[4], path: 'x' }])).toBe('2 новых')
+    expect(localSummary(CHANGES, 1234)).toBe('4 изменено · 1235 новых')
     expect(localSummary([])).toBeNull()
     expect(localSummary(null)).toBeNull()
     expect(
@@ -58,6 +59,9 @@ describe('ChangesView', () => {
       gitError: null,
       tabs: [],
       active: 0,
+      moreUntracked: 0,
+      changesSel: null,
+      changesClosed: new Set(),
       claudeTouched: new Set([`${P}/PaymentApi.kt`, `${P}/PaymentService.kt`, `${P}/LegacyPay.kt`, `${P}/RetryPolicy.kt`]),
     }),
   )
@@ -140,5 +144,24 @@ describe('ChangesView', () => {
     act(() => useProject.setState({ changes: null, notGit: false, gitError: 'git: таймаут' }))
     rerender(<ChangesView />)
     expect(screen.getByText('git: таймаут')).toBeInTheDocument()
+  })
+
+  it('неотслеживаемых сверх потолка — строка «ещё N не отслеживаются», в счётчиках — все', () => {
+    act(() => useProject.setState({ moreUntracked: 1234 }))
+    render(<ChangesView />)
+    expect(document.querySelectorAll('.grp')[1].textContent).toBe('▾Не отслеживаются 1235 файлов')
+    expect(rows()).toHaveLength(5)
+    expect(document.querySelector('.ch-more')?.textContent).toBe('ещё 1234 не отслеживаются')
+    expect(document.querySelector('.twf')?.textContent).toBe('+23 −67 · 1239 файловClaude менял 4 из 1239')
+  })
+
+  it('выбор и свёрнутые группы переживают смену окна инструмента', () => {
+    const { unmount } = render(<ChangesView />)
+    fireEvent.click(rows()[1])
+    fireEvent.click(document.querySelectorAll('.grp')[1])
+    unmount()
+    render(<ChangesView />)
+    expect(rows()[1]).toHaveClass('sel')
+    expect(document.querySelectorAll('.grp')[1].textContent).toBe('▸Не отслеживаются 1 файл')
   })
 })

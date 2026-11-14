@@ -24,24 +24,68 @@ function loadWidth(): number {
   }
 }
 
-interface ProjectState {
+/** Состояние панели, своё у каждого корня: при возврате к проекту восстанавливается. */
+export interface RootView {
+  tabs: ViewerTab[]
+  active: number
+  focusLine: number | null
+  cursors: Record<string, number>
+  claudeTouched: Set<string>
+  /** Дерево проекта: раскрытые папки и выбранная строка (окно инструмента размонтируется при смене). */
+  treeExpanded: ReadonlySet<string>
+  treeSel: string | null
+  /** «Изменения»: выбранный файл и свёрнутые группы. */
+  changesSel: string | null
+  changesClosed: ReadonlySet<string>
+}
+
+const freshView = (): RootView => ({
+  tabs: [],
+  active: 0,
+  focusLine: null,
+  cursors: {},
+  claudeTouched: new Set(),
+  treeExpanded: new Set(['']),
+  treeSel: null,
+  changesSel: null,
+  changesClosed: new Set(),
+})
+
+const viewOf = (s: RootView): RootView => ({
+  tabs: s.tabs,
+  active: s.active,
+  focusLine: s.focusLine,
+  cursors: s.cursors,
+  claudeTouched: s.claudeTouched,
+  treeExpanded: s.treeExpanded,
+  treeSel: s.treeSel,
+  changesSel: s.changesSel,
+  changesClosed: s.changesClosed,
+})
+
+/** Подпись списка изменений: тот же список — та же ссылка, потребители не перечитывают файл и лог. */
+const signature = (changes: Change[]) =>
+  changes.map((c) => `${c.status}\0${c.path}\0${c.oldPath ?? ''}\0${c.add ?? ''}\0${c.del ?? ''}`).join('\n')
+
+const baseOf = (root: string) => (root.endsWith('/') ? root : root + '/')
+
+interface ProjectState extends RootView {
   tool: Tool | null
   width: number
   root: string | null
   /** null — ещё не загружено. */
   changes: Change[] | null
+  /** Неотслеживаемых сверх потолка бэкенда (в changes их нет). */
+  moreUntracked: number
   notGit: boolean
+  /** Счётчик ответов git_status: вне git дерево по нему перечитывает раскрытые папки. */
+  tick: number
   /** Ошибка git_status (кроме «не git»): при changes === null — показать её вместо загрузки. */
   gitError: string | null
   /** Строка состояния окна «Git»: «хэш · N файла · +a −d» выбранного коммита. */
   commitStat: string | null
-  tabs: ViewerTab[]
-  active: number
-  focusLine: number | null
-  /** Текущая строка (с 1) открытых файлов: клик в просмотре, открытие со строкой. */
-  cursors: Record<string, number>
-  /** Относительные пути, которые правил Claude в этой сессии. */
-  claudeTouched: Set<string>
+  /** Сохранённое состояние других корней (текущий — в полях стора). */
+  saved: Map<string, RootView>
   /** Повторное нажатие на активный инструмент закрывает панель. */
   toggle(tool: Tool): void
   close(): void
@@ -63,6 +107,9 @@ let pending: ReturnType<typeof setTimeout> | null = null
 let seq = 0
 /** Номер запроса корня: применяется только ответ на последний setRoot. */
 let rootSeq = 0
+/** Номер запроса git_status в работе (null — нет): одновременно идёт один, новые ждут одним повтором. */
+let busy: number | null = null
+let queued = false
 
 const sameTab = (a: ViewerTab, b: ViewerTab) =>
   a.kind === b.kind && a.rel === b.rel && (a.kind === 'file' || (b.kind === 'diff' && a.rev === b.rev))
@@ -77,32 +124,51 @@ export const useProject = create<ProjectState>((set, get) => {
   const run = () => {
     const root = get().root
     if (!root) return
+    // Большой репозиторий: status дольше паузы троттла — не копим процессы, повторяем один раз после ответа.
+    if (busy === seq) {
+      queued = true
+      return
+    }
     lastRefresh = Date.now()
     const id = ++seq
-    gitStatus(root).then(
-      (changes) => {
-        if (id === seq) set({ changes, notGit: false, gitError: null })
-      },
-      (e) => {
-        if (id !== seq) return
-        if (String(e).includes('not-git')) set({ changes: [], notGit: true, gitError: null })
-        else set({ gitError: String(e) })
-      },
-    )
+    busy = id
+    const keep = (next: Change[]) => {
+      const prev = get().changes
+      return prev && signature(prev) === signature(next) ? prev : next
+    }
+    gitStatus(root)
+      .then(
+        ({ changes, moreUntracked }) => {
+          if (id === seq) set((s) => ({ changes: keep(changes), moreUntracked, notGit: false, gitError: null, tick: s.tick + 1 }))
+        },
+        (e) => {
+          if (id !== seq) return
+          if (String(e).includes('not-git'))
+            set((s) => ({ changes: keep([]), moreUntracked: 0, notGit: true, gitError: null, tick: s.tick + 1 }))
+          else set((s) => ({ gitError: String(e), tick: s.tick + 1 }))
+        },
+      )
+      .finally(() => {
+        if (busy !== id) return
+        busy = null
+        if (queued) {
+          queued = false
+          run()
+        }
+      })
   }
   return {
     tool: null,
     width: loadWidth(),
     root: null,
     changes: null,
+    moreUntracked: 0,
     notGit: false,
+    tick: 0,
     gitError: null,
     commitStat: null,
-    tabs: [],
-    active: 0,
-    focusLine: null,
-    cursors: {},
-    claudeTouched: new Set(),
+    ...freshView(),
+    saved: new Map(),
     toggle: (tool) => set((s) => ({ tool: s.tool === tool ? null : tool })),
     close: () => set({ tool: null }),
     setWidth: (px) => {
@@ -121,7 +187,16 @@ export const useProject = create<ProjectState>((set, get) => {
           // Ответ на прежний cwd пришёл позже нового — не перебивает его.
           if (id !== rootSeq || root === get().root) return
           seq++
-          set({ root, changes: null, notGit: false, gitError: null, commitStat: null, tabs: [], active: 0, focusLine: null, cursors: {}, claudeTouched: new Set() })
+          busy = null
+          queued = false
+          set((s) => {
+            // Уходящий корень запоминаем, свой — достаём (или начинаем с чистого).
+            const saved = new Map(s.saved)
+            if (s.root) saved.set(s.root, viewOf(s))
+            const view = saved.get(root) ?? freshView()
+            saved.delete(root)
+            return { root, changes: null, moreUntracked: 0, notGit: false, gitError: null, commitStat: null, ...view, saved }
+          })
           run()
         },
         () => {},
@@ -153,13 +228,20 @@ export const useProject = create<ProjectState>((set, get) => {
       }),
     setCursor: (rel, line) => set((s) => (s.cursors[rel] === line ? {} : { cursors: { ...s.cursors, [rel]: line } })),
     markClaudeTouched: (absPath) => {
-      const root = get().root
-      if (!root) return
-      const base = root.endsWith('/') ? root : root + '/'
-      if (!absPath.startsWith(base)) return
-      const rel = absPath.slice(base.length)
-      if (get().claudeTouched.has(rel)) return
-      set((s) => ({ claudeTouched: new Set(s.claudeTouched).add(rel) }))
+      const s = get()
+      // Файл относим к самому глубокому известному корню: текущему или запомненному (Claude в другой вкладке).
+      let best: string | null = null
+      for (const r of [...(s.root ? [s.root] : []), ...s.saved.keys()])
+        if (absPath.startsWith(baseOf(r)) && (best === null || r.length > best.length)) best = r
+      if (best === null) return
+      const rel = absPath.slice(baseOf(best).length)
+      if (best === s.root) {
+        if (!s.claudeTouched.has(rel)) set({ claudeTouched: new Set(s.claudeTouched).add(rel) })
+        return
+      }
+      const v = s.saved.get(best)!
+      if (v.claudeTouched.has(rel)) return
+      set({ saved: new Map(s.saved).set(best, { ...v, claudeTouched: new Set(v.claudeTouched).add(rel) }) })
     },
     clearClaudeTouched: () => {
       if (get().claudeTouched.size > 0) set({ claudeTouched: new Set() })

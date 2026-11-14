@@ -54,7 +54,7 @@ describe('троттлинг источников вместе', () => {
     vi.useFakeTimers()
     vi.advanceTimersByTime(1000)
     invoke.mockReset()
-    invoke.mockResolvedValue([])
+    invoke.mockResolvedValue({ changes: [], moreUntracked: 0 })
     // Настоящий refresh стора (первый describe подменял его).
     useProject.setState({ root: '/r', refresh: useProject.getInitialState().refresh })
     off = installAutoRefresh()
@@ -70,9 +70,10 @@ describe('троттлинг источников вместе', () => {
     window.dispatchEvent(new Event('focus'))
     emitClaudeEvent({ kind: 'tools', tools: [{ tool: 'Edit', path: '/r/a.ts', ok: true }] })
     expect(statusCalls()).toBe(1)
-    vi.advanceTimersByTime(REFRESH_THROTTLE_MS)
+    // Async: ответ первого запроса успевает прийти (пока он идёт, новый не запускается).
+    await vi.advanceTimersByTimeAsync(REFRESH_THROTTLE_MS)
     expect(statusCalls()).toBe(2)
-    vi.advanceTimersByTime(2000)
+    await vi.advanceTimersByTimeAsync(2000)
     expect(statusCalls()).toBe(2)
   })
 })

@@ -18,6 +18,8 @@ const LOG_MAX: u32 = 500;
 const DIFF_MAX: usize = 4 * 1024 * 1024;
 /// Последняя строка урезанного diff — фронт показывает её как пометку.
 const DIFF_CUT_MARK: &str = "\\ Изменения урезаны: больше 4 МБ";
+/// Неотслеживаемых файлов в состоянии git не больше; остаток — числом в `more_untracked`.
+const UNTRACKED_MAX: usize = 5000;
 /// Записей в одной папке не больше; остаток — в `more`.
 const LIST_MAX: usize = 2000;
 /// Файл читаем не дальше этого размера и числа строк.
@@ -176,6 +178,14 @@ pub struct Change {
   pub del: Option<u32>,
 }
 
+/// Состояние git: изменения и сколько неотслеживаемых не вошло в список.
+#[derive(Serialize, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatus {
+  pub changes: Vec<Change>,
+  pub more_untracked: u32,
+}
+
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Commit {
@@ -319,11 +329,21 @@ fn parse_name_status(out: &str) -> Vec<Change> {
   res
 }
 
-pub fn git_status_at(root: &Path) -> Result<Vec<Change>, String> {
+pub fn git_status_at(root: &Path) -> Result<GitStatus, String> {
   let g = Git::new(root)?;
   // Подмодули не трогаем: их конфиг (фильтры) не перекрыт, а панель зовёт status часто.
   let st = g.run(&["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=all"]).ok_or("Не удалось получить состояние git")?;
   let mut changes = parse_status(&st);
+  // Неотслеживаемые сверх потолка не отдаём: десятки тысяч строк фронт перерисовывал бы при каждом обновлении.
+  let mut untracked = 0usize;
+  changes.retain(|c| {
+    if c.status != "?" {
+      return true;
+    }
+    untracked += 1;
+    untracked <= UNTRACKED_MAX
+  });
+  let more_untracked = untracked.saturating_sub(UNTRACKED_MAX) as u32;
   // Без коммитов сравниваем индекс с пустым деревом.
   let numstat = if g.has_head() {
     g.run(&["diff", "HEAD", "--numstat", "-z", "-M", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all"])
@@ -332,7 +352,7 @@ pub fn git_status_at(root: &Path) -> Result<Vec<Change>, String> {
   };
   let nums = parse_numstat(&numstat.unwrap_or_default());
   changes = changes.into_iter().map(|c| with_counts(c, &nums)).collect();
-  Ok(changes)
+  Ok(GitStatus { changes, more_untracked })
 }
 
 pub fn git_log_at(root: &Path, skip: u32, limit: u32) -> Result<Vec<Commit>, String> {
@@ -444,7 +464,7 @@ fn cut_mark((mut s, cut): (String, bool)) -> String {
 }
 
 #[tauri::command(async)]
-pub fn git_status(root: String) -> Result<Vec<Change>, String> {
+pub fn git_status(root: String) -> Result<GitStatus, String> {
   git_status_at(Path::new(&root))
 }
 
@@ -659,7 +679,7 @@ mod tests {
     touch(p, "нов файл.txt", "u\n");
     fs::write(p.join("bin.dat"), [0u8, 9, 9, 9]).unwrap();
 
-    let s = git_status_at(p).unwrap();
+    let s = git_status_at(p).unwrap().changes;
     let a = find(&s, "a.txt");
     assert_eq!((a.status.as_str(), a.add, a.del, a.old_path.clone()), ("M", Some(1), Some(0), None));
     assert_eq!(find(&s, "с пробелом.txt").status, "M");
@@ -682,7 +702,7 @@ mod tests {
     touch(d.path(), "s.txt", "1\n2\n");
     git(d.path(), &["add", "s.txt"]);
     touch(d.path(), "u.txt", "u\n");
-    let s = git_status_at(d.path()).unwrap();
+    let s = git_status_at(d.path()).unwrap().changes;
     assert_eq!((find(&s, "s.txt").status.as_str(), find(&s, "s.txt").add), ("A", Some(2)));
     assert_eq!(find(&s, "u.txt").status, "?");
   }
@@ -692,7 +712,7 @@ mod tests {
     let d = new_repo();
     touch(d.path(), "a", "1\n");
     commit_all(d.path(), "c");
-    assert_eq!(git_status_at(d.path()).unwrap(), vec![]);
+    assert_eq!(git_status_at(d.path()).unwrap(), GitStatus::default());
     assert_eq!(git_status_at(Path::new("/nonexistent-kv-dir")), Err("not-git".to_string()));
     let plain = tempfile::tempdir().unwrap();
     assert_eq!(git_status_at(plain.path()), Err("not-git".to_string()));
@@ -951,11 +971,34 @@ mod tests {
     git(&sub, &["config", "filter.evil.clean", &format!("touch '{}'; cat", marker.display())]);
     touch(&sub, "a.txt", "b\n");
     touch(p, "top.txt", "u\n");
-    let s = git_status_at(p).unwrap();
+    let s = git_status_at(p).unwrap().changes;
     assert!(!marker.exists(), "status спустился в подмодуль и запустил его фильтр");
     assert!(s.iter().all(|c| c.path != "sub"), "{s:?}");
     assert_eq!(find(&s, "top.txt").status, "M");
     assert!(git_diff_at(p, "top.txt", None).unwrap().contains("+u"));
     assert!(!marker.exists());
+  }
+
+  /// Свежий репозиторий без .gitignore на node_modules: неотслеживаемых — десятки тысяч.
+  /// Отдаём не больше UNTRACKED_MAX, остаток — числом; отслеживаемые не урезаются.
+  #[test]
+  fn untracked_list_is_capped_with_count() {
+    let d = new_repo();
+    let p = d.path();
+    touch(p, "t.txt", "1\n");
+    commit_all(p, "c");
+    touch(p, "t.txt", "2\n");
+    let nm = p.join("node_modules");
+    fs::create_dir(&nm).unwrap();
+    for i in 0..UNTRACKED_MAX + 3 {
+      fs::write(nm.join(format!("f{i}.js")), "").unwrap();
+    }
+    let s = git_status_at(p).unwrap();
+    assert_eq!(s.changes.iter().filter(|c| c.status == "?").count(), UNTRACKED_MAX);
+    assert_eq!(s.more_untracked, 3);
+    assert_eq!(find(&s.changes, "t.txt").status, "M");
+    let small = new_repo();
+    touch(small.path(), "u", "");
+    assert_eq!(git_status_at(small.path()).unwrap().more_untracked, 0);
   }
 }

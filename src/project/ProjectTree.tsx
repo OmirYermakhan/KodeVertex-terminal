@@ -112,8 +112,10 @@ function Tree({ root }: { root: string }) {
   const openFile = useProject((s) => s.openFile)
   const vcs = useMemo(() => buildVcs(changes), [changes])
   const [lists, setLists] = useState<Map<string, DirList>>(() => new Map())
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']))
-  const [sel, setSel] = useState<string | null>(null)
+  // Раскрытые папки и выбор живут в сторе (свои у корня): окно размонтируется при смене инструмента.
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => useProject.getState().treeExpanded)
+  const [sel, setSel] = useState<string | null>(() => useProject.getState().treeSel)
+  useEffect(() => useProject.setState({ treeExpanded: expanded, treeSel: sel }), [expanded, sel])
   const typed = useRef({ text: '', at: 0 })
   const reqs = useRef(new Map<string, number>())
   // Копии состояния для асинхронных ответов project_list; меняются вместе с setState.
@@ -154,11 +156,18 @@ function Tree({ root }: { root: string }) {
     [fetchDir],
   )
 
-  useEffect(() => load(''), [load])
+  // Сначала корень, затем всё, что было раскрыто до размонтирования.
+  useEffect(() => {
+    for (const rel of new Set(['', ...expandedRef.current])) load(rel)
+  }, [load])
 
   // Изменился набор путей и статусов — перечитать все раскрытые папки и применить одним обновлением
   // (файлы могли появиться и исчезнуть). Та же картина в новой ссылке — ничего не делаем.
-  const changesKey = useMemo(() => (changes ?? []).map((c) => `${c.status}\0${c.path}`).join('\n'), [changes])
+  // Вне git изменений нет — перечитываем на каждый ответ обновления (tick), иначе новые файлы не видны.
+  const notGit = useProject((s) => s.notGit)
+  const tick = useProject((s) => (s.notGit ? s.tick : 0))
+  const pathsKey = useMemo(() => (changes ?? []).map((c) => `${c.status}\0${c.path}`).join('\n'), [changes])
+  const changesKey = notGit ? `\0tick${tick}` : pathsKey
   const lastKey = useRef(changesKey)
   useEffect(() => {
     if (changesKey === lastKey.current) return
