@@ -61,7 +61,7 @@ export default function App() {
   // Сводка git при открытой панели: «N изменено · M новый»; в «Git» — выбранный коммит.
   const tool = useProject((s) => s.tool)
   const projectSeg = useProject((s) =>
-    s.tool === null ? null : ((s.tool === 'git' ? s.commitStat : null) ?? localSummary(s.changes)),
+    s.tool === null ? null : ((s.tool === 'git' ? s.commitStat : null) ?? localSummary(s.changes, s.moreUntracked)),
   )
   const attachments = useAttachCount((s) => (focusedPane ? (s.counts[focusedPane] ?? 0) : 0))
 
@@ -114,7 +114,7 @@ export default function App() {
         <Stripe />
         <ToolWindow git={git} />
         <div className="win-main">
-          <div data-testid="panes" className="panes">
+          <div data-testid="panes" className={diffOpen ? 'panes off' : 'panes'}>
             {/* Все вкладки остаются смонтированными: неактивные скрыты, сессии живут. */}
             {loaded && tabs.map((t) => <PaneView key={t.id} tab={t} visible={t.id === active && !diffOpen} />)}
             {loaded && tabs.length === 0 && !diffOpen && (
@@ -143,7 +143,6 @@ export default function App() {
               ? {
                   name: viewerFile.slice(viewerFile.lastIndexOf('/') + 1),
                   line: viewerLine,
-                  col: 1,
                 }
               : null
           }

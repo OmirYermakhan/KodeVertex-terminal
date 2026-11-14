@@ -30,8 +30,8 @@ export default function StatusBar(p: {
   attachments?: number
   /** Режим разрешений, с которым запущен процесс Claude этой панели. */
   permissionMode?: string | null
-  /** Активная вкладка просмотра — файл (макет 07): справа «Имя · строка:столбец · Язык · UTF-8» вместо часов. */
-  file?: { name: string; line: number; col: number } | null
+  /** Активная вкладка просмотра — файл (макет 07): справа «Имя · стр. N · Язык · UTF-8» вместо часов (столбца в просмотре нет — только строка). */
+  file?: { name: string; line: number } | null
   /** Открыта панель проекта (макет 07): «N изменено · M новый» или «хэш · N файла · +a −d» после ветки. */
   project?: string | null
   /** Подсказка клавиш окна «Изменения»/«Git» справа (макет 07), если не открыт файл. */
@@ -102,7 +102,7 @@ export default function StatusBar(p: {
       )}
       <div className="sg right">
         {p.file
-          ? `${p.file.name} · ${p.file.line}:${p.file.col} · ${languageName(p.file.name)} · UTF-8`
+          ? `${p.file.name} · стр. ${p.file.line} · ${languageName(p.file.name)} · UTF-8`
           : (p.hint ?? hhmm(now))}
       </div>
     </div>

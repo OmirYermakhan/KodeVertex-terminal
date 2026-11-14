@@ -96,10 +96,12 @@ describe('App', () => {
       act(() => useProject.setState({ tabs: [{ kind: 'file', rel: 'a.kt' }, { kind: 'diff', rel: 'a.kt', rev: null }], active: 1 }))
       expect(screen.getByTestId(`tab-${id}`)).toBe(host)
       expect(host.style.display).toBe('none')
-      expect(screen.getByTestId('panes').style.display).toBe('')
+      // Изменения — во всю ширину: панели терминала смонтированы, но места не занимают.
+      expect(screen.getByTestId('panes')).toHaveClass('panes', 'off')
       expect(appear.finish).not.toHaveBeenCalled()
       act(() => useProject.getState().closeTab(1))
       expect(host.style.display).toBe('block')
+      expect(screen.getByTestId('panes')).not.toHaveClass('off')
       expect(appear.finish).toHaveBeenCalledTimes(1)
     } finally {
       delete doc.getAnimations

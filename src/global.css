@@ -167,7 +167,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
    margin-right 14 + gap 4 = 18 — как gap 8 + margin-left 10 у .tabs макета. */
 .proj { display: flex; align-items: center; gap: 7px; flex: none; height: 26px; margin: 0 14px 0 0; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; font-family: var(--font-text); font-size: 12.5px; font-weight: 500; line-height: normal; color: var(--strong); white-space: nowrap; user-select: none; cursor: default; }
 .proj.on, .proj:hover { background: var(--hover); }
-.proj .pi { width: 16px; height: 16px; border-radius: 4px; background: #3e8f5a; color: #fff; font-size: 9.5px; font-weight: 600; display: grid; place-items: center; font-family: var(--font-text); }
+.proj .pi { width: 16px; height: 16px; border-radius: 4px; background: var(--projIcon); color: #fff; font-size: 9.5px; font-weight: 600; display: grid; place-items: center; font-family: var(--font-text); }
 .proj .br { color: var(--muted); font-weight: 400; display: flex; align-items: center; gap: 5px; }
 .proj .chev { color: var(--muted); font-size: 10px; }
 
@@ -175,6 +175,8 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .win-body { flex: 1; display: flex; min-height: 0; }
 .win-main { flex: 1; display: flex; min-width: 0; }
 .win-main > .panes { min-width: 0; }
+/* Вкладка изменений во всю ширину: панели терминала смонтированы, но места не занимают. */
+.win-main > .panes.off { flex: 0 0 0; overflow: hidden; }
 
 /* Полоса инструментов слева (макет 07 .stripe/.sb). Значки — токен --sbIcon (#a8adb5 макета; в светлой теме — тёмнее). */
 .stripe { width: 40px; flex: none; box-sizing: border-box; background: var(--panel); border-right: 1px solid var(--rule); display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 8px; }
@@ -208,9 +210,9 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .tree .n.dirm .lbl { color: var(--vcsMod); }
 .tree .n.more { color: var(--muted); }
 .tree-hint { padding: 8px 12px; color: var(--muted); font-size: 12.5px; }
-/* Значки папок и файлов (макет 07 .fold/.fi) — общие для дерева, вкладок и списков изменений. */
-.fold { width: 15px; height: 12px; border-radius: 2px; background: #87939a; position: relative; }
-.fold::before { content: ""; position: absolute; left: 0; top: -2px; width: 7px; height: 3px; border-radius: 2px 2px 0 0; background: #87939a; }
+/* Значки папок и файлов (макет 07 .fold/.fi; цвет папки — токен --fold) — общие для дерева, вкладок и списков изменений. */
+.fold { width: 15px; height: 12px; border-radius: 2px; background: var(--fold); position: relative; }
+.fold::before { content: ""; position: absolute; left: 0; top: -2px; width: 7px; height: 3px; border-radius: 2px 2px 0 0; background: var(--fold); }
 .fold.src, .fold.src::before { background: #4f8bd6; }
 .fold.res, .fold.res::before { background: #c9a34e; }
 .fi.pfi { font-family: var(--font-text); font-size: 8.5px; font-weight: 700; line-height: 1; width: 14px; height: 14px; margin: 0; vertical-align: baseline; border-radius: 3px; display: grid; place-items: center; color: #fff; flex: none; }
@@ -235,6 +237,8 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .grp .tw-a { color: var(--muted); font-size: 9px; }
 .grp .cnt { color: var(--muted); }
 .ch { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px 0 28px; font-size: 13px; white-space: nowrap; color: var(--text); user-select: none; cursor: default; }
+/* Неотслеживаемые сверх потолка — серой строкой «ещё N не отслеживаются» под группой. */
+.ch-more { height: 24px; line-height: 24px; padding: 0 10px 0 28px; font-size: 12.5px; color: var(--muted); white-space: nowrap; user-select: none; }
 .ch .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ch .dir { color: var(--muted); font-size: 12px; margin-left: 4px; min-width: 0; flex: 0 1000 auto; overflow: hidden; text-overflow: ellipsis; }
 .ch .st { margin-left: auto; padding-left: 6px; flex: none; font-family: var(--font-code); font-size: 11px; color: var(--muted); }
