@@ -73,12 +73,12 @@
 
 ### Task 4: Каркас окна: кнопка проекта, полоса, окно инструмента, клавиши
 
-**Files:** Create `src/project/ProjectButton.tsx`, `src/project/Stripe.tsx`, `src/project/ToolWindow.tsx`, `src/project/Viewer.tsx` (пустая оболочка вкладок); Modify `src/App.tsx`, `src/ui/TabBar.tsx`, `src/keys/keymap.ts` (+`toolProject` ⌘1, `toolChanges` ⌘0, `toolGit` ⌘9, во всех раскладках как остальные), `src/keys/actions.ts`, `src/global.css`, `src/theme/themes.ts` (токены vcs*).
+**Files:** Create `src/project/ProjectButton.tsx`, `src/project/Stripe.tsx`, `src/project/ToolWindow.tsx`, `src/project/Viewer.tsx` (пустая оболочка вкладок); Modify `src/App.tsx`, `src/ui/TabBar.tsx`, `src/keys/keymap.ts` (+`toolProject` ⌥⌘1, `toolChanges` ⌥⌘0, `toolGit` ⌥⌘9, во всех раскладках как остальные), `src/keys/actions.ts`, `src/global.css`, `src/theme/themes.ts` (токены vcs*).
 
 **Interfaces:** Consumes `useProject`. Produces: `<ToolWindow>` рендерит по `tool` компонент-заглушку `ProjectTree` / `ChangesView` / `GitLog` (реальные — Task 5, 7); `<Viewer>` справа от `.panes`, когда `tabs.length > 0`; при активной вкладке `diff` `.panes` скрыт так же, как неактивная вкладка (смонтирован).
-- [ ] Тесты: кнопка показывает имя/ветку из `git` (как StatusBar), клик → tool='project'; ⌘1/⌘0/⌘9 переключают, повтор — скрывает; esc в панели — скрывает; ресайз за край меняет ширину; ⌘W при фокусе в просмотре закрывает вкладку файла, иначе — как раньше (закрытие панели).
+- [ ] Тесты: кнопка показывает имя/ветку из `git` (как StatusBar), клик → tool='project'; ⌥⌘1/⌥⌘0/⌥⌘9 переключают, повтор — скрывает; esc в панели — скрывает; ресайз за край меняет ширину; ⌘W при фокусе в просмотре закрывает вкладку файла, иначе — как раньше (закрытие панели).
 - [ ] Реализация по макету (bar `.proj`, `.stripe`, `.sb`, `.tw`, `.twh`) → PASS.
-- [ ] Commit «Проект: кнопка слева вверху, полоса инструментов, окно и клавиши ⌘1 ⌘0 ⌘9».
+- [ ] Commit «Проект: кнопка слева вверху, полоса инструментов, окно и клавиши ⌥⌘1 ⌥⌘0 ⌥⌘9».
 
 ### Task 5: Дерево проекта
 
