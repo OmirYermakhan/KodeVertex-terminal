@@ -66,12 +66,34 @@ function fixSize(svg: string): string {
   })
 }
 
+/** Сколько схем на экране показывают картинку (по blob URL). */
+const users = new Map<string, number>()
+/** Вытесненные из кэша, но ещё показываемые: отзываются, когда их перестанут показывать. */
+const evicted = new Set<string>()
+
+/** Схема показывает картинку — пока она на экране, URL не отзывается. */
+export function retainDiagram(url: string): void {
+  users.set(url, (users.get(url) ?? 0) + 1)
+}
+
+export function releaseDiagram(url: string): void {
+  const n = (users.get(url) ?? 0) - 1
+  if (n > 0) {
+    users.set(url, n)
+    return
+  }
+  users.delete(url)
+  if (evicted.delete(url)) URL.revokeObjectURL(url)
+}
+
 function remember(key: string, res: DiagramResult): void {
   cache.set(key, res)
   while (cache.size > CACHE_LIMIT) {
     const [oldKey, old] = cache.entries().next().value as [string, DiagramResult]
     cache.delete(oldKey)
-    if (old.ok) URL.revokeObjectURL(old.url)
+    if (!old.ok) continue
+    if (users.has(old.url)) evicted.add(old.url)
+    else URL.revokeObjectURL(old.url)
   }
 }
 
@@ -125,5 +147,7 @@ export function renderDiagram(src: string, themeId: ThemeId): Promise<DiagramRes
 export function resetDiagramCache(): void {
   for (const r of cache.values()) if (r.ok) URL.revokeObjectURL(r.url)
   cache.clear()
+  users.clear()
+  evicted.clear()
   initedTheme = undefined
 }

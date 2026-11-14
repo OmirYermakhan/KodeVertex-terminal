@@ -5,7 +5,7 @@ import { Fragment, memo, useEffect, useMemo, useState } from 'react'
 import { openPath } from '../../attach/preview/api'
 import { highlightLines, type Piece } from '../../attach/preview/highlight'
 import { Markdown } from '../Markdown'
-import { diffParts, diffStat, firstChangedLine, type DiffRow, type FileDiff } from '../diff'
+import { diffParts, diffStat, firstChangedLine, fullAfter, type DiffRow, type FileDiff } from '../diff'
 
 /** Строк вида до «Показать всё» (Write большого файла не растягивает ленту). */
 export const DIFF_SHOWN = 80
@@ -66,6 +66,8 @@ function Line({ row, lit, w }: { row: DiffRow; lit: Piece[] | undefined; w: numb
 export const DiffView = memo(function DiffView({ diff, cwd }: { diff: FileDiff; cwd?: string | null }) {
   const parts = useMemo(() => diffParts(diff), [diff])
   const stat = useMemo(() => diffStat(diff), [diff])
+  // Документ — только когда известен весь новый текст файла (фрагмент Edit сломал бы разметку).
+  const doc = useMemo(() => (isMarkdown(diff.path) ? fullAfter(diff) : undefined), [diff])
   const [open, setOpen] = useState<ReadonlySet<number>>(() => new Set())
   const [all, setAll] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -139,8 +141,8 @@ export const DiffView = memo(function DiffView({ diff, cwd }: { diff: FileDiff; 
         </span>
         {path && (
           <span className="dv-btns">
-            {isMarkdown(path) && (
-              <button type="button" className="dv-btn" onClick={() => setAsDoc((v) => !v)}>
+            {doc !== undefined && (
+              <button type="button" className="dv-btn" aria-pressed={asDoc} onClick={() => setAsDoc((v) => !v)}>
                 {asDoc ? 'Как изменения' : 'Как документ'}
               </button>
             )}
@@ -153,12 +155,13 @@ export const DiffView = memo(function DiffView({ diff, cwd }: { diff: FileDiff; 
           </span>
         )}
       </div>
-      {asDoc && (
+      {asDoc && doc !== undefined && (
         <div className="dv-doc">
-          <Markdown text={diff.after.replace(/\n?… остальные строки не сохранены$/, '')} />
+          <Markdown text={doc} />
+          {diff.truncated && <div className="dv-doc-cut">{TRUNCATED}</div>}
         </div>
       )}
-      {!asDoc && entries.length > 0 && (
+      {!(asDoc && doc !== undefined) && entries.length > 0 && (
         <div className={'diff dv-body' + (w === 0 ? ' nonum' : '')}>
           {entries.map((e) =>
             e.kind === 'row' ? (

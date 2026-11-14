@@ -93,6 +93,16 @@ describe('схемы mermaid', () => {
     expect(mermaid.render.mock.calls.length).toBe(calls + 1)
   })
 
+  it('вытеснение из кэша не отзывает картинку, пока её показывает схема; отзывает после снятия', async () => {
+    const { unmount } = render(<Markdown text={fence('graph TD; S-->T')} />)
+    const url = (await screen.findByAltText('Схема')).getAttribute('src')!
+    vi.mocked(URL.revokeObjectURL).mockClear()
+    for (let i = 0; i < 101; i++) await renderDiagram(`graph TD; N${i}-->M`, 'kv')
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(url)
+    unmount()
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith(url)
+  })
+
   it('выключено в настройках — обычный блок кода', async () => {
     const { container } = render(<Markdown text={fence('graph TD; A-->B')} diagrams={false} />)
     await act(async () => {})

@@ -411,7 +411,8 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .dv-btns { display: flex; gap: 6px; margin-left: auto; flex: none; }
 .dv-btn { font: inherit; font-size: 11px; color: var(--accText); background: transparent; border: 1px solid var(--rule); border-radius: 4px; padding: 1px 7px; cursor: pointer; }
 .dv-btn:hover, .dv-btn:focus-visible { border-color: var(--acc); color: var(--strong); outline: none; }
-.dv-doc { padding: 8px 12px; overflow-wrap: anywhere; }
+.dv-doc { padding: 8px 12px; overflow-wrap: anywhere; max-height: 480px; overflow-y: auto; }
+.dv-doc-cut { margin-top: 6px; color: var(--com); font-family: var(--font-code); font-size: calc(var(--size-code) - 1px); }
 .diff.dv-body { white-space: normal; padding: 6px 0; overflow-wrap: anywhere; }
 .dv-body .dl { display: flex; padding: 0 10px; color: var(--text); }
 .dv-body .dl.a { color: var(--add); background: color-mix(in srgb, var(--add) 12%, transparent); }

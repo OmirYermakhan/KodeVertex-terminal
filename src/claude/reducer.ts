@@ -607,6 +607,8 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
     const it = items[i]
     if (it.type === 'summary') break
     if (it.type === 'user' && ++users >= Math.max(1, s.pending)) break
+    // Ответ со временем хода — из уже законченного хода (очередь: U1, U2, A1), не этого.
+    if (it.type === 'assistant' && it.turn) break
     if (it.type === 'assistant' && it.agentId === MAIN) {
       items[i] = { ...it, turn: { durationMs, ...price } }
       shown = true

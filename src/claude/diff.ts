@@ -150,6 +150,24 @@ function sequence(d: FileDiff): Seq[] {
 }
 
 /**
+ * Весь текст файла после правки, если он известен: новый файл, Write (content — файл целиком)
+ * или правка с исходным файлом и кусками. Неизвестен (фрагмент Edit, урезанное при сохранении) — undefined.
+ */
+export function fullAfter(d: FileDiff): string | undefined {
+  if (d.created) return d.after || undefined
+  if (d.hunks && d.hunks.length > 0) {
+    if (d.original !== undefined) {
+      const rows = sequence(d).filter((x): x is DiffRow => !isGap(x) && x.k !== 'd')
+      return rows.map((r) => r.t).join('\n')
+    }
+    // Write поверх файла: content — файл целиком (после boundDiff after пуст).
+    return d.before === '' && d.after !== '' && !d.truncated ? d.after : undefined
+  }
+  if (d.parts) return undefined
+  return d.before === '' && d.after !== '' ? d.after : undefined
+}
+
+/**
  * Вид для показа: изменённые строки с CONTEXT строками вокруг, остальное — свёрнутыми кусками.
  * Кусок из одной строки не сворачивается (строка «… 1 строка» не короче самой строки).
  */

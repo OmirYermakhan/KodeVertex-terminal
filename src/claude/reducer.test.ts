@@ -317,6 +317,16 @@ describe('итог не повторяет ответ', () => {
     const s2 = run(userSent(s1, 'b', 0), [{ type: 'result', result: 'да' }])
     expect(s2.items.at(-1)).toMatchObject({ type: 'summary', text: 'да' })
   })
+  it('очередь: ход 2 без ответа не переписывает время и цену ответа хода 1', () => {
+    // U2 поставлен в очередь, пока идёт ход 1: в ленте U1, U2, A1.
+    let s = userSent(userSent(initialClaude(), 'a', 0), 'b', 0)
+    s = run(s, [assistant([{ type: 'text', text: 'ответ 1' }]), { type: 'result', result: 'ответ 1', total_cost_usd: 0.1, duration_ms: 1000 }])
+    s = reduceClaude(s, { type: 'result', result: '', total_cost_usd: 0.3, duration_ms: 2000 }, 2)
+    const a1 = s.items.find((i) => i.type === 'assistant')
+    expect(a1).toMatchObject({ turn: { durationMs: 1000, costUsd: 0.1 } })
+    expect(s.items.at(-1)).toMatchObject({ type: 'summary', durationMs: 2000 })
+    expect((s.items.at(-1) as { costUsd?: number }).costUsd).toBeCloseTo(0.2)
+  })
 })
 
 describe('правка сообщения: точки перемотки', () => {

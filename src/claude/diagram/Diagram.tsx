@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { useSettings } from '../../settings/store'
 import { useCopied } from './useCopied'
-import { cachedDiagram, renderDiagram, type DiagramResult } from './render'
+import { cachedDiagram, releaseDiagram, renderDiagram, retainDiagram, type DiagramResult } from './render'
 
 export function Diagram({ source }: { source: string }) {
   const theme = useSettings((s) => s.settings.theme)
@@ -26,6 +26,13 @@ export function Diagram({ source }: { source: string }) {
   }, [source, theme])
 
   const ok = res?.ok === true
+  // Пока картинка на экране, вытеснение из кэша её URL не отзывает.
+  const url = res?.ok ? res.url : undefined
+  useEffect(() => {
+    if (!url) return
+    retainDiagram(url)
+    return () => releaseDiagram(url)
+  }, [url])
   return (
     <div className="dg">
       {ok ? (
