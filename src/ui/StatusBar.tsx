@@ -3,6 +3,7 @@ import { projectName, useHome, type GitInfo } from '../status/useGitInfo'
 import { modelLabel, type ClaudeState } from '../claude/reducer'
 import { tokensLabel } from '../claude/AgentsPanel'
 import { formatCost } from '../format'
+import { languageName } from '../project/langName'
 
 /** Доля контекста, после которой полоска желтеет. */
 export const CONTEXT_WARN = 0.8
@@ -29,6 +30,12 @@ export default function StatusBar(p: {
   attachments?: number
   /** Режим разрешений, с которым запущен процесс Claude этой панели. */
   permissionMode?: string | null
+  /** Активная вкладка просмотра — файл (макет 07): справа «Имя · стр. N · Язык · UTF-8» вместо часов (столбца в просмотре нет — только строка). */
+  file?: { name: string; line: number } | null
+  /** Открыта панель проекта (макет 07): «N изменено · M новый» или «хэш · N файла · +a −d» после ветки. */
+  project?: string | null
+  /** Подсказка клавиш окна «Изменения»/«Git» справа (макет 07), если не открыт файл. */
+  hint?: string | null
 }) {
   const home = useHome()
   const now = useClock(p.now)
@@ -39,7 +46,10 @@ export default function StatusBar(p: {
     <div className="sbar">
       {c && <div className="sg v">◆ CLAUDE</div>}
       {c && p.permissionMode === 'bypassPermissions' && (
-        <div className="sg danger" title="Режим «Ничего не спрашивать»: команды выполняются без разрешения. Меняется в настройках.">
+        <div
+          className="sg danger"
+          title="Режим «Ничего не спрашивать»: команды выполняются без разрешения. Меняется в настройках."
+        >
           ⚠ БЕЗ РАЗРЕШЕНИЙ
         </div>
       )}
@@ -68,6 +78,7 @@ export default function StatusBar(p: {
           )}
         </div>
       )}
+      {p.project && <div className="sg">{p.project}</div>}
       {c?.model && (
         <div className="sg">
           модель <b>{modelLabel(c.model)}</b>
@@ -89,7 +100,11 @@ export default function StatusBar(p: {
           <b>{formatCost(c.costUsd)}</b>
         </div>
       )}
-      <div className="sg right">{hhmm(now)}</div>
+      <div className="sg right">
+        {p.file
+          ? `${p.file.name} · стр. ${p.file.line} · ${languageName(p.file.name)} · UTF-8`
+          : (p.hint ?? hhmm(now))}
+      </div>
     </div>
   )
 }

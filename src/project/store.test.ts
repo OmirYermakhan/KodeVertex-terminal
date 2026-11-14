@@ -1,0 +1,265 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const invoke = vi.fn()
+vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
+
+const { useProject, statusOf, dirHasChanges } = await import('./store')
+import type { Change } from './api'
+
+const reset = () =>
+  useProject.setState({ tool: null, root: null, changes: null, moreUntracked: 0, notGit: false, tabs: [], active: 0, focusLine: null, cursors: {}, claudeTouched: new Set(), saved: new Map() })
+const st = (changes: Change[] = [], moreUntracked = 0) => ({ changes, moreUntracked })
+
+describe('панель', () => {
+  beforeEach(reset)
+  it('toggle переключает и закрывает', () => {
+    const s = () => useProject.getState()
+    s().toggle('project')
+    expect(s().tool).toBe('project')
+    s().toggle('git')
+    expect(s().tool).toBe('git')
+    s().toggle('git')
+    expect(s().tool).toBeNull()
+    s().toggle('changes')
+    s().close()
+    expect(s().tool).toBeNull()
+  })
+  it('ширина ограничивается и сохраняется', () => {
+    useProject.getState().setWidth(100)
+    expect(useProject.getState().width).toBe(200)
+    useProject.getState().setWidth(9999)
+    expect(useProject.getState().width).toBe(600)
+    useProject.getState().setWidth(350)
+    expect(localStorage.getItem('kv.projectWidth')).toBe('350')
+  })
+  it('openFile не дублирует вкладку, openDiff различает rev', () => {
+    const s = () => useProject.getState()
+    s().openFile('a.ts')
+    s().openFile('b.ts')
+    s().openFile('a.ts')
+    expect(s().tabs).toHaveLength(2)
+    expect(s().active).toBe(0)
+    s().openDiff('a.ts', null)
+    s().openDiff('a.ts', null)
+    s().openDiff('a.ts', 'abc')
+    expect(s().tabs).toHaveLength(4)
+    expect(s().active).toBe(3)
+  })
+  it('closeTab сдвигает активную', () => {
+    const s = () => useProject.getState()
+    s().openFile('a')
+    s().openFile('b')
+    s().openFile('c')
+    s().closeTab(2)
+    expect(s().active).toBe(1)
+    s().closeTab(0)
+    expect(s().tabs.map((t) => t.rel)).toEqual(['b'])
+    expect(s().active).toBe(0)
+  })
+  it('markClaudeTouched хранит путь относительно корня, чужие игнорирует', () => {
+    useProject.setState({ root: '/p' })
+    useProject.getState().markClaudeTouched('/p/src/a.ts')
+    useProject.getState().markClaudeTouched('/other/x.ts')
+    expect([...useProject.getState().claudeTouched]).toEqual(['src/a.ts'])
+  })
+})
+
+let clock = 1_000_000
+describe('refresh', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    // Каждый тест — позже прошлого: троттл (модульный) не ждёт хвоста чужого теста.
+    vi.setSystemTime((clock += 60_000))
+    invoke.mockReset()
+    invoke.mockResolvedValue(st())
+    reset()
+    useProject.setState({ root: '/p' })
+  })
+  afterEach(() => vi.useRealTimers())
+  const n = () => invoke.mock.calls.filter((c) => c[0] === 'git_status').length
+
+  it('троттлится: серия вызовов — запрос сразу и один хвостовой через 500 мс', async () => {
+    const { refresh } = useProject.getState()
+    refresh()
+    refresh()
+    refresh()
+    expect(n()).toBe(1)
+    await vi.advanceTimersByTimeAsync(499)
+    expect(n()).toBe(1)
+    await vi.advanceTimersByTimeAsync(2)
+    expect(n()).toBe(2)
+    expect(invoke).toHaveBeenCalledWith('git_status', { root: '/p' })
+    expect(useProject.getState().changes).toEqual([])
+  })
+  it('«not-git» выставляет notGit', async () => {
+    await vi.advanceTimersByTimeAsync(1000)
+    invoke.mockRejectedValue('not-git')
+    useProject.getState().refresh()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useProject.getState().notGit).toBe(true)
+  })
+  it('один запрос за раз: пока git_status идёт, новые refresh — один повтор после ответа', async () => {
+    const answers: ((v: unknown) => void)[] = []
+    invoke.mockImplementation((cmd: string) => (cmd === 'git_status' ? new Promise((r) => answers.push(r)) : Promise.resolve(st())))
+    const { refresh } = useProject.getState()
+    refresh()
+    expect(n()).toBe(1)
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(600)
+      refresh()
+    }
+    await vi.advanceTimersByTimeAsync(600)
+    expect(n()).toBe(1)
+    answers[0](st([{ path: 'a', status: 'M' }]))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(n()).toBe(2)
+    answers[1](st([{ path: 'b', status: 'M' }]))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(n()).toBe(2)
+    expect(useProject.getState().changes).toEqual([{ path: 'b', status: 'M' }])
+  })
+  it('тот же список изменений — прежняя ссылка (просмотр и лог не перечитывают); другой счётчик — новая', async () => {
+    invoke.mockResolvedValue(st([{ path: 'a', status: 'M', add: 1, del: 0 }]))
+    useProject.getState().refresh()
+    await vi.advanceTimersByTimeAsync(0)
+    const first = useProject.getState().changes
+    expect(first).toEqual([{ path: 'a', status: 'M', add: 1, del: 0 }])
+    invoke.mockResolvedValue(st([{ path: 'a', status: 'M', add: 1, del: 0 }]))
+    await vi.advanceTimersByTimeAsync(1000)
+    useProject.getState().refresh()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(n()).toBe(2)
+    expect(useProject.getState().changes).toBe(first)
+    invoke.mockResolvedValue(st([{ path: 'a', status: 'M', add: 2, del: 0 }]))
+    await vi.advanceTimersByTimeAsync(1000)
+    useProject.getState().refresh()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useProject.getState().changes).not.toBe(first)
+    expect(useProject.getState().changes?.[0].add).toBe(2)
+  })
+  it('сверх потолка неотслеживаемых — число в moreUntracked', async () => {
+    invoke.mockResolvedValue(st([{ path: 'u', status: '?' }], 1234))
+    useProject.getState().refresh()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useProject.getState().moreUntracked).toBe(1234)
+  })
+  it('не git: каждый ответ двигает tick (дерево перечитывает папки), changes — прежняя ссылка', async () => {
+    invoke.mockRejectedValue('not-git')
+    useProject.getState().refresh()
+    await vi.advanceTimersByTimeAsync(0)
+    const t = useProject.getState().tick
+    const c = useProject.getState().changes
+    await vi.advanceTimersByTimeAsync(1000)
+    useProject.getState().refresh()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(useProject.getState().tick).toBe(t + 1)
+    expect(useProject.getState().changes).toBe(c)
+  })
+})
+
+describe('setRoot', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    reset()
+  })
+  it('ответ на прежний cwd, пришедший позже, не перебивает новый корень', async () => {
+    const answers: Record<string, (v: string) => void> = {}
+    invoke.mockImplementation((cmd: string, a: { cwd?: string }) =>
+      cmd === 'project_root' ? new Promise((r) => (answers[a.cwd!] = r)) : Promise.resolve([]),
+    )
+    useProject.getState().setRoot('/a')
+    useProject.getState().setRoot('/b')
+    answers['/b']('/b')
+    await Promise.resolve()
+    answers['/a']('/a')
+    await Promise.resolve()
+    expect(useProject.getState().root).toBe('/b')
+  })
+  it('у каждого корня свои вкладки, строка, «Claude менял», дерево и выбор — при возврате восстанавливаются', async () => {
+    invoke.mockImplementation((cmd: string, a: { cwd?: string }) => Promise.resolve(cmd === 'project_root' ? a.cwd : st()))
+    const s = () => useProject.getState()
+    s().setRoot('/a')
+    await vi.waitFor(() => expect(s().root).toBe('/a'))
+    s().openFile('x.kt', 7)
+    s().openDiff('y.kt', null)
+    s().markClaudeTouched('/a/x.kt')
+    useProject.setState({ treeExpanded: new Set(['', 'src']), treeSel: 'src/x.kt', changesSel: 'y.kt', changesClosed: new Set(['untracked']) })
+    s().setRoot('/b')
+    await vi.waitFor(() => expect(s().root).toBe('/b'))
+    expect(s().tabs).toEqual([])
+    expect(s().claudeTouched.size).toBe(0)
+    expect([...s().treeExpanded]).toEqual([''])
+    expect(s().treeSel).toBeNull()
+    s().openFile('b.kt')
+    // Claude правит файл проекта A, пока на экране B: отметка — у A.
+    s().markClaudeTouched('/a/z.kt')
+    expect(s().claudeTouched.size).toBe(0)
+    s().setRoot('/a')
+    await vi.waitFor(() => expect(s().root).toBe('/a'))
+    expect(s().tabs).toEqual([{ kind: 'file', rel: 'x.kt' }, { kind: 'diff', rel: 'y.kt', rev: null }])
+    expect(s().active).toBe(1)
+    expect(s().cursors).toEqual({ 'x.kt': 7 })
+    expect([...s().claudeTouched].sort()).toEqual(['x.kt', 'z.kt'])
+    expect([...s().treeExpanded]).toEqual(['', 'src'])
+    expect(s().treeSel).toBe('src/x.kt')
+    expect(s().changesSel).toBe('y.kt')
+    expect([...s().changesClosed]).toEqual(['untracked'])
+    s().setRoot('/b')
+    await vi.waitFor(() => expect(s().root).toBe('/b'))
+    expect(s().tabs).toEqual([{ kind: 'file', rel: 'b.kt' }])
+  })
+  it('вложенный корень: отметка Claude — у самого глубокого известного корня', async () => {
+    invoke.mockImplementation((cmd: string, a: { cwd?: string }) => Promise.resolve(cmd === 'project_root' ? a.cwd : st()))
+    const s = () => useProject.getState()
+    s().setRoot('/p/sub')
+    await vi.waitFor(() => expect(s().root).toBe('/p/sub'))
+    s().setRoot('/p')
+    await vi.waitFor(() => expect(s().root).toBe('/p'))
+    s().markClaudeTouched('/p/sub/a.kt')
+    s().markClaudeTouched('/p/b.kt')
+    expect([...s().claudeTouched]).toEqual(['b.kt'])
+    s().setRoot('/p/sub')
+    await vi.waitFor(() => expect(s().root).toBe('/p/sub'))
+    expect([...s().claudeTouched]).toEqual(['a.kt'])
+  })
+  it('смена корня во время запроса: новый корень запрашивается сразу, старый ответ отброшен', async () => {
+    const answers: Record<string, (v: unknown) => void> = {}
+    invoke.mockImplementation((cmd: string, a: { cwd?: string; root?: string }) =>
+      cmd === 'project_root' ? Promise.resolve(a.cwd) : new Promise((r) => (answers[a.root!] = r)),
+    )
+    const s = () => useProject.getState()
+    s().setRoot('/a')
+    await vi.waitFor(() => expect(answers['/a']).toBeDefined())
+    s().setRoot('/b')
+    await vi.waitFor(() => expect(answers['/b']).toBeDefined())
+    answers['/a'](st([{ path: 'from-a', status: 'M' }]))
+    answers['/b'](st([{ path: 'from-b', status: 'M' }]))
+    await vi.waitFor(() => expect(s().changes).toEqual([{ path: 'from-b', status: 'M' }]))
+  })
+  it('clearClaudeTouched очищает «Claude менял»', () => {
+    useProject.setState({ claudeTouched: new Set(['a.ts']) })
+    useProject.getState().clearClaudeTouched()
+    expect(useProject.getState().claudeTouched.size).toBe(0)
+  })
+})
+
+const ch = (path: string, status: Change['status']): Change => ({ path, status })
+describe('statusOf / dirHasChanges', () => {
+  const c = [ch('src/a.ts', 'M'), ch('src/new.ts', '?'), ch('b.ts', 'A'), ch('old.ts', 'D'), ch('r.ts', 'R')]
+  it('статусы', () => {
+    expect(statusOf(c, 'src/a.ts')).toBe('mod')
+    expect(statusOf(c, 'src/new.ts')).toBe('new')
+    expect(statusOf(c, 'b.ts')).toBe('add')
+    expect(statusOf(c, 'old.ts')).toBe('del')
+    expect(statusOf(c, 'r.ts')).toBe('mod')
+    expect(statusOf(c, 'zzz')).toBeNull()
+    expect(statusOf(null, 'a')).toBeNull()
+  })
+  it('каталоги', () => {
+    expect(dirHasChanges(c, 'src')).toBe(true)
+    expect(dirHasChanges(c, 'sr')).toBe(false)
+    expect(dirHasChanges(c, 'lib')).toBe(false)
+    expect(dirHasChanges(c, '')).toBe(true)
+    expect(dirHasChanges(null, 'src')).toBe(false)
+  })
+})

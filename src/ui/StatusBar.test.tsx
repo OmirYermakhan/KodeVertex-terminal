@@ -88,6 +88,34 @@ describe('StatusBar', () => {
     expect(container.textContent).toContain('170k/200k')
   })
 
+  it('открыт файл в просмотре — справа «Имя · стр. N · Язык · UTF-8» вместо часов (макет 07)', () => {
+    const now = new Date(2026, 0, 1, 14, 32)
+    const { container, rerender } = render(
+      <StatusBar cwd="/Users/me/shop-app" git={git} now={now} file={{ name: 'PaymentService.kt', line: 10 }} />,
+    )
+    expect(container.querySelector('.sg.right')!.textContent).toBe('PaymentService.kt · стр. 10 · Kotlin · UTF-8')
+    expect(container.textContent).not.toContain('14:32')
+    rerender(<StatusBar cwd="/Users/me/shop-app" git={git} now={now} file={{ name: 'App.tsx', line: 3 }} />)
+    expect(container.querySelector('.sg.right')!.textContent).toBe('App.tsx · стр. 3 · TypeScript · UTF-8')
+    rerender(<StatusBar cwd="/Users/me/shop-app" git={git} now={now} file={{ name: 'LICENSE', line: 1 }} />)
+    expect(container.querySelector('.sg.right')!.textContent).toBe('LICENSE · стр. 1 · Текст · UTF-8')
+    rerender(<StatusBar cwd="/Users/me/shop-app" git={git} now={now} file={null} />)
+    expect(container.querySelector('.sg.right')!.textContent).toBe('14:32')
+  })
+
+  it('панель проекта: сводка git после ветки, подсказка клавиш справа (макет 07)', () => {
+    const now = new Date(2026, 0, 1, 14, 32)
+    const { container, rerender } = render(
+      <StatusBar cwd="/Users/me/shop-app" git={git} now={now} project="4 изменено · 1 новый" hint="↑↓ коммиты · → файлы · ↵ изменения" />,
+    )
+    const s = segs(container)
+    expect(s[s.indexOf('⎇ feature/form●') + 1]).toBe('4 изменено · 1 новый')
+    expect(container.querySelector('.sg.right')!.textContent).toBe('↑↓ коммиты · → файлы · ↵ изменения')
+    rerender(<StatusBar cwd="/Users/me/shop-app" git={git} now={now} project={null} hint={null} />)
+    expect(container.textContent).not.toContain('изменено')
+    expect(container.querySelector('.sg.right')!.textContent).toBe('14:32')
+  })
+
   it('omits the branch segment without git', () => {
     const { container } = render(<StatusBar cwd="/tmp/x" git={null} now={new Date(2026, 0, 1, 9, 5)} />)
     expect(container.textContent).not.toContain('⎇')

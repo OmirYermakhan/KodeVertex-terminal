@@ -36,6 +36,15 @@ describe('matchKey', () => {
     expect(matchKey(ev({ code: 'Digit9', metaKey: true }))).toBe('tab9')
     expect(matchKey(ev({ code: 'Digit0', metaKey: true }))).toBe('fontReset')
   })
+  it('окна инструментов ⌥⌘1 / ⌥⌘0 / ⌥⌘9 (и в русской раскладке); ⌘1, ⌘9, ⌘0 — как раньше', () => {
+    expect(matchKey(ev({ code: 'Digit1', key: '¡', metaKey: true, altKey: true }))).toBe('toolProject')
+    expect(matchKey(ev({ code: 'Digit0', key: 'º', metaKey: true, altKey: true }))).toBe('toolChanges')
+    expect(matchKey(ev({ code: 'Digit9', key: 'ª', metaKey: true, altKey: true }))).toBe('toolGit')
+    expect(matchKey(ev({ code: 'Digit1', key: '!', metaKey: true, altKey: true }))).toBe('toolProject')
+    expect(matchKey(ev({ code: 'Digit1', metaKey: true }))).toBe('tab1')
+    expect(matchKey(ev({ code: 'Digit9', metaKey: true }))).toBe('tab9')
+    expect(matchKey(ev({ code: 'Digit0', metaKey: true }))).toBe('fontReset')
+  })
   it('prev/next tab', () => {
     expect(matchKey(ev({ code: 'BracketLeft', metaKey: true, shiftKey: true }))).toBe('prevTab')
     expect(matchKey(ev({ code: 'BracketRight', metaKey: true, shiftKey: true }))).toBe('nextTab')

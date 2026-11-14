@@ -1,6 +1,8 @@
 use serde::Serialize;
 use std::io::Read;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -13,25 +15,40 @@ pub struct GitInfo {
   pub dirty: bool,
 }
 
-/// Переменные окружения для git: без системного конфига, без блокировок индекса и без
-/// вопросов о паролях (stdin закрыт — git повис бы до таймаута).
-const GIT_ENV: &[(&str, &str)] = &[("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_OPTIONAL_LOCKS", "0"), ("GIT_TERMINAL_PROMPT", "0")];
+/// Переменные окружения для git: без системного конфига, без блокировок индекса, без
+/// вопросов о паролях (stdin закрыт — git повис бы до таймаута) и без докачки недостающих
+/// объектов частичного клона (её транспорт — `core.sshCommand` из чужого конфига).
+pub(crate) const GIT_ENV: &[(&str, &str)] =
+  &[("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_OPTIONAL_LOCKS", "0"), ("GIT_TERMINAL_PROMPT", "0"), ("GIT_NO_LAZY_FETCH", "1")];
 
 /// Настройки, перекрывающие конфиг репозитория. git запускается сам при каждом `cd`, а
 /// `.git/config` чужого репозитория (скачанный архив, клон) может назначить команды:
-/// `core.fsmonitor` выполняется прямо из `git status`, хуки — из `hooksPath`.
-const GIT_SAFE_CONFIG: &[&str] = &[
+/// `core.fsmonitor` выполняется прямо из `git status`, хуки — из `hooksPath`. Сеть не нужна
+/// никогда: `protocol.allow=never` запрещает любой транспорт (вторая защита от докачки).
+pub(crate) const GIT_SAFE_CONFIG: &[&str] = &[
   "-c",
   "core.fsmonitor=false",
   "-c",
   "core.hooksPath=/dev/null",
   "-c",
   "core.untrackedCache=false",
+  "-c",
+  "protocol.allow=never",
 ];
 
 /// Запускает `program args` в `cwd` с окружением `env`; убивает процесс по `deadline`.
-/// None при ошибке, таймауте или ненулевом коде.
-fn run_cmd(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)], deadline: Instant) -> Option<String> {
+/// None при ошибке, таймауте или ненулевом коде. Вывод без хвостовых пробелов.
+pub(crate) fn run_cmd(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)], deadline: Instant) -> Option<String> {
+  run_cmd_capped(program, args, cwd, env, deadline, DEFAULT_OUT_MAX).map(|(s, _)| s.trim_end().to_string())
+}
+
+/// Общий потолок вывода: чужой репозиторий не должен раздуть память.
+pub(crate) const DEFAULT_OUT_MAX: usize = 16 * 1024 * 1024;
+
+/// Как `run_cmd`, но читает не больше `max` байт и ничего не обрезает: пробелы в конце
+/// (контекстная строка diff « ») сохраняются. При превышении процесс убивается, вывод
+/// усечён до `max` байт, второй элемент — true. Не-UTF-8 заменяется на U+FFFD.
+pub(crate) fn run_cmd_capped(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)], deadline: Instant, max: usize) -> Option<(String, bool)> {
   let mut child = Command::new(program)
     .args(args)
     .current_dir(cwd)
@@ -41,17 +58,29 @@ fn run_cmd(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)], deadl
     .stderr(Stdio::null())
     .spawn()
     .ok()?;
-  let mut out = child.stdout.take()?;
+  let out = child.stdout.take()?;
+  let capped = Arc::new(AtomicBool::new(false));
+  let flag = capped.clone();
   // Читаем в отдельном потоке, чтобы большой вывод не блокировал процесс до таймаута.
   let reader = std::thread::spawn(move || {
-    let mut s = String::new();
-    let _ = out.read_to_string(&mut s);
-    s
+    let mut buf = Vec::new();
+    let _ = out.take(max as u64 + 1).read_to_end(&mut buf);
+    if buf.len() > max {
+      buf.truncate(max);
+      flag.store(true, Ordering::SeqCst);
+    }
+    buf
   });
   let status = loop {
+    if capped.load(Ordering::SeqCst) {
+      let _ = child.kill();
+      let _ = child.wait();
+      let buf = reader.join().ok()?;
+      return Some((String::from_utf8_lossy(&buf).into_owned(), true));
+    }
     match child.try_wait() {
       Ok(Some(st)) => break st,
-      Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+      Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
       _ => {
         let _ = child.kill();
         let _ = child.wait();
@@ -59,12 +88,13 @@ fn run_cmd(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)], deadl
       }
     }
   };
-  let text = reader.join().ok()?;
-  status.success().then(|| text.trim_end().to_string())
+  let buf = reader.join().ok()?;
+  let truncated = capped.load(Ordering::SeqCst);
+  (status.success() || truncated).then(|| (String::from_utf8_lossy(&buf).into_owned(), truncated))
 }
 
 /// Аргументы `git`: защитные `-c`, перекрытия `extra` (тоже пары `-c k=v`), `-C <cwd>`, затем `args`.
-fn git_args<'a>(cwd: &'a str, extra: &'a [String], args: &[&'a str]) -> Vec<&'a str> {
+pub(crate) fn git_args<'a>(cwd: &'a str, extra: &'a [String], args: &[&'a str]) -> Vec<&'a str> {
   let mut full: Vec<&str> = GIT_SAFE_CONFIG.to_vec();
   full.extend(extra.iter().map(String::as_str));
   full.extend(["-C", cwd]);
@@ -80,7 +110,7 @@ fn run_git(cwd: &Path, args: &[&str], deadline: Instant) -> Option<String> {
 /// Фильтры (`filter.<имя>.clean/process`) из конфига репозитория: `git status` запускает их
 /// для изменённых файлов с атрибутом `filter=<имя>`. Отключаем каждый пустой командой —
 /// git тогда не фильтрует файл. Чтение конфига само ничего не запускает.
-fn filter_overrides(cwd: &Path, deadline: Instant) -> Vec<String> {
+pub(crate) fn filter_overrides(cwd: &Path, deadline: Instant) -> Vec<String> {
   let re = r"^filter\..*\.(clean|smudge|process)$";
   run_git(cwd, &["config", "--name-only", "--get-regexp", re], deadline)
     .map(|names| filter_overrides_from(&names))
@@ -219,12 +249,13 @@ mod tests {
     #[rustfmt::skip]
     let want = [
       "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.untrackedCache=false",
-      "-c", "filter.x.clean=", "-C", "/r", "status", "--porcelain",
+      "-c", "protocol.allow=never", "-c", "filter.x.clean=", "-C", "/r", "status", "--porcelain",
     ];
     assert_eq!(a, want);
     assert!(GIT_ENV.contains(&("GIT_CONFIG_NOSYSTEM", "1")));
     assert!(GIT_ENV.contains(&("GIT_OPTIONAL_LOCKS", "0")));
     assert!(GIT_ENV.contains(&("GIT_TERMINAL_PROMPT", "0")));
+    assert!(GIT_ENV.contains(&("GIT_NO_LAZY_FETCH", "1")));
   }
 
   #[test]

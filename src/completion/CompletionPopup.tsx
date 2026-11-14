@@ -2,6 +2,7 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { FileIcon } from './FileIcon'
 import { foldForMatch, matchIndices } from './completion'
+import { formatSize } from '../format'
 import { enterAction, type CompletionState, type FsPreviewTS } from './useCompletion'
 
 export const LIST_WIDTH = 280
@@ -48,11 +49,6 @@ export function highlight(query: string, name: string): ReactNode[] {
   return out
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} Б`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`
-  return `${(bytes / 1024 / 1024).toFixed(1)} МБ`
-}
 
 function Preview({ p }: { p: FsPreviewTS }) {
   switch (p.kind) {

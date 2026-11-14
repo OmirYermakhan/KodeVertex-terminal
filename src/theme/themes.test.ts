@@ -6,7 +6,7 @@ const ids = ['kv', 'warm', 'cold', 'light', 'as'] as ThemeId[]
 describe('themes', () => {
   it('every theme has all tokens as hex colors', () => {
     const keys = Object.keys(THEMES.as.tokens)
-    expect(keys).toHaveLength(52)
+    expect(keys).toHaveLength(69)
     for (const id of ids) {
       expect(Object.keys(THEMES[id].tokens).sort()).toEqual([...keys].sort())
       for (const v of Object.values(THEMES[id].tokens)) expect(v).toMatch(/^#[0-9a-f]{6}$/i)
@@ -14,6 +14,25 @@ describe('themes', () => {
   })
   it('as theme matches Android Studio', () => {
     expect(THEMES.as.tokens).toMatchObject({ bg: '#1e1f22', panel: '#2b2d30', text: '#bcbec4', acc: '#3574f0' })
+  })
+  it('цвета git как в макете 07 (тема AS); удалённый — приглушённый', () => {
+    expect(THEMES.as.tokens).toMatchObject({ vcsMod: '#6c9fef', vcsAdd: '#73bd79', vcsNew: '#d1675a', vcsDel: '#6f737a', hover: '#2f3136', sbIcon: '#a8adb5', sel: '#2e436e', selDim: '#2a3346' })
+    for (const id of ids) expect(THEMES[id].tokens.vcsDel).toBe(THEMES[id].tokens.muted)
+  })
+  it('поля кода в просмотре файла как в макете 07 (тема AS)', () => {
+    expect(THEMES.as.tokens).toMatchObject({ edLn: '#4b5059', edCur: '#26282e', edCurLn: '#a1a3ab' })
+  })
+  it('метки веток в логе как в макете 07 (тема AS)', () => {
+    expect(THEMES.as.tokens).toMatchObject({ refRule: '#4a6a3f', refText: '#8fbf7f', headRule: '#3e5c8f', headText: '#86a9ea' })
+  })
+  it('значки папки и проекта как в макете 07 (тема AS), в светлой теме — свои; в CSS — только токены', async () => {
+    const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as { readFileSync(p: string, e: string): string }
+    const css = fs.readFileSync('src/global.css', 'utf8')
+    expect(THEMES.as.tokens).toMatchObject({ fold: '#87939a', projIcon: '#3e8f5a' })
+    expect(THEMES.light.tokens.fold).not.toBe(THEMES.as.tokens.fold)
+    expect(css).not.toMatch(/#87939a|#3e8f5a/i)
+    expect(css).toMatch(/\.fold \{[^}]*background: var\(--fold\)/)
+    expect(css).toMatch(/\.proj \.pi \{[^}]*background: var\(--projIcon\)/)
   })
   it('only light is not dark', () => {
     expect(THEMES.light.dark).toBe(false)

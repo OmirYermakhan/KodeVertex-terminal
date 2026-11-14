@@ -15,6 +15,18 @@ import Toasts from './notify/Toasts'
 import { installNotifications } from './notify/notify'
 import { claudeOpen, useClaudeSessions } from './claude/sessionStore'
 import { installDragDrop, useAttachCount } from './attach/dragDrop'
+import Stripe from './project/Stripe'
+import ToolWindow from './project/ToolWindow'
+import Viewer from './project/Viewer'
+import { useProject } from './project/store'
+import { localSummary } from './project/changeRow'
+import { installAutoRefresh } from './project/autoRefresh'
+
+/** Подсказка клавиш окна инструмента в строке состояния (макет 07, окна 2–3). */
+const TOOL_HINT = {
+  changes: '↑↓ выбрать · ↵ открыть изменения · ⌘↓ открыть файл',
+  git: '↑↓ коммиты · → файлы · ↵ изменения',
+} as const
 
 const REPEATABLE = new Set<Action>(['fontBigger', 'fontSmaller'])
 
@@ -38,6 +50,19 @@ export default function App() {
   })
   const settingsOpen = useUi((s) => s.settingsOpen)
   const paletteOpen = useUi((s) => s.paletteOpen)
+  // Вкладка изменений занимает всю область справа: панели терминала скрыты как неактивная вкладка
+  // (смонтированы; при возврате — фокус в строку ввода и доведённые анимации, см. PaneView).
+  const diffOpen = useProject((s) => s.tabs[s.active]?.kind === 'diff')
+  const viewerFile = useProject((s) => {
+    const t = s.tabs[s.active]
+    return t?.kind === 'file' ? t.rel : null
+  })
+  const viewerLine = useProject((s) => (viewerFile ? (s.cursors[viewerFile] ?? 1) : 1))
+  // Сводка git при открытой панели: «N изменено · M новый»; в «Git» — выбранный коммит.
+  const tool = useProject((s) => s.tool)
+  const projectSeg = useProject((s) =>
+    s.tool === null ? null : ((s.tool === 'git' ? s.commitStat : null) ?? localSummary(s.changes, s.moreUntracked)),
+  )
   const attachments = useAttachCount((s) => (focusedPane ? (s.counts[focusedPane] ?? 0) : 0))
 
   useEffect(() => {
@@ -45,6 +70,11 @@ export default function App() {
   }, [])
 
   useEffect(() => installNotifications(), [])
+  // Панель проекта показывает проект панели в фокусе: смена вкладки, панели или cd меняют корень.
+  useEffect(() => {
+    if (cwd) useProject.getState().setRoot(cwd)
+  }, [cwd])
+  useEffect(() => installAutoRefresh(), [])
   // Файлы из Finder: оверлей и вставка — в панели под курсором (иначе в панели в фокусе).
   useEffect(
     () =>
@@ -80,20 +110,43 @@ export default function App() {
   return (
     <div className="app">
       <TabBar activeGit={git} />
-      <div data-testid="panes" className="panes">
-        {/* Все вкладки остаются смонтированными: неактивные скрыты, сессии живут. */}
-        {loaded && tabs.map((t) => <PaneView key={t.id} tab={t} visible={t.id === active} />)}
-        {loaded && tabs.length === 0 && (
-          <div className="stalled" role="alert">
-            <p>Оболочка завершается сразу после запуска. Проверьте ~/.zprofile / ~/.zshrc.</p>
-            <button type="button" onClick={() => useTabs.getState().newTab()}>
-              Открыть снова
-            </button>
+      <div className="win-body">
+        <Stripe />
+        <ToolWindow git={git} />
+        <div className="win-main">
+          <div data-testid="panes" className={diffOpen ? 'panes off' : 'panes'}>
+            {/* Все вкладки остаются смонтированными: неактивные скрыты, сессии живут. */}
+            {loaded && tabs.map((t) => <PaneView key={t.id} tab={t} visible={t.id === active && !diffOpen} />)}
+            {loaded && tabs.length === 0 && !diffOpen && (
+              <div className="stalled" role="alert">
+                <p>Оболочка завершается сразу после запуска. Проверьте ~/.zprofile / ~/.zshrc.</p>
+                <button type="button" onClick={() => useTabs.getState().newTab()}>
+                  Открыть снова
+                </button>
+              </div>
+            )}
           </div>
-        )}
+          <Viewer />
+        </div>
       </div>
       <div data-testid="statusbar" className="statusbar">
-        <StatusBar cwd={cwd} git={git} claude={claude} attachments={attachments} permissionMode={permissionMode} />
+        <StatusBar
+          cwd={cwd}
+          git={git}
+          claude={claude}
+          attachments={attachments}
+          permissionMode={permissionMode}
+          project={projectSeg}
+          hint={tool === 'changes' || tool === 'git' ? TOOL_HINT[tool] : null}
+          file={
+            viewerFile
+              ? {
+                  name: viewerFile.slice(viewerFile.lastIndexOf('/') + 1),
+                  line: viewerLine,
+                }
+              : null
+          }
+        />
       </div>
       <Toasts />
       {paletteOpen && <CommandPalette onClose={() => useUi.getState().setPaletteOpen(false)} />}

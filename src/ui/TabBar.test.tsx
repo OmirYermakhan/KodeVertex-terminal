@@ -61,7 +61,9 @@ describe('TabBar', () => {
     const t = useTabs.getState().tabs[0]
     useTabs.getState().setCwd(t.focused, '/Users/me/projects/demo')
     render(<TabBar />)
-    expect(screen.getByText('demo')).toBeInTheDocument()
+    // Имя — и во вкладке, и в кнопке проекта слева (макет 07).
+    expect(screen.getByRole('tab')).toHaveTextContent('demo')
+    expect(screen.getByRole('button', { name: /demo/ })).toHaveClass('proj')
   })
 
   it('+ adds a tab, click selects, middle click closes', () => {

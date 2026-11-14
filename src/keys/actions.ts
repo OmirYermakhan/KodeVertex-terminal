@@ -3,6 +3,7 @@ import { DEFAULTS, stepSize } from '../settings/settings'
 import { useSettings } from '../settings/store'
 import { useUi } from '../ui/uiStore'
 import { runPaneCommand } from '../feed/paneCommands'
+import { useProject } from '../project/store'
 import type { Action } from './keymap'
 
 export function runAction(a: Action): void {
@@ -16,7 +17,17 @@ export function runAction(a: Action): void {
       const t = tabs.tabs.find((x) => x.id === tabs.active)
       return tabs.newTab(t?.cwd[t.focused])
     }
-    case 'closePane': return tabs.closeFocused()
+    case 'closePane': {
+      // Фокус в просмотре — закрыть его вкладку, панели терминала не трогать. Активна вкладка изменений —
+      // панели скрыты, закрывать невидимую нельзя: закрываем вкладку при любом фокусе.
+      const p = useProject.getState()
+      const diff = p.tabs[p.active]?.kind === 'diff'
+      if (p.tabs.length > 0 && (diff || document.activeElement?.closest('[data-viewer]'))) return p.closeTab(p.active)
+      return tabs.closeFocused()
+    }
+    case 'toolProject': return useProject.getState().toggle('project')
+    case 'toolChanges': return useProject.getState().toggle('changes')
+    case 'toolGit': return useProject.getState().toggle('git')
     case 'focusLeft': return tabs.focusDir('left')
     case 'focusRight': return tabs.focusDir('right')
     case 'focusUp': return tabs.focusDir('up')

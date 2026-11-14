@@ -60,6 +60,30 @@ export interface ThemeTokens {
   goldRule: string
   /** Подпись «Вы» в пузыре (макет 03: --muted, в Android Studio — #9fb6e8). */
   youWho: string
+  /** Git-статус файлов в панели проекта (макет 07): изменён, добавлен, не отслеживается, удалён (= muted). */
+  vcsMod: string
+  vcsAdd: string
+  vcsNew: string
+  vcsDel: string
+  /** Фон под наведением / открытой кнопкой в полосе окна (макет 07 --hover). */
+  hover: string
+  /** Выбранная строка дерева (макет 07 --sel) и она же без фокуса (--selDim). */
+  sel: string
+  selDim: string
+  /** Значки полосы инструментов (макет 07 .sb: #a8adb5). */
+  sbIcon: string
+  /** Значок папки (макет 07 .fold: #87939a) и значок проекта у кнопки вверху (.proj .pi: #3e8f5a). */
+  fold: string
+  projIcon: string
+  /** Просмотр файла (макет 07 .ln): номера строк, фон текущей строки и её номер. */
+  edLn: string
+  edCur: string
+  edCurLn: string
+  /** Метки веток в логе (макет 07 .ref): рамка и текст; HEAD (.ref.head) — свои. */
+  refRule: string
+  refText: string
+  headRule: string
+  headText: string
 }
 
 export interface Theme {
@@ -127,6 +151,23 @@ export const THEMES: Record<ThemeId, Theme> = {
       gold: '#e8c46a',
       goldRule: '#5a4a22',
       youWho: '#8a9199',
+      vcsMod: '#6c9fef',
+      vcsAdd: '#73bd79',
+      vcsNew: '#d1675a',
+      vcsDel: '#8a9199',
+      hover: '#1d2126',
+      sel: '#26301a',
+      selDim: '#1a1e22',
+      sbIcon: '#a8adb5',
+      fold: '#87939a',
+      projIcon: '#3e8f5a',
+      edLn: '#4b5157',
+      edCur: '#171a1e',
+      edCurLn: '#a8aeb5',
+      refRule: '#4a6a3f',
+      refText: '#8fbf7f',
+      headRule: '#3e5c8f',
+      headText: '#86a9ea',
     },
   },
   warm: {
@@ -186,6 +227,23 @@ export const THEMES: Record<ThemeId, Theme> = {
       gold: '#e8c46a',
       goldRule: '#5a4a22',
       youWho: '#9c958a',
+      vcsMod: '#6c9fef',
+      vcsAdd: '#73bd79',
+      vcsNew: '#d1675a',
+      vcsDel: '#948d82',
+      hover: '#2c2a27',
+      sel: '#3a3628',
+      selDim: '#2a2825',
+      sbIcon: '#a8adb5',
+      fold: '#87939a',
+      projIcon: '#3e8f5a',
+      edLn: '#58544d',
+      edCur: '#272523',
+      edCurLn: '#aaa397',
+      refRule: '#4a6a3f',
+      refText: '#8fbf7f',
+      headRule: '#3e5c8f',
+      headText: '#86a9ea',
     },
   },
   cold: {
@@ -245,6 +303,23 @@ export const THEMES: Record<ThemeId, Theme> = {
       gold: '#e8c46a',
       goldRule: '#5a4a22',
       youWho: '#8c99aa',
+      vcsMod: '#6c9fef',
+      vcsAdd: '#73bd79',
+      vcsNew: '#d1675a',
+      vcsDel: '#8592a3',
+      hover: '#242b35',
+      sel: '#253a5c',
+      selDim: '#212a37',
+      sbIcon: '#a8adb5',
+      fold: '#87939a',
+      projIcon: '#3e8f5a',
+      edLn: '#4c5563',
+      edCur: '#1f2630',
+      edCurLn: '#a3adba',
+      refRule: '#4a6a3f',
+      refText: '#8fbf7f',
+      headRule: '#3e5c8f',
+      headText: '#86a9ea',
     },
   },
   light: {
@@ -304,6 +379,23 @@ export const THEMES: Record<ThemeId, Theme> = {
       gold: '#7f5f0a',
       goldRule: '#d6c38c',
       youWho: '#5a6068',
+      vcsMod: '#2f62c9',
+      vcsAdd: '#3b8a43',
+      vcsNew: '#b8483a',
+      vcsDel: '#6d737b',
+      hover: '#e2e1d9',
+      sel: '#d9e3c2',
+      selDim: '#e6e5de',
+      sbIcon: '#5f646b',
+      fold: '#7b858c',
+      projIcon: '#3e8f5a',
+      edLn: '#a9acaf',
+      edCur: '#ebeae2',
+      edCurLn: '#4f545a',
+      refRule: '#9cc29a',
+      refText: '#2e6b34',
+      headRule: '#9db3dd',
+      headText: '#2f5aa8',
     },
   },
   as: {
@@ -363,6 +455,23 @@ export const THEMES: Record<ThemeId, Theme> = {
       gold: '#e8c46a',
       goldRule: '#5a4a22',
       youWho: '#9fb6e8',
+      vcsMod: '#6c9fef',
+      vcsAdd: '#73bd79',
+      vcsNew: '#d1675a',
+      vcsDel: '#6f737a',
+      hover: '#2f3136',
+      sel: '#2e436e',
+      selDim: '#2a3346',
+      sbIcon: '#a8adb5',
+      fold: '#87939a',
+      projIcon: '#3e8f5a',
+      edLn: '#4b5059',
+      edCur: '#26282e',
+      edCurLn: '#a1a3ab',
+      refRule: '#4a6a3f',
+      refText: '#8fbf7f',
+      headRule: '#3e5c8f',
+      headText: '#86a9ea',
     },
   },
 }

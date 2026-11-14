@@ -8,6 +8,7 @@ mod fs_complete;
 mod git;
 mod history;
 mod preview;
+mod project;
 mod pty;
 mod session;
 mod settings;
@@ -91,6 +92,13 @@ pub fn run() {
       preview::preview_image,
       preview::preview_pdf,
       preview::preview_open,
+      project::project_root,
+      project::project_list,
+      project::project_read,
+      project::git_status,
+      project::git_log,
+      project::git_commit_files,
+      project::git_diff,
       slash_commands::claude_slash_commands,
       diag::frontend_log
     ])
