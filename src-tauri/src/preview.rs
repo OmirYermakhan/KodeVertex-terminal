@@ -53,7 +53,7 @@ pub enum TextPreview {
   Error { message: String },
 }
 
-fn io_message(e: &std::io::Error) -> String {
+pub(crate) fn io_message(e: &std::io::Error) -> String {
   match e.kind() {
     std::io::ErrorKind::NotFound => "Файл не найден".to_string(),
     std::io::ErrorKind::PermissionDenied => "Нет доступа".to_string(),

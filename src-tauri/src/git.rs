@@ -15,12 +15,12 @@ pub struct GitInfo {
 
 /// Переменные окружения для git: без системного конфига, без блокировок индекса и без
 /// вопросов о паролях (stdin закрыт — git повис бы до таймаута).
-const GIT_ENV: &[(&str, &str)] = &[("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_OPTIONAL_LOCKS", "0"), ("GIT_TERMINAL_PROMPT", "0")];
+pub(crate) const GIT_ENV: &[(&str, &str)] = &[("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_OPTIONAL_LOCKS", "0"), ("GIT_TERMINAL_PROMPT", "0")];
 
 /// Настройки, перекрывающие конфиг репозитория. git запускается сам при каждом `cd`, а
 /// `.git/config` чужого репозитория (скачанный архив, клон) может назначить команды:
 /// `core.fsmonitor` выполняется прямо из `git status`, хуки — из `hooksPath`.
-const GIT_SAFE_CONFIG: &[&str] = &[
+pub(crate) const GIT_SAFE_CONFIG: &[&str] = &[
   "-c",
   "core.fsmonitor=false",
   "-c",
@@ -31,7 +31,7 @@ const GIT_SAFE_CONFIG: &[&str] = &[
 
 /// Запускает `program args` в `cwd` с окружением `env`; убивает процесс по `deadline`.
 /// None при ошибке, таймауте или ненулевом коде.
-fn run_cmd(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)], deadline: Instant) -> Option<String> {
+pub(crate) fn run_cmd(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)], deadline: Instant) -> Option<String> {
   let mut child = Command::new(program)
     .args(args)
     .current_dir(cwd)
@@ -64,7 +64,7 @@ fn run_cmd(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)], deadl
 }
 
 /// Аргументы `git`: защитные `-c`, перекрытия `extra` (тоже пары `-c k=v`), `-C <cwd>`, затем `args`.
-fn git_args<'a>(cwd: &'a str, extra: &'a [String], args: &[&'a str]) -> Vec<&'a str> {
+pub(crate) fn git_args<'a>(cwd: &'a str, extra: &'a [String], args: &[&'a str]) -> Vec<&'a str> {
   let mut full: Vec<&str> = GIT_SAFE_CONFIG.to_vec();
   full.extend(extra.iter().map(String::as_str));
   full.extend(["-C", cwd]);
