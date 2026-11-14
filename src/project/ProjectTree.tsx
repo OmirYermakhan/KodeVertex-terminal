@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { projectList, type Change, type DirEntry, type DirList } from './api'
-import { fileIcon, folderIcon, folderKind } from './fileIcon'
+import { fileIcon, folderIcon } from './fileIcon'
 import { STATUS, useProject, type VcsClass } from './store'
 
 /** Отступ уровня дерева (макет 07): корень — 6px, каждый уровень +16px. */
@@ -58,6 +58,16 @@ function childrenOf(rel: string, v: Vcs, ls: Map<string, DirList>): DirEntry[] |
   const extra = [...del].filter(([n]) => !have.has(n)).map(([name, isDir]) => ({ name, isDir }))
   return extra.length ? [...l.entries, ...extra].sort(byName) : l.entries
 }
+
+/** Папка из одной папки (не корень, без «ещё N») — путь этой папки: её раскрываем сразу, цепочка — одной строкой. */
+function onlyChild(rel: string, v: Vcs, ls: Map<string, DirList>): string | null {
+  if (!rel || (ls.get(rel)?.more ?? 0) > 0) return null
+  const kids = childrenOf(rel, v, ls)
+  return kids?.length === 1 && kids[0].isDir ? join(rel, kids[0].name) : null
+}
+
+/** Настоящий корень исходников Java/Kotlin — на нём цепочка папок кончается (корневой `src` — нет). */
+const isSourceRoot = (rel: string) => /(^|\/)src\/[^/]+\/(java|kotlin)$/.test(rel)
 
 interface Row {
   /** Ключ выбора: путь папки, которую строка раскрывает (у цепочки — верхней), файла; корень — ''. */
@@ -130,16 +140,12 @@ function Tree({ root }: { root: string }) {
           const next = new Map(listsRef.current).set(rel, l)
           listsRef.current = next
           setLists(next)
-          // Папка из одной папки — раскрываем и её: цепочка показывается одной строкой (`src/main/java`).
-          const kids = rel ? childrenOf(rel, vcsRef.current, next) : null
-          if (kids?.length === 1 && kids[0].isDir && l.more === 0) {
-            const c = join(rel, kids[0].name)
-            if (!expandedRef.current.has(c)) {
-              const ex = new Set(expandedRef.current).add(c)
-              expandedRef.current = ex
-              setExpanded(ex)
-              loadDir(c)
-            }
+          const c = onlyChild(rel, vcsRef.current, next)
+          if (c !== null && !expandedRef.current.has(c)) {
+            const ex = new Set(expandedRef.current).add(c)
+            expandedRef.current = ex
+            setExpanded(ex)
+            loadDir(c)
           }
         })
       }
@@ -174,8 +180,18 @@ function Tree({ root }: { root: string }) {
       if (!changed) return
       listsRef.current = next
       setLists(next)
+      // Как при раскрытии: папка стала «из одной папки» — раскрыть и её, чтобы цепочка шла одной строкой.
+      const add = dirs
+        .map((rel) => onlyChild(rel, vcsRef.current, next))
+        .filter((c): c is string => c !== null && !expandedRef.current.has(c))
+      if (!add.length) return
+      const ex = new Set(expandedRef.current)
+      for (const c of add) ex.add(c)
+      expandedRef.current = ex
+      setExpanded(ex)
+      for (const c of add) load(c)
     })
-  }, [changesKey, fetchDir])
+  }, [changesKey, fetchDir, load])
 
   const toggle = (key: string) => {
     const ex = new Set(expandedRef.current)
@@ -232,7 +248,7 @@ function Tree({ root }: { root: string }) {
           for (;;) {
             const k = childrenOf(cur, vcs, lists)
             // Корень исходников (`src/main/java`) — конец цепочки: пакеты ниже начинают свою.
-            if (folderKind(cur) === 'src') break
+            if (isSourceRoot(cur)) break
             if (!k || k.length !== 1 || !k[0].isDir || (lists.get(cur)?.more ?? 0) > 0) break
             const next = join(cur, k[0].name)
             if (!expanded.has(next)) break

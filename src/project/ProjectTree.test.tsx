@@ -98,6 +98,33 @@ describe('ProjectTree', () => {
     expect(screen.queryByText('AndroidManifest.xml')).toBeNull()
   })
 
+  it('одномодульный проект: src/main/java в корне — одна строка, ниже com.shop', async () => {
+    fs[''] = ls(d('src'), f('README.md'))
+    fs.src = ls(d('main'))
+    fs['src/main'] = ls(d('java'))
+    fs['src/main/java'] = ls(d('com'))
+    fs['src/main/java/com'] = ls(d('shop'))
+    fs['src/main/java/com/shop'] = ls(d('cart'), d('payments'))
+    await mount()
+    fireEvent.click(row('src'))
+    expect(await screen.findByText('src/main/java')).toBeInTheDocument()
+    expect(row('src/main/java').style.paddingLeft).toBe('22px')
+    expect(await screen.findByText('com.shop')).toBeInTheDocument()
+    expect(row('com.shop').style.paddingLeft).toBe('38px')
+    expect(row('cart').style.paddingLeft).toBe('54px')
+  })
+
+  it('после перечитывания папка из одной папки раскрывается цепочкой, как при раскрытии', async () => {
+    await mount()
+    fireEvent.click(row('.gradle'))
+    await screen.findByText('cache.bin')
+    fs['.gradle'] = ls(d('8.4'))
+    fs['.gradle/8.4'] = ls(f('lock'))
+    act(() => useProject.setState({ changes: [{ path: 'README.md', status: 'M' }] }))
+    expect(await screen.findByText('.gradle/8.4')).toBeInTheDocument()
+    expect(await screen.findByText('lock')).toBeInTheDocument()
+  })
+
   it('цвета статусов и dirm у папок с изменениями внутри; удалённый — в своей папке, зачёркнут', async () => {
     const P = 'app/src/main/java/com/shop/payments'
     fs[P] = ls(f('PaymentApi.kt'), f('RetryPolicy.kt'), f('Zeta.kt'))
