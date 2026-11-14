@@ -1,10 +1,13 @@
 // Режим чтения для ответов Claude: markdown (GFM) → React.
 // HTML из текста не исполняется: без rehype-raw react-markdown выводит его как обычный текст.
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { memo, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { memo, useRef, type MouseEvent, type ReactNode } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
+import { useSettings } from '../settings/store'
+import { Diagram } from './diagram/Diagram'
+import { useCopied } from './diagram/useCopied'
 
 // Минимальные типы hast: сам пакет типов — транзитивная зависимость.
 type HNode = { type: string; tagName?: string; children?: HNode[]; properties?: Record<string, unknown>; value?: string }
@@ -48,38 +51,40 @@ function onLinkClick(e: MouseEvent<HTMLAnchorElement>, href: string | undefined)
   if (href && SAFE_URL.test(href)) openUrl(href).catch(() => {})
 }
 
-function CodeBlock({ children }: { children?: ReactNode }) {
+function CodeBlock({ children, note }: { children?: ReactNode; note?: string }) {
   const ref = useRef<HTMLPreElement>(null)
-  const [copied, setCopied] = useState(false)
-  useEffect(() => {
-    if (!copied) return
-    const t = setTimeout(() => setCopied(false), 1500)
-    return () => clearTimeout(t)
-  }, [copied])
-  const copy = () => {
-    const text = (ref.current?.textContent ?? '').replace(/\n$/, '')
-    navigator.clipboard
-      ?.writeText(text)
-      .then(() => setCopied(true))
-      .catch(() => {})
-  }
+  const [copied, copyText] = useCopied()
+  const copy = () => copyText((ref.current?.textContent ?? '').replace(/\n$/, ''))
   return (
     <div className="md-code">
       <button type="button" className="md-copy" aria-label="Копировать код" onClick={copy}>
         {copied ? 'Скопировано' : 'Копировать'}
       </button>
       <pre ref={ref}>{children}</pre>
+      {note && <div className="dg-note">{note}</div>}
     </div>
   )
 }
 
-const components: Components = {
+function textOf(n: HNode): string {
+  return n.type === 'text' ? (n.value ?? '') : (n.children ?? []).map(textOf).join('')
+}
+
+/** Исходник блока ```mermaid (pre > code.language-mermaid) или undefined. */
+function mermaidSource(pre: HNode | undefined): string | undefined {
+  const code = pre?.children?.find((k) => k.type === 'element')
+  if (code?.tagName !== 'code') return undefined
+  const cls = code.properties?.className
+  if (!Array.isArray(cls) || !cls.includes('language-mermaid')) return undefined
+  return textOf(code).replace(/\n$/, '')
+}
+
+const base: Components = {
   a: ({ href, children }) => (
     <a href={href} onClick={(e) => onLinkClick(e, href)} onAuxClick={(e) => e.preventDefault()}>
       {children}
     </a>
   ),
-  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
   // Картинки не загружаются: запрос по URL из ответа — канал утечки данных. Вместо картинки — ссылка.
   img: ({ src, alt }) => {
     const href = typeof src === 'string' ? src : undefined
@@ -94,14 +99,50 @@ const components: Components = {
   },
 }
 
+/** Наборы компонентов по (схемы, стриминг) — постоянные ссылки, чтобы react-markdown не пересоздавал дерево. */
+const COMPONENTS = new Map<string, Components>()
+
+function componentsFor(diagrams: boolean, streaming: boolean): Components {
+  const key = `${diagrams}/${streaming}`
+  let c = COMPONENTS.get(key)
+  if (!c) {
+    c = {
+      ...base,
+      pre: ({ children, node }) => {
+        const src = diagrams ? mermaidSource(node as HNode | undefined) : undefined
+        if (src === undefined) return <CodeBlock>{children}</CodeBlock>
+        // Пока ответ печатается, блок может быть недописан — рисуем после конца ответа.
+        if (streaming) return <CodeBlock note="Схема рисуется…">{children}</CodeBlock>
+        return <Diagram source={src} />
+      },
+    }
+    COMPONENTS.set(key, c)
+  }
+  return c
+}
+
 const REMARK = [remarkGfm]
 const REHYPE = [rehypeHighlight]
 const REHYPE_STREAMING = [rehypeHighlight, rehypeCaret]
 
-export const Markdown = memo(function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
+export const Markdown = memo(function Markdown({
+  text,
+  streaming = false,
+  diagrams,
+}: {
+  text: string
+  streaming?: boolean
+  /** Схемы mermaid картинкой; по умолчанию — переключатель «Схемы картинкой» из настроек. */
+  diagrams?: boolean
+}) {
+  const fromSettings = useSettings((s) => s.settings.claudeDiagrams)
   return (
     <div className="md">
-      <ReactMarkdown remarkPlugins={REMARK} rehypePlugins={streaming ? REHYPE_STREAMING : REHYPE} components={components}>
+      <ReactMarkdown
+        remarkPlugins={REMARK}
+        rehypePlugins={streaming ? REHYPE_STREAMING : REHYPE}
+        components={componentsFor(diagrams ?? fromSettings, streaming)}
+      >
         {text}
       </ReactMarkdown>
     </div>
