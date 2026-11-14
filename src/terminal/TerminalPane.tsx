@@ -25,7 +25,7 @@ import type { FeedClaudeItem } from '../claude/reducer'
 import { editClaude, dismissQueueHint, dismissSuggestion, feedCleared, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, listSessions, resumeClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
 import type { SessionInfo } from '../claude/resume'
 import { aliasOf } from '../claude/models'
-import { canEdit, editInfo, lastEditable, pendingPrompt, type PermissionDecision } from '../claude/reducer'
+import { canEdit, editInfo, lastEditable, pendingPrompt, thinkingSince, type PermissionDecision } from '../claude/reducer'
 import { EditChip } from '../claude/EditChip'
 import { docOf } from '../attach/doc'
 import { PermissionPrompt } from '../claude/PermissionPrompt'
@@ -1138,6 +1138,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         onEdit={onEditItem}
         editingId={editing ? claudeItemId(editing.index) : null}
         claudeMode={inClaude}
+        thinking={claudeState ? thinkingSince(claudeState) : null}
         park={
           // Пока xterm не показан, он стоит здесь: невидим, но сохраняет ширину текста блока (cols).
           // inert: спрятанный xterm не получает фокус по Tab/⇧Tab (ввод вслепую в ZLE).

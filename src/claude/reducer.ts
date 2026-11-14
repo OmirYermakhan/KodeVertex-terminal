@@ -804,6 +804,21 @@ export function editInfo(s: ClaudeState, index: number): EditInfo | null {
   return { n, total: us.length, after: us.length - n, busy: s.busy, files: touchesFiles(s.items.slice(index + 1)) }
 }
 
+/**
+ * Claude думает: ход идёт, а в ленте нет ничего живого — ни печатающегося ответа, ни идущего
+ * инструмента (у него свой спиннер), и он не ждёт ответа на вопрос или разрешение.
+ * Возвращает начало хода (для «· 12 с») или null — индикатор не нужен.
+ */
+export function thinkingSince(s: ClaudeState): number | null {
+  if (!s.busy) return null
+  const main = s.agents.find((a) => a.id === MAIN)
+  if (!main || main.status !== 'running') return null
+  const last = s.items[s.items.length - 1]
+  if (last?.type === 'assistant' && last.streaming) return null
+  if (s.items.some((it) => it.type === 'action' && it.status === 'running')) return null
+  return main.startedAt
+}
+
 /** Агент для подписи карточки (по agentId элемента). */
 export function agentOf(agents: readonly Agent[] | undefined, x: FeedClaudeItem): Agent | undefined {
   return x.type === 'assistant' || x.type === 'action' || x.type === 'question' ? agents?.find((a) => a.id === x.agentId) : undefined

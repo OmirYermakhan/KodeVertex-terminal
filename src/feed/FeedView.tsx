@@ -6,6 +6,7 @@ import { agentOf, type Agent } from '../claude/reducer'
 import type { ClaudeItem, FeedItem, ShellBlock } from './feed'
 import { ShellBlockView } from './ShellBlockView'
 import { EmptyHint } from './EmptyHint'
+import { ThinkingRow } from '../claude/cards/ThinkingRow'
 
 const NO_AGENTS: readonly Agent[] = []
 
@@ -38,6 +39,8 @@ export interface FeedProps {
   editingId?: string | null
   /** Строка ввода в режиме Claude — подсказка пустой ленты про этот режим. */
   claudeMode?: boolean
+  /** Claude думает с этого времени (мс) — строка-индикатор в конце ленты; null — нет. */
+  thinking?: number | null
 }
 
 /**
@@ -69,7 +72,7 @@ export function finishAppear(feed: HTMLElement | null): void {
 }
 
 export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
-  { items, selectedId, renderLive, agents = NO_AGENTS, cwd, renderClaude, onScroll, park, onAttach, onCopy, onRepeat, onAsk, onRead, editable, onEdit, editingId, claudeMode = false },
+  { items, selectedId, renderLive, agents = NO_AGENTS, cwd, renderClaude, onScroll, park, onAttach, onCopy, onRepeat, onAsk, onRead, editable, onEdit, editingId, claudeMode = false, thinking = null },
   ref,
 ) {
   const own = useRef<HTMLDivElement | null>(null)
@@ -162,6 +165,7 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
       ))}
       {/* Пустая лента — подсказка с клавишами; исчезает с первым блоком или карточкой. */}
       {items.length === 0 && <EmptyHint claude={claudeMode} />}
+      {thinking !== null && <ThinkingRow since={thinking} />}
       {park}
     </div>
   )
