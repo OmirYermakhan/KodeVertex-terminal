@@ -189,6 +189,8 @@ function start(paneId: string): Proc {
   const permissionMode = (prev.rewindAt ? prev.permissionMode : null) ?? useSettings.getState().settings.claudePermissionMode
   // Подсказка следующего сообщения (`--prompt-suggestions`): из настроек на момент запуска.
   const promptSuggestions = useSettings.getState().settings.claudePromptSuggestions
+  // Подсказка рисовать схемы mermaid (`--append-system-prompt`): из настроек на момент запуска.
+  const diagramsHint = useSettings.getState().settings.claudeDiagrams
   patch(paneId, (p) => ({ ...p, permissionMode, rewindAt: null, state: newProcess(p.state, resume) }))
   let gotLine = false
   const onLine = new Channel<string>((line) => {
@@ -232,7 +234,7 @@ function start(paneId: string): Proc {
     })
   })
   const rewind = rewindAt ? { resumeAt: rewindAt, fork: true } : {}
-  proc.ready = invoke<string>('claude_start', { cwd, resume, model, effort, permissionMode, ...rewind, promptSuggestions, onLine, onExit })
+  proc.ready = invoke<string>('claude_start', { cwd, resume, model, effort, permissionMode, ...rewind, promptSuggestions, diagramsHint, onLine, onExit })
     .then((id) => {
       if (!alive()) {
         // Панель закрыли, пока процесс запускался.

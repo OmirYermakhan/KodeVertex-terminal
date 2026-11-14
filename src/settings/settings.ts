@@ -32,6 +32,11 @@ export interface Settings {
    * серым в пустом поле. Включение — со следующего запуска сессии, выключение прячет сразу.
    */
   claudePromptSuggestions: boolean
+  /**
+   * Схемы картинкой: claude получает подсказку (`--append-system-prompt`) рисовать схемы блоками
+   * mermaid, лента показывает их картинкой. Подсказка — со следующего запуска сессии.
+   */
+  claudeDiagrams: boolean
 }
 
 export const DEFAULTS: Settings = {
@@ -49,6 +54,7 @@ export const DEFAULTS: Settings = {
   notifyLongCommands: true,
   claudePermissionMode: 'acceptEdits',
   claudePromptSuggestions: true,
+  claudeDiagrams: true,
 }
 
 const THEME_IDS: ThemeId[] = ['kv', 'warm', 'cold', 'light', 'as']
@@ -97,6 +103,7 @@ export function normalizeSettings(raw: unknown): Settings {
       ? (r.claudePermissionMode as ClaudePermissionMode)
       : DEFAULTS.claudePermissionMode,
     claudePromptSuggestions: bool(r.claudePromptSuggestions, DEFAULTS.claudePromptSuggestions),
+    claudeDiagrams: bool(r.claudeDiagrams, DEFAULTS.claudeDiagrams),
   }
 }
 

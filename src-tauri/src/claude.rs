@@ -86,12 +86,18 @@ pub struct Launch {
   /// следующую реплику пользователя (короткий дополнительный запрос к модели). Нет — флаг не
   /// передаётся (в режиме -p подсказки выключены).
   pub prompt_suggestions: bool,
+  /// `--append-system-prompt DIAGRAMS_HINT`: просит claude рисовать схемы блоками ```mermaid
+  /// (лента показывает их картинкой). Нет — флаг не передаётся.
+  pub diagrams_hint: bool,
 }
+
+/// Подсказка claude про схемы: терминал рисует блоки ```mermaid картинкой.
+pub const DIAGRAMS_HINT: &str = "This terminal renders ```mermaid code blocks as diagrams. When a diagram genuinely helps explain something (architecture, flow, relationships, steps, timelines, simple charts), draw it as a mermaid block instead of ASCII art. Do not add diagrams when they don't help.";
 
 /// Аргументы `claude` после обязательных: `--permission-mode`, `--model`, `--effort`, `--resume`
 /// (с ним — `--resume-session-at`, `--fork-session`). Пустые значения, значения с `-` в начале
 /// и неизвестное усилие пропускаются; неизвестный режим — `acceptEdits`. В конце — `--prompt-suggestions true`,
-/// если подсказки включены.
+/// если подсказки включены, и `--append-system-prompt` с подсказкой про схемы, если она включена.
 pub fn launch_args(l: &Launch) -> Vec<String> {
   let mut a = vec!["--permission-mode".to_string(), permission_mode(l.permission_mode.as_deref()).to_string()];
   if let Some(m) = l.model.as_deref().map(str::trim).filter(|m| !m.is_empty() && !m.starts_with('-')) {
@@ -113,6 +119,9 @@ pub fn launch_args(l: &Launch) -> Vec<String> {
   }
   if l.prompt_suggestions {
     a.extend(["--prompt-suggestions".to_string(), "true".to_string()]);
+  }
+  if l.diagrams_hint {
+    a.extend(["--append-system-prompt".to_string(), DIAGRAMS_HINT.to_string()]);
   }
   a
 }
@@ -437,6 +446,7 @@ pub async fn claude_start(
   resume_at: Option<String>,
   fork: Option<bool>,
   prompt_suggestions: Option<bool>,
+  diagrams_hint: Option<bool>,
   on_line: Channel<String>,
   on_exit: Channel<ClaudeExit>,
 ) -> Result<String, String> {
@@ -452,6 +462,7 @@ pub async fn claude_start(
       resume_at,
       fork: fork.unwrap_or(false),
       prompt_suggestions: prompt_suggestions.unwrap_or(false),
+      diagrams_hint: diagrams_hint.unwrap_or(false),
     },
     move |line| {
       let _ = on_line.send(line);
@@ -692,7 +703,7 @@ mod tests {
     let l = Launch { resume: Some("s-1".into()), resume_at: Some(String::new()), fork: false, ..Launch::default() };
     assert_eq!(launch_args(&l)[2..], ["--resume", "s-1"]);
     // Модель, усилие и режим при перезапуске сохраняются.
-    let l = Launch { resume: Some("s-1".into()), resume_at: Some("u-9".into()), fork: true, model: Some("fable".into()), effort: Some("high".into()), permission_mode: Some("default".into()), prompt_suggestions: false };
+    let l = Launch { resume: Some("s-1".into()), resume_at: Some("u-9".into()), fork: true, model: Some("fable".into()), effort: Some("high".into()), permission_mode: Some("default".into()), prompt_suggestions: false, diagrams_hint: false };
     assert_eq!(launch_args(&l), ["--permission-mode", "default", "--model", "fable", "--effort", "high", "--resume", "s-1", "--resume-session-at", "u-9", "--fork-session"]);
   }
 
@@ -704,6 +715,16 @@ mod tests {
     // С продолжением сессии флаг — последним, после --resume и точки перемотки.
     let l = Launch { resume: Some("s-1".into()), resume_at: Some("u-9".into()), fork: true, prompt_suggestions: true, ..Launch::default() };
     assert_eq!(launch_args(&l)[2..], ["--resume", "s-1", "--resume-session-at", "u-9", "--fork-session", "--prompt-suggestions", "true"]);
+  }
+
+  #[test]
+  fn diagrams_hint_flag_only_when_on() {
+    assert!(!launch_args(&Launch::default()).contains(&"--append-system-prompt".to_string()));
+    let l = Launch { diagrams_hint: true, ..Launch::default() };
+    assert_eq!(launch_args(&l), ["--permission-mode", "acceptEdits", "--append-system-prompt", DIAGRAMS_HINT]);
+    // После --prompt-suggestions true подсказка идёт последней.
+    let l = Launch { prompt_suggestions: true, diagrams_hint: true, ..Launch::default() };
+    assert_eq!(launch_args(&l)[2..], ["--prompt-suggestions", "true", "--append-system-prompt", DIAGRAMS_HINT]);
   }
 
   #[test]
