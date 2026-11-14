@@ -95,6 +95,10 @@ pub fn run() {
       project::project_root,
       project::project_list,
       project::project_read,
+      project::git_status,
+      project::git_log,
+      project::git_commit_files,
+      project::git_diff,
       slash_commands::claude_slash_commands,
       diag::frontend_log
     ])

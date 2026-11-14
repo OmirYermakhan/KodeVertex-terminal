@@ -80,7 +80,7 @@ fn run_git(cwd: &Path, args: &[&str], deadline: Instant) -> Option<String> {
 /// Фильтры (`filter.<имя>.clean/process`) из конфига репозитория: `git status` запускает их
 /// для изменённых файлов с атрибутом `filter=<имя>`. Отключаем каждый пустой командой —
 /// git тогда не фильтрует файл. Чтение конфига само ничего не запускает.
-fn filter_overrides(cwd: &Path, deadline: Instant) -> Vec<String> {
+pub(crate) fn filter_overrides(cwd: &Path, deadline: Instant) -> Vec<String> {
   let re = r"^filter\..*\.(clean|smudge|process)$";
   run_git(cwd, &["config", "--name-only", "--get-regexp", re], deadline)
     .map(|names| filter_overrides_from(&names))
