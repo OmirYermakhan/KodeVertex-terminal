@@ -1,7 +1,7 @@
 //! Панель проекта: список папки и чтение файла строго внутри корня проекта.
 //! Только просмотр — ничего не меняем. Пути от фронта относительные к корню.
 
-use crate::git::{git_args, run_cmd, GIT_ENV};
+use crate::git::{git_args, run_cmd, run_cmd_capped, GIT_ENV};
 use crate::preview::{io_message, looks_binary};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -14,6 +14,10 @@ use std::time::{Duration, Instant};
 const GIT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Коммитов за один запрос истории не больше.
 const LOG_MAX: u32 = 500;
+/// Diff больше этого размера урезаем.
+const DIFF_MAX: usize = 4 * 1024 * 1024;
+/// Последняя строка урезанного diff — фронт показывает её как пометку.
+const DIFF_CUT_MARK: &str = "\\ Изменения урезаны: больше 4 МБ";
 /// Записей в одной папке не больше; остаток — в `more`.
 const LIST_MAX: usize = 2000;
 /// Файл читаем не дальше этого размера и числа строк.
@@ -205,10 +209,18 @@ impl<'a> Git<'a> {
     Ok(g)
   }
 
-  fn run(&self, args: &[&str]) -> Option<String> {
+  fn env() -> Vec<(&'static str, &'static str)> {
     // Пути — буквально (без `:(top)` и масок); `--` ставит вызывающий.
-    let env: Vec<(&str, &str)> = GIT_ENV.iter().copied().chain([("GIT_LITERAL_PATHSPECS", "1")]).collect();
-    run_cmd("git", &git_args(self.cwd, &self.extra, args), Path::new("."), &env, self.deadline)
+    GIT_ENV.iter().copied().chain([("GIT_LITERAL_PATHSPECS", "1")]).collect()
+  }
+
+  fn run(&self, args: &[&str]) -> Option<String> {
+    run_cmd("git", &git_args(self.cwd, &self.extra, args), Path::new("."), &Self::env(), self.deadline)
+  }
+
+  /// Вывод без обрезки пробелов и с потолком `max` байт; true — вывод урезан.
+  fn run_raw(&self, args: &[&str], max: usize) -> Option<(String, bool)> {
+    run_cmd_capped("git", &git_args(self.cwd, &self.extra, args), Path::new("."), &Self::env(), self.deadline, max)
   }
 
   fn has_head(&self) -> bool {
@@ -349,7 +361,7 @@ pub fn git_commit_files_at(root: &Path, hash: &str) -> Result<Vec<Change>, Strin
   }
   let g = Git::new(root)?;
   // -m --first-parent: у слияния показываем изменения относительно первого родителя.
-  let base = ["show", "--format=", "-m", "--first-parent", "-M", "-z", "--no-ext-diff", "--no-textconv"];
+  let base = ["show", "--no-show-signature", "--format=", "-m", "--first-parent", "-M", "-z", "--no-ext-diff", "--no-textconv"];
   let mut ns = base.to_vec();
   ns.extend(["--name-status", hash, "--"]);
   let mut nm = base.to_vec();
@@ -392,10 +404,10 @@ pub fn git_diff_at(root: &Path, rel: &str, rev: Option<&str>) -> Result<String, 
   const OPTS: [&str; 5] = ["-U3", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/"];
   let opts = || OPTS.iter().copied().chain(["--dst-prefix=b/"]);
   if let Some(h) = rev {
-    let mut a = vec!["show", "--format=", "-m", "--first-parent", "-M"];
+    let mut a = vec!["show", "--no-show-signature", "--format=", "-m", "--first-parent", "-M"];
     a.extend(opts());
     a.extend([h, "--", rel]);
-    return g.run(&a).ok_or_else(|| "Коммит не найден".to_string());
+    return g.run_raw(&a, DIFF_MAX).map(cut_mark).ok_or_else(|| "Коммит не найден".to_string());
   }
   // Неотслеживаемый: у git для него diff пуст, поэтому синтезируем.
   let untracked = g.run(&["ls-files", "--others", "--exclude-standard", "-z", "--", rel]).is_some_and(|s| !s.is_empty());
@@ -406,7 +418,17 @@ pub fn git_diff_at(root: &Path, rel: &str, rev: Option<&str>) -> Result<String, 
   a.push(if g.has_head() { "HEAD" } else { "--cached" });
   a.extend(opts());
   a.extend(["--", rel]);
-  g.run(&a).ok_or_else(|| "Не удалось получить изменения".to_string())
+  g.run_raw(&a, DIFF_MAX).map(cut_mark).ok_or_else(|| "Не удалось получить изменения".to_string())
+}
+
+/// Урезанный diff обрываем по границе строки и дописываем пометку.
+fn cut_mark((mut s, cut): (String, bool)) -> String {
+  if cut {
+    s.truncate(s.rfind('\n').map_or(0, |i| i + 1));
+    s.push_str(DIFF_CUT_MARK);
+    s.push('\n');
+  }
+  s
 }
 
 #[tauri::command(async)]
@@ -774,5 +796,72 @@ mod tests {
     assert!(git_diff_at(&root, "a", Some("--all")).is_err());
     assert!(git_diff_at(&root, "a", Some("nothex1")).is_err());
     assert!(git_diff_at(&root, "", None).is_err());
+  }
+
+  #[test]
+  fn show_never_runs_foreign_gpg_program() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = new_repo();
+    let p = d.path();
+    touch(p, "a", "1\n");
+    commit_all(p, "c");
+    let marker = p.join("GPG_RAN");
+    let prog = tempfile::tempdir().unwrap();
+    let script = prog.path().join("gpg.sh");
+    fs::write(&script, format!("#!/bin/sh\ntouch '{}'\nexit 1\n", marker.display())).unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    git(p, &["config", "log.showSignature", "true"]);
+    git(p, &["config", "gpg.program", script.to_str().unwrap()]);
+    // Коммит с подписью в заголовке: git пытается её проверить внешней программой.
+    let out = |args: &[&str]| {
+      let o = std::process::Command::new("git").arg("-C").arg(p).args(args).env("GIT_CONFIG_GLOBAL", "/dev/null").output().unwrap();
+      String::from_utf8(o.stdout).unwrap().trim().to_string()
+    };
+    let tree = out(&["write-tree"]);
+    let parent = out(&["rev-parse", "HEAD"]);
+    let body = format!("tree {tree}\nparent {parent}\nauthor t <t@t> 1700000000 +0000\ncommitter t <t@t> 1700000000 +0000\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n abc\n -----END PGP SIGNATURE-----\n\nsigned\n");
+    let bf = prog.path().join("commit.txt");
+    fs::write(&bf, body).unwrap();
+    let h = out(&["hash-object", "-w", "-t", "commit", "--literally", bf.to_str().unwrap()]);
+    git(p, &["update-ref", "refs/heads/main", &h]);
+    git_commit_files_at(p, &h).unwrap();
+    git_diff_at(p, "a", Some(&h)).unwrap();
+    assert!(!marker.exists(), "git show запустил gpg.program из конфига репозитория");
+  }
+
+  #[test]
+  fn huge_diff_is_cut_with_marker() {
+    let d = new_repo();
+    let p = d.path();
+    touch(p, "big", "a\n");
+    commit_all(p, "c");
+    touch(p, "big", &"xxxxxxxxx\n".repeat(800_000));
+    let t = Instant::now();
+    let s = git_diff_at(p, "big", None).unwrap();
+    assert!(t.elapsed() < Duration::from_secs(5));
+    assert!(s.len() <= 4 * 1024 * 1024 + 100 && s.len() > 3 * 1024 * 1024, "{}", s.len());
+    assert!(s.ends_with("\\ Изменения урезаны: больше 4 МБ\n"));
+  }
+
+  #[test]
+  fn non_utf8_diff_is_not_empty() {
+    let d = new_repo();
+    let p = d.path();
+    fs::write(p.join("l.txt"), b"caf\xe9\n").unwrap();
+    commit_all(p, "c");
+    fs::write(p.join("l.txt"), b"caf\xe9\nna\xefve\n").unwrap();
+    let s = git_diff_at(p, "l.txt", None).unwrap();
+    assert!(s.contains("+na"), "{s:?}");
+  }
+
+  #[test]
+  fn diff_keeps_trailing_context_line() {
+    let d = new_repo();
+    let p = d.path();
+    touch(p, "t", "a\nb\n\n");
+    commit_all(p, "c");
+    touch(p, "t", "A\nb\n\n");
+    let s = git_diff_at(p, "t", None).unwrap();
+    assert!(s.ends_with("\n \n"), "{s:?}");
   }
 }
