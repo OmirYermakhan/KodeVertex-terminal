@@ -111,6 +111,13 @@ export const AssistantCard = memo(function AssistantCard({
       {!streaming && id && <HoverActions id={id} onAttach={onAttach} onCopy={onCopy} onRead={onRead} />}
       <div className="who">
         <span>{agentSignature(agent)}</span>
+        {/* Ход закончен — время и цена справа в заголовке (вместо отдельной карточки «✓ Готово»). */}
+        {turn && !streaming && (
+          <span className="turn-meta" data-testid="turn-meta">
+            {formatDuration(turn.durationMs)}
+            {turn.costUsd !== undefined && ` · ${formatCost(turn.costUsd)}`}
+          </span>
+        )}
         {long && (
           <button type="button" className="read-btn" onMouseDown={(e) => e.preventDefault()} onClick={() => onRead!(id!)}>
             Читать
@@ -124,12 +131,6 @@ export const AssistantCard = memo(function AssistantCard({
         <button type="button" className="blk-more ans-more" aria-expanded={!collapsed} onMouseDown={(e) => e.preventDefault()} onClick={() => (collapsed ? setExpanded(true) : collapse())}>
           {collapsed ? SHOW_ALL : COLLAPSE}
         </button>
-      )}
-      {turn && !streaming && (
-        <div className="turn-meta" data-testid="turn-meta">
-          {formatDuration(turn.durationMs)}
-          {turn.costUsd !== undefined && ` · ${formatCost(turn.costUsd)}`}
-        </div>
       )}
     </div>
   )
