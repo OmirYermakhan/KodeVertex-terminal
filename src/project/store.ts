@@ -6,7 +6,7 @@ export type ViewerTab = { kind: 'file'; rel: string } | { kind: 'diff'; rel: str
 
 export const WIDTH_MIN = 200
 export const WIDTH_MAX = 600
-const WIDTH_DEFAULT = 320
+const WIDTH_DEFAULT = 290
 const WIDTH_KEY = 'kv.projectWidth'
 export const REFRESH_THROTTLE_MS = 500
 

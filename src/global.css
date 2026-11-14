@@ -143,10 +143,11 @@ body {
   background: var(--warn);
 }
 
-/* Полоса вкладок (макет 04-main-window, .bar/.tabs/.tab).
-   padding-left 90px: кнопки окна ставит src-tauri/src/traffic_lights.rs
-   (14 + 23·2 + 14 = 74 — правый край «развернуть») + 16px, как в макете. */
-.bar { display: flex; align-items: center; gap: 4px; height: 38px; flex: none; box-sizing: border-box; padding: 0 14px 0 90px; background: var(--panel); border-bottom: 1px solid var(--rule); line-height: normal; }
+/* Полоса вкладок (макет 04-main-window, .bar/.tabs/.tab; кнопка проекта — макет 07 .proj).
+   padding-left 94px: кнопки окна ставит src-tauri/src/traffic_lights.rs
+   (14 + 23·2 + 14 = 74 — правый край «развернуть») + 20px — как от третьей точки до .proj в макете 07
+   (gap 8 + margin-left 12). */
+.bar { display: flex; align-items: center; gap: 4px; height: 38px; flex: none; box-sizing: border-box; padding: 0 14px 0 94px; background: var(--panel); border-bottom: 1px solid var(--rule); line-height: normal; }
 .tab { position: relative; display: flex; align-items: center; gap: 7px; padding: 5px 11px; border-radius: 6px; font-family: var(--font-code); font-size: 12px; color: var(--muted); white-space: nowrap; user-select: none; cursor: default; }
 .tab.on { color: var(--strong); background: var(--bg); }
 .tdot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--acc); }
@@ -161,6 +162,50 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .tab.on .tab-close { background: var(--bg); }
 .tab:hover .tab-close { visibility: visible; }
 .tab-close:hover { color: var(--strong); }
+
+/* Кнопка проекта слева вверху (макет 07 .proj): значок с двумя буквами, имя, ветка, «▾».
+   margin-right 14 + gap 4 = 18 — как gap 8 + margin-left 10 у .tabs макета. */
+.proj { display: flex; align-items: center; gap: 7px; flex: none; height: 26px; margin: 0 14px 0 0; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; font-family: var(--font-text); font-size: 12.5px; font-weight: 500; line-height: normal; color: var(--strong); white-space: nowrap; user-select: none; cursor: default; }
+.proj.on, .proj:hover { background: var(--hover); }
+.proj .pi { width: 16px; height: 16px; border-radius: 4px; background: #3e8f5a; color: #fff; font-size: 9.5px; font-weight: 600; display: grid; place-items: center; font-family: var(--font-text); }
+.proj .br { color: var(--muted); font-weight: 400; display: flex; align-items: center; gap: 5px; }
+.proj .chev { color: var(--muted); font-size: 10px; }
+
+/* Окно под полосой вкладок: полоса инструментов, окно инструмента, панели терминала, просмотр (макет 07 .body/.main). */
+.win-body { flex: 1; display: flex; min-height: 0; }
+.win-main { flex: 1; display: flex; min-width: 0; }
+.win-main > .panes { min-width: 0; }
+
+/* Полоса инструментов слева (макет 07 .stripe/.sb). Значки — #a8adb5 макета; в светлой теме — тёмнее. */
+.stripe { width: 40px; flex: none; box-sizing: border-box; background: var(--panel); border-right: 1px solid var(--rule); display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 8px; }
+.sb { width: 30px; height: 30px; flex: none; padding: 0; border: 0; border-radius: 6px; background: transparent; display: grid; place-items: center; color: light-dark(#5f646b, #a8adb5); cursor: default; }
+.sb:hover { background: var(--hover); }
+.sb.on { background: var(--acc); color: #fff; }
+.sb svg { width: 16px; height: 16px; }
+
+/* Окно инструмента (макет 07 .tw/.twh); ширина — из стора, правый край тянется (.tw-resize). */
+.tw { position: relative; flex: none; box-sizing: border-box; background: var(--panel2); border-right: 1px solid var(--rule); display: flex; flex-direction: column; min-height: 0; font-family: var(--font-text); line-height: normal; color: var(--text); outline: none; }
+.twh { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px 0 12px; font-size: 12.5px; font-weight: 600; color: var(--strong); flex: none; user-select: none; }
+.twh .sub { font-weight: 400; color: var(--muted); font-size: 12px; }
+.twh .acts { margin-left: auto; display: flex; gap: 2px; color: var(--muted); }
+.twh .acts span, .twh .acts button { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 4px; font-size: 12px; }
+.twh .acts button { padding: 0; border: 0; background: transparent; color: inherit; font-family: inherit; cursor: default; }
+.twh .acts button:hover { background: var(--hover); color: var(--strong); }
+.tw .tree { flex: 1; min-height: 0; overflow: auto; padding: 2px 0; font-size: 13px; }
+.tw .log { flex: 1; min-height: 0; overflow: auto; }
+.tw-resize { position: absolute; top: 0; bottom: 0; right: -3px; width: 6px; z-index: 3; cursor: col-resize; }
+body.tw-resizing, body.tw-resizing * { cursor: col-resize !important; user-select: none !important; }
+
+/* Просмотр справа, только чтение (макет 07 .ed/.etabs/.et). Изменения (.full) — во всю ширину вместо панелей. */
+.ed { flex: 1.15; min-width: 0; border-left: 1px solid var(--rule); display: flex; flex-direction: column; background: var(--bg); font-family: var(--font-text); line-height: normal; color: var(--text); outline: none; }
+.ed.full { flex: 1; }
+.etabs { display: flex; height: 34px; box-sizing: border-box; background: var(--panel2); border-bottom: 1px solid var(--rule); flex: none; font-size: 12.5px; overflow: hidden; }
+.et { display: flex; align-items: center; gap: 6px; padding: 0 10px 0 12px; color: var(--text); border-right: 1px solid var(--rule); position: relative; white-space: nowrap; user-select: none; cursor: default; }
+.et.on { background: var(--bg); color: var(--strong); }
+.et.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--acc); }
+.et .x { color: var(--muted); font-size: 11px; margin-left: 4px; padding: 0; border: 0; background: transparent; font-family: inherit; cursor: default; }
+.et .x:hover { color: var(--strong); }
+.ed-body { flex: 1; min-height: 0; overflow: auto; }
 
 /* Окно настроек */
 .st-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 100; }

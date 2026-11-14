@@ -15,6 +15,14 @@ describe('paletteCommands', () => {
     expect(cmds.find((c) => c.id === 'closePane')!.keys).toEqual(['⌘', 'W'])
   })
 
+  it('окна инструментов — с клавишами ⌥⌘1 / ⌥⌘0 / ⌥⌘9', () => {
+    const cmds = paletteCommands(ctx())
+    const k = (id: string) => cmds.find((c) => c.id === id)
+    expect(k('toolProject')).toMatchObject({ title: 'Окно «Проект»', keys: ['⌥', '⌘', '1'] })
+    expect(k('toolChanges')).toMatchObject({ title: 'Окно «Изменения»', keys: ['⌥', '⌘', '0'] })
+    expect(k('toolGit')).toMatchObject({ title: 'Окно «Git»', keys: ['⌥', '⌘', '9'] })
+  })
+
   it('без фокусной панели — без строк режима Claude', () => {
     expect(paletteCommands(ctx({ claude: null })).some((c) => c.id === 'claudeToggle' || c.id === 'chooseModel')).toBe(false)
   })

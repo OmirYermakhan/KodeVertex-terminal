@@ -6,7 +6,7 @@ const ids = ['kv', 'warm', 'cold', 'light', 'as'] as ThemeId[]
 describe('themes', () => {
   it('every theme has all tokens as hex colors', () => {
     const keys = Object.keys(THEMES.as.tokens)
-    expect(keys).toHaveLength(52)
+    expect(keys).toHaveLength(57)
     for (const id of ids) {
       expect(Object.keys(THEMES[id].tokens).sort()).toEqual([...keys].sort())
       for (const v of Object.values(THEMES[id].tokens)) expect(v).toMatch(/^#[0-9a-f]{6}$/i)
@@ -14,6 +14,10 @@ describe('themes', () => {
   })
   it('as theme matches Android Studio', () => {
     expect(THEMES.as.tokens).toMatchObject({ bg: '#1e1f22', panel: '#2b2d30', text: '#bcbec4', acc: '#3574f0' })
+  })
+  it('цвета git как в макете 07 (тема AS); удалённый — приглушённый', () => {
+    expect(THEMES.as.tokens).toMatchObject({ vcsMod: '#6c9fef', vcsAdd: '#73bd79', vcsNew: '#d1675a', vcsDel: '#6f737a', hover: '#2f3136' })
+    for (const id of ids) expect(THEMES[id].tokens.vcsDel).toBe(THEMES[id].tokens.muted)
   })
   it('only light is not dark', () => {
     expect(THEMES.light.dark).toBe(false)

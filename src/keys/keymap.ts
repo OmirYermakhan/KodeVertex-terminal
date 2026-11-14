@@ -6,6 +6,7 @@ export type Action =
   | 'fontBigger' | 'fontSmaller' | 'fontReset' | 'openSettings'
   | 'blockPrev' | 'blockNext' | 'blockCopy' | 'blockAttach' | 'blockRead' | 'blockAsk'
   | 'toggleAgents' | 'find' | 'palette'
+  | 'toolProject' | 'toolChanges' | 'toolGit'
 
 export interface Binding {
   action: Action
@@ -57,6 +58,10 @@ export const KEYMAP: Binding[] = [
   cmd('find', 'KeyF'),
   // ⌘P: палитра команд.
   cmd('palette', 'KeyP'),
+  // ⌥⌘1 / ⌥⌘0 / ⌥⌘9: окна «Проект», «Изменения», «Git» (цифры как в Android Studio; ⌘1–⌘9 — вкладки).
+  cmd('toolProject', 'Digit1', { alt: true }),
+  cmd('toolChanges', 'Digit0', { alt: true }),
+  cmd('toolGit', 'Digit9', { alt: true }),
 ]
 
 export function matchKey(

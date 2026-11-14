@@ -60,6 +60,13 @@ export interface ThemeTokens {
   goldRule: string
   /** Подпись «Вы» в пузыре (макет 03: --muted, в Android Studio — #9fb6e8). */
   youWho: string
+  /** Git-статус файлов в панели проекта (макет 07): изменён, добавлен, не отслеживается, удалён (= muted). */
+  vcsMod: string
+  vcsAdd: string
+  vcsNew: string
+  vcsDel: string
+  /** Фон под наведением / открытой кнопкой в полосе окна (макет 07 --hover). */
+  hover: string
 }
 
 export interface Theme {
@@ -127,6 +134,11 @@ export const THEMES: Record<ThemeId, Theme> = {
       gold: '#e8c46a',
       goldRule: '#5a4a22',
       youWho: '#8a9199',
+      vcsMod: '#6c9fef',
+      vcsAdd: '#73bd79',
+      vcsNew: '#d1675a',
+      vcsDel: '#8a9199',
+      hover: '#1d2126',
     },
   },
   warm: {
@@ -186,6 +198,11 @@ export const THEMES: Record<ThemeId, Theme> = {
       gold: '#e8c46a',
       goldRule: '#5a4a22',
       youWho: '#9c958a',
+      vcsMod: '#6c9fef',
+      vcsAdd: '#73bd79',
+      vcsNew: '#d1675a',
+      vcsDel: '#948d82',
+      hover: '#2c2a27',
     },
   },
   cold: {
@@ -245,6 +262,11 @@ export const THEMES: Record<ThemeId, Theme> = {
       gold: '#e8c46a',
       goldRule: '#5a4a22',
       youWho: '#8c99aa',
+      vcsMod: '#6c9fef',
+      vcsAdd: '#73bd79',
+      vcsNew: '#d1675a',
+      vcsDel: '#8592a3',
+      hover: '#242b35',
     },
   },
   light: {
@@ -304,6 +326,11 @@ export const THEMES: Record<ThemeId, Theme> = {
       gold: '#7f5f0a',
       goldRule: '#d6c38c',
       youWho: '#5a6068',
+      vcsMod: '#2f62c9',
+      vcsAdd: '#3b8a43',
+      vcsNew: '#b8483a',
+      vcsDel: '#6d737b',
+      hover: '#e2e1d9',
     },
   },
   as: {
@@ -363,6 +390,11 @@ export const THEMES: Record<ThemeId, Theme> = {
       gold: '#e8c46a',
       goldRule: '#5a4a22',
       youWho: '#9fb6e8',
+      vcsMod: '#6c9fef',
+      vcsAdd: '#73bd79',
+      vcsNew: '#d1675a',
+      vcsDel: '#6f737a',
+      hover: '#2f3136',
     },
   },
 }

@@ -3,6 +3,7 @@ import { useTabs, type Tab } from '../layout/tabsStore'
 import { projectName, useHome, type GitInfo } from '../status/useGitInfo'
 import { claudeOpen, useClaudeSessions } from '../claude/sessionStore'
 import { tabStatus } from './tabStatus'
+import ProjectButton from '../project/ProjectButton'
 
 export function tabTitle(t: Tab, git: GitInfo | null = null, home = ''): string {
   const cwd = t.cwd[t.focused]
@@ -11,9 +12,10 @@ export function tabTitle(t: Tab, git: GitInfo | null = null, home = ''): string 
 
 /**
  * Полоса вкладок (макет 04-main-window `.bar/.tabs/.tab`). Кнопки окна macOS — родные
- * (titleBarStyle: Overlay, trafficLightPosition на месте трёх точек макета), поэтому вкладки
- * начинаются там же, где в макете: 14 + 3·11 + 2·8 (точки) + 8 (gap) + 16 (margin) = 87px.
- * Перетаскивание окна работает только по самой полосе и пустому месту: у вкладок атрибута нет.
+ * (titleBarStyle: Overlay, trafficLightPosition на месте трёх точек макета). Сразу за ними —
+ * кнопка проекта (макет 07 `.proj`): 20px от правого края «развернуть», как от третьей точки в макете;
+ * вкладки — в 18px за ней (gap 8 + margin 10 макета).
+ * Перетаскивание окна работает только по самой полосе и пустому месту: у вкладок и кнопки атрибута нет.
  * activeGit — git-данные активной вкладки (считаются один раз в App); у остальных вкладок — имя папки.
  *
  * Точка вкладки: работает — синяя пульсирующая, ждёт — жёлтая, ошибка — красная, готово — зелёная,
@@ -37,6 +39,7 @@ export default function TabBar({ activeGit = null }: { activeGit?: GitInfo | nul
 
   return (
     <div data-testid="tabbar" data-tauri-drag-region className="bar">
+      <ProjectButton cwd={activeTab?.cwd[activeTab.focused]} git={activeGit} />
       {tabs.map((t) => {
         const on = t.id === active
         const st = tabStatus(t, sessions)

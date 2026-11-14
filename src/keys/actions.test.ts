@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { initialTabsState, useTabs } from '../layout/tabsStore'
 import { useSettings } from '../settings/store'
 import { useUi } from '../ui/uiStore'
+import { useProject } from '../project/store'
+import { leaves } from '../layout/paneTree'
 import { runAction } from './actions'
 
 beforeEach(() => {
@@ -54,5 +56,42 @@ describe('block actions', () => {
     off()
     runAction('blockPrev')
     expect(got).toEqual(['blockPrev', 'blockNext', 'blockCopy', 'blockAsk'])
+  })
+})
+
+describe('окна инструментов и ⌘W в просмотре', () => {
+  beforeEach(() => {
+    useProject.setState({ tool: null, tabs: [], active: 0 })
+    document.body.innerHTML = ''
+  })
+  it('toolProject / toolChanges / toolGit переключают, повтор — скрывает', () => {
+    runAction('toolProject')
+    expect(useProject.getState().tool).toBe('project')
+    runAction('toolChanges')
+    expect(useProject.getState().tool).toBe('changes')
+    runAction('toolGit')
+    expect(useProject.getState().tool).toBe('git')
+    runAction('toolGit')
+    expect(useProject.getState().tool).toBeNull()
+  })
+  it('⌘W при фокусе в просмотре закрывает вкладку файла, а не панель', () => {
+    useTabs.getState().split('row')
+    const count = () => leaves(useTabs.getState().tabs[0].tree).length
+    expect(count()).toBe(2)
+    useProject.setState({ tabs: [{ kind: 'file', rel: 'a.kt' }, { kind: 'file', rel: 'b.kt' }], active: 1 })
+    const ed = document.createElement('div')
+    ed.setAttribute('data-viewer', '')
+    ed.tabIndex = -1
+    const inner = document.createElement('button')
+    ed.appendChild(inner)
+    document.body.appendChild(ed)
+    inner.focus()
+    runAction('closePane')
+    expect(useProject.getState().tabs).toEqual([{ kind: 'file', rel: 'a.kt' }])
+    expect(count()).toBe(2)
+    inner.blur()
+    runAction('closePane')
+    expect(count()).toBe(1)
+    expect(useProject.getState().tabs).toHaveLength(1)
   })
 })

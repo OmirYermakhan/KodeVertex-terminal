@@ -15,6 +15,10 @@ import Toasts from './notify/Toasts'
 import { installNotifications } from './notify/notify'
 import { claudeOpen, useClaudeSessions } from './claude/sessionStore'
 import { installDragDrop, useAttachCount } from './attach/dragDrop'
+import Stripe from './project/Stripe'
+import ToolWindow from './project/ToolWindow'
+import Viewer from './project/Viewer'
+import { useProject } from './project/store'
 
 const REPEATABLE = new Set<Action>(['fontBigger', 'fontSmaller'])
 
@@ -38,6 +42,8 @@ export default function App() {
   })
   const settingsOpen = useUi((s) => s.settingsOpen)
   const paletteOpen = useUi((s) => s.paletteOpen)
+  // Вкладка изменений занимает всю область справа: панели терминала скрыты, но живут (как неактивная вкладка).
+  const diffOpen = useProject((s) => s.tabs[s.active]?.kind === 'diff')
   const attachments = useAttachCount((s) => (focusedPane ? (s.counts[focusedPane] ?? 0) : 0))
 
   useEffect(() => {
@@ -80,17 +86,24 @@ export default function App() {
   return (
     <div className="app">
       <TabBar activeGit={git} />
-      <div data-testid="panes" className="panes">
-        {/* Все вкладки остаются смонтированными: неактивные скрыты, сессии живут. */}
-        {loaded && tabs.map((t) => <PaneView key={t.id} tab={t} visible={t.id === active} />)}
-        {loaded && tabs.length === 0 && (
-          <div className="stalled" role="alert">
-            <p>Оболочка завершается сразу после запуска. Проверьте ~/.zprofile / ~/.zshrc.</p>
-            <button type="button" onClick={() => useTabs.getState().newTab()}>
-              Открыть снова
-            </button>
+      <div className="win-body">
+        <Stripe />
+        <ToolWindow git={git} />
+        <div className="win-main">
+          <div data-testid="panes" className="panes" style={diffOpen ? { display: 'none' } : undefined}>
+            {/* Все вкладки остаются смонтированными: неактивные скрыты, сессии живут. */}
+            {loaded && tabs.map((t) => <PaneView key={t.id} tab={t} visible={t.id === active} />)}
+            {loaded && tabs.length === 0 && (
+              <div className="stalled" role="alert">
+                <p>Оболочка завершается сразу после запуска. Проверьте ~/.zprofile / ~/.zshrc.</p>
+                <button type="button" onClick={() => useTabs.getState().newTab()}>
+                  Открыть снова
+                </button>
+              </div>
+            )}
           </div>
-        )}
+          <Viewer />
+        </div>
       </div>
       <div data-testid="statusbar" className="statusbar">
         <StatusBar cwd={cwd} git={git} claude={claude} attachments={attachments} permissionMode={permissionMode} />

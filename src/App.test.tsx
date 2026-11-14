@@ -6,6 +6,7 @@ import { initialTabsState, useTabs } from './layout/tabsStore'
 import { DEFAULTS } from './settings/settings'
 import { useSettings } from './settings/store'
 import { useUi } from './ui/uiStore'
+import { useProject } from './project/store'
 
 // xterm needs a real canvas/layout; the pane itself is checked manually in the app.
 vi.mock('./terminal/TerminalPane', () => ({ TerminalPane: () => null }))
@@ -62,6 +63,33 @@ describe('App', () => {
     expect(useUi.getState().settingsOpen).toBe(true)
     fireEvent.keyDown(window, { key: 'Escape', code: 'Escape' })
     expect(useUi.getState().settingsOpen).toBe(false)
+  })
+
+  it('полоса слева видна всегда; ⌥⌘1 открывает «Проект», повтор — скрывает', () => {
+    useProject.setState({ tool: null, tabs: [], active: 0 })
+    render(<App />)
+    expect(document.querySelector('.stripe')).toBeInTheDocument()
+    expect(screen.queryByTestId('toolwindow')).toBeNull()
+    press('Digit1', { altKey: true })
+    expect(screen.getByTestId('toolwindow')).toBeInTheDocument()
+    expect(paneCount()).toBe(1)
+    press('Digit1', { altKey: true })
+    expect(screen.queryByTestId('toolwindow')).toBeNull()
+  })
+
+  it('просмотр справа от панелей; при вкладке изменений панели скрыты, но смонтированы', () => {
+    useProject.setState({ tool: null, tabs: [], active: 0 })
+    render(<App />)
+    expect(screen.queryByTestId('viewer')).toBeNull()
+    act(() => useProject.setState({ tabs: [{ kind: 'file', rel: 'a.kt' }], active: 0 }))
+    const panes = screen.getByTestId('panes')
+    expect(screen.getByTestId('viewer')).toBeInTheDocument()
+    expect(panes.style.display).not.toBe('none')
+    act(() => useProject.setState({ tabs: [{ kind: 'file', rel: 'a.kt' }, { kind: 'diff', rel: 'a.kt', rev: null }], active: 1 }))
+    expect(screen.getByTestId('panes')).toBe(panes)
+    expect(panes.style.display).toBe('none')
+    act(() => useProject.setState({ active: 0 }))
+    expect(panes.style.display).not.toBe('none')
   })
 
   it('shows the stalled-shell message and reopens a tab', () => {
