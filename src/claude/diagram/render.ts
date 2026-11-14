@@ -1,0 +1,153 @@
+// Отрисовка блоков ```mermaid в картинку.
+// Безопасность: securityLevel 'strict', htmlLabels false, а готовый SVG показывается только как
+// <img src="blob:…"> — в такой картинке скрипты и ссылки не работают вообще, в DOM SVG не попадает.
+// mermaid грузится лениво (import()) — отдельный чанк, только при первой схеме.
+import type { MermaidConfig } from 'mermaid'
+import { THEMES, type ThemeId } from '../../theme/themes'
+
+export type DiagramResult = { ok: true; url: string } | { ok: false; error: string }
+
+type Mermaid = (typeof import('mermaid'))['default']
+
+const CACHE_LIMIT = 100
+/** Шрифт системный: внешние шрифты внутри <img> не загружаются. */
+const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif'
+
+/** Кэш LRU: Map хранит порядок вставки, при попадании запись переносится в конец. */
+const cache = new Map<string, DiagramResult>()
+
+function touch(key: string): DiagramResult | undefined {
+  const hit = cache.get(key)
+  if (hit) {
+    cache.delete(key)
+    cache.set(key, hit)
+  }
+  return hit
+}
+let lib: Promise<Mermaid> | undefined
+let initedTheme: ThemeId | undefined
+/** mermaid не реентерабелен — все вызовы идут по очереди. */
+let queue: Promise<unknown> = Promise.resolve()
+let seq = 0
+
+function config(themeId: ThemeId): MermaidConfig {
+  const theme = THEMES[themeId]
+  const t = theme.tokens
+  return {
+    startOnLoad: false,
+    securityLevel: 'strict',
+    htmlLabels: false,
+    // Без SVG-«бомбы» с ошибкой: mermaid бросает исключение и сам убирает временные узлы.
+    suppressErrorRendering: true,
+    theme: 'base',
+    fontFamily: FONT,
+    themeVariables: {
+      darkMode: theme.dark,
+      background: t.bg,
+      primaryColor: t.panel2,
+      primaryTextColor: t.text,
+      primaryBorderColor: t.rule,
+      lineColor: t.muted,
+      secondaryColor: t.panel,
+      tertiaryColor: t.bg,
+      fontFamily: FONT,
+    },
+  }
+}
+
+/** У корня SVG от mermaid width="100%": в <img> схема растягивалась бы на всю ширину.
+ *  Ставим настоящий размер из viewBox — шире карточки её ужмёт CSS (max-width: 100%). */
+function fixSize(svg: string): string {
+  return svg.replace(/<svg\b[^>]*>/, (tag) => {
+    const vb = /viewBox="[-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)[\s,]+([\d.]+)"/.exec(tag)
+    if (!vb) return tag
+    const sized = tag.replace(/\s(width|height)="[^"]*"/g, '')
+    return sized.replace(/^<svg\b/, `<svg width="${vb[1]}" height="${vb[2]}"`)
+  })
+}
+
+/** Сколько схем на экране показывают картинку (по blob URL). */
+const users = new Map<string, number>()
+/** Вытесненные из кэша, но ещё показываемые: отзываются, когда их перестанут показывать. */
+const evicted = new Set<string>()
+
+/** Схема показывает картинку — пока она на экране, URL не отзывается. */
+export function retainDiagram(url: string): void {
+  users.set(url, (users.get(url) ?? 0) + 1)
+}
+
+export function releaseDiagram(url: string): void {
+  const n = (users.get(url) ?? 0) - 1
+  if (n > 0) {
+    users.set(url, n)
+    return
+  }
+  users.delete(url)
+  if (evicted.delete(url)) URL.revokeObjectURL(url)
+}
+
+function remember(key: string, res: DiagramResult): void {
+  cache.set(key, res)
+  while (cache.size > CACHE_LIMIT) {
+    const [oldKey, old] = cache.entries().next().value as [string, DiagramResult]
+    cache.delete(oldKey)
+    if (!old.ok) continue
+    if (users.has(old.url)) evicted.add(old.url)
+    else URL.revokeObjectURL(old.url)
+  }
+}
+
+async function draw(src: string, themeId: ThemeId): Promise<DiagramResult> {
+  lib ??= import('mermaid').then((m) => m.default)
+  const mermaid = await lib
+  if (initedTheme !== themeId) {
+    mermaid.initialize(config(themeId))
+    initedTheme = themeId
+  }
+  const id = `kv-dg-${++seq}`
+  try {
+    const { svg } = await mermaid.render(id, src)
+    return { ok: true, url: URL.createObjectURL(new Blob([fixSize(svg)], { type: 'image/svg+xml' })) }
+  } catch (e) {
+    // Страховка: mermaid может оставить временный элемент для замеров.
+    document.getElementById(`d${id}`)?.remove()
+    document.getElementById(id)?.remove()
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** Готовый результат из кэша — чтобы повторная отрисовка ленты не мигала «Схема рисуется…». */
+export function cachedDiagram(src: string, themeId: ThemeId): DiagramResult | undefined {
+  return touch(`${themeId}\n${src}`)
+}
+
+export function renderDiagram(src: string, themeId: ThemeId): Promise<DiagramResult> {
+  const key = `${themeId}\n${src}`
+  const hit = touch(key)
+  if (hit) return Promise.resolve(hit)
+  const job = queue.then(async () => {
+    // Пока ждали очереди, ту же схему мог нарисовать другой вызов.
+    const again = touch(key)
+    if (again) return again
+    try {
+      const res = await draw(src, themeId)
+      remember(key, res)
+      return res
+    } catch (e) {
+      // Не загрузилась сама библиотека — не кэшируем, в следующий раз попробуем снова.
+      lib = undefined
+      return { ok: false, error: String(e) } satisfies DiagramResult
+    }
+  })
+  queue = job
+  return job
+}
+
+/** Для тестов: сбросить кэш и тему. */
+export function resetDiagramCache(): void {
+  for (const r of cache.values()) if (r.ok) URL.revokeObjectURL(r.url)
+  cache.clear()
+  users.clear()
+  evicted.clear()
+  initedTheme = undefined
+}

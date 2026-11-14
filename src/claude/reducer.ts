@@ -597,21 +597,28 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
   const result = strOr(ev.result)
   const durationMs = num(ev.duration_ms)
   const price = turnCost === undefined ? {} : { costUsd: turnCost }
-  items.push({ type: 'summary', text: repeatsAnswer(items, result) ? '' : result, durationMs, ...price, isError })
   // Время и цена хода — в подвале последнего ответа главного агента этого хода.
   // Граница хода — итог предыдущего или сообщение «Вы», с которого ход начался (pending-е с конца:
   // более поздние — следующие ходы в очереди claude). Так подвал не попадает на ответ из истории
   // `/resume` (в ней нет итогов) или прерванного хода без result.
   let users = 0
-  for (let i = items.length - 2; i >= 0; i--) {
+  let shown = false
+  for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i]
     if (it.type === 'summary') break
     if (it.type === 'user' && ++users >= Math.max(1, s.pending)) break
+    // Ответ со временем хода — из уже законченного хода (очередь: U1, U2, A1), не этого.
+    if (it.type === 'assistant' && it.turn) break
     if (it.type === 'assistant' && it.agentId === MAIN) {
       items[i] = { ...it, turn: { durationMs, ...price } }
+      shown = true
       break
     }
   }
+  // Отдельная карточка итога — только когда она что-то добавляет: ошибка, итог, отличный от ответа,
+  // или ход без ответа (время и цену негде показать). «✓ Готово» после ответа не нужен.
+  const text = repeatsAnswer(items, result) ? '' : result
+  if (isError || text || !shown) items.push({ type: 'summary', text, durationMs, ...price, isError })
   // Ход закончен: его незавершённые действия и субагенты больше не идут.
   const closed: FeedClaudeItem[] = items.map((it) =>
     it.type === 'action' && it.status === 'running' ? { ...it, status: isError ? 'error' : 'done' } : it,

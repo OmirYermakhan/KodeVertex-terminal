@@ -57,6 +57,15 @@ describe('SettingsPanel', () => {
     expect(update).toHaveBeenCalledWith({ claudePromptSuggestions: false })
   })
 
+  it('Claude: «Схемы картинкой» — по умолчанию вкл., переключается', () => {
+    render(<SettingsPanel open onClose={() => {}} />)
+    const box = screen.getByLabelText('Схемы картинкой') as HTMLInputElement
+    expect(box.checked).toBe(true)
+    expect(screen.getByText(/Подсказка — со следующего запуска сессии/)).toBeTruthy()
+    fireEvent.click(box)
+    expect(update).toHaveBeenCalledWith({ claudeDiagrams: false })
+  })
+
   it('shows all themes and selects one', () => {
     render(<SettingsPanel open onClose={() => {}} />)
     for (const t of Object.values(THEMES)) expect(screen.getByRole('button', { name: new RegExp(t.name) })).toBeTruthy()

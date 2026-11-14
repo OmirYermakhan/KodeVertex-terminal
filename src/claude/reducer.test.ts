@@ -43,8 +43,9 @@ describe('фикстура bash-ls', () => {
     const texts = s.items.filter((i) => i.type === 'assistant')
     expect(texts).toHaveLength(1)
     expect(texts[0]).toMatchObject({ text: 'В текущей папке три файла: `a.txt`, `err.txt` и `sample.jsonl`.', streaming: false })
-    const summary = s.items.at(-1)
-    expect(summary).toMatchObject({ type: 'summary', costUsd: 0.004824, isError: false })
+    // Итог повторяет ответ — отдельной карточки «✓ Готово» нет, время и цена — на ответе.
+    expect(s.items.some((i) => i.type === 'summary')).toBe(false)
+    expect(s.items.at(-1)).toMatchObject({ type: 'assistant', turn: { costUsd: 0.004824 } })
     expect(s.agents.find((a) => a.id === 'main')).toMatchObject({ status: 'done', model: 'claude-haiku-5-5', name: 'Главный' })
     // контекст = input + cache_creation + cache_read последнего ответа (2 + 187 + 32668)
     expect(s.contextUsed).toBe(2 + 187 + 32668)
@@ -296,18 +297,35 @@ describe('вопросы агента (can_use_tool AskUserQuestion)', () => {
 
 describe('итог не повторяет ответ', () => {
   const answer = 'Есть два пути:\n\n1. **Путь кода**\n2. **Путь запроса**'
-  it('result совпадает с ответом этого хода — итог без текста', () => {
+  it('result совпадает с ответом этого хода — карточки итога нет, время и цена на ответе', () => {
     const s = run(userSent(initialClaude(), 'объясни', 0), [
       assistant([{ type: 'text', text: answer }]),
       { type: 'result', result: answer + '\n', total_cost_usd: 0.29, duration_ms: 52_600 },
     ])
     expect(s.items.filter((i) => i.type === 'assistant')).toHaveLength(1)
-    expect(s.items.at(-1)).toMatchObject({ type: 'summary', text: '', costUsd: 0.29 })
+    expect(s.items.at(-1)).toMatchObject({ type: 'assistant', turn: { durationMs: 52_600, costUsd: 0.29 } })
+  })
+  it('ошибка хода — карточка итога остаётся', () => {
+    const s = run(userSent(initialClaude(), 'объясни', 0), [
+      assistant([{ type: 'text', text: answer }]),
+      { type: 'result', is_error: true, result: answer, total_cost_usd: 0.1, duration_ms: 1000 },
+    ])
+    expect(s.items.at(-1)).toMatchObject({ type: 'summary', isError: true })
   })
   it('ответ прошлого хода не считается; без ответа текст итога остаётся', () => {
     const s1 = run(userSent(initialClaude(), 'a', 0), [assistant([{ type: 'text', text: 'да' }]), { type: 'result', result: 'да' }])
     const s2 = run(userSent(s1, 'b', 0), [{ type: 'result', result: 'да' }])
     expect(s2.items.at(-1)).toMatchObject({ type: 'summary', text: 'да' })
+  })
+  it('очередь: ход 2 без ответа не переписывает время и цену ответа хода 1', () => {
+    // U2 поставлен в очередь, пока идёт ход 1: в ленте U1, U2, A1.
+    let s = userSent(userSent(initialClaude(), 'a', 0), 'b', 0)
+    s = run(s, [assistant([{ type: 'text', text: 'ответ 1' }]), { type: 'result', result: 'ответ 1', total_cost_usd: 0.1, duration_ms: 1000 }])
+    s = reduceClaude(s, { type: 'result', result: '', total_cost_usd: 0.3, duration_ms: 2000 }, 2)
+    const a1 = s.items.find((i) => i.type === 'assistant')
+    expect(a1).toMatchObject({ turn: { durationMs: 1000, costUsd: 0.1 } })
+    expect(s.items.at(-1)).toMatchObject({ type: 'summary', durationMs: 2000 })
+    expect((s.items.at(-1) as { costUsd?: number }).costUsd).toBeCloseTo(0.2)
   })
 })
 

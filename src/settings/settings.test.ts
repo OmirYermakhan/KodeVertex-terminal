@@ -5,7 +5,7 @@ import { applyTheme } from '../theme/applyTheme'
 
 describe('settings', () => {
   it('defaults', () => {
-    expect(DEFAULTS).toEqual({ theme: 'as', textFont: 'Inter', codeFont: 'JetBrains Mono', textSize: 16, codeSize: 13, lineHeight: 1.7, ligatures: true, pathCompletions: true, notifySystem: true, notifySound: true, notifySubagents: false, notifyLongCommands: true, claudePermissionMode: 'acceptEdits', claudePromptSuggestions: true })
+    expect(DEFAULTS).toEqual({ theme: 'as', textFont: 'Inter', codeFont: 'JetBrains Mono', textSize: 16, codeSize: 13, lineHeight: 1.7, ligatures: true, pathCompletions: true, notifySystem: true, notifySound: true, notifySubagents: false, notifyLongCommands: true, claudePermissionMode: 'acceptEdits', claudePromptSuggestions: true, claudeDiagrams: true })
     expect(normalizeSettings(undefined)).toEqual(DEFAULTS)
     expect(normalizeSettings('мусор')).toEqual(DEFAULTS)
   })
@@ -20,6 +20,9 @@ describe('settings', () => {
     expect(normalizeSettings({}).claudePromptSuggestions).toBe(true)
     expect(normalizeSettings({ claudePromptSuggestions: false }).claudePromptSuggestions).toBe(false)
     expect(normalizeSettings({ claudePromptSuggestions: 'no' }).claudePromptSuggestions).toBe(true)
+    expect(normalizeSettings({}).claudeDiagrams).toBe(true)
+    expect(normalizeSettings({ claudeDiagrams: false }).claudeDiagrams).toBe(false)
+    expect(normalizeSettings({ claudeDiagrams: 'no' }).claudeDiagrams).toBe(true)
   })
   it('maps legacy SF Mono to the ui-monospace keyword', () => {
     expect(normalizeSettings({ codeFont: 'SF Mono' }).codeFont).toBe('ui-monospace')

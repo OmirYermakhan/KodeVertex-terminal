@@ -4,12 +4,16 @@
 import { Fragment, memo, useEffect, useMemo, useState } from 'react'
 import { openPath } from '../../attach/preview/api'
 import { highlightLines, type Piece } from '../../attach/preview/highlight'
-import { diffParts, diffStat, firstChangedLine, type DiffRow, type FileDiff } from '../diff'
+import { Markdown } from '../Markdown'
+import { diffParts, diffStat, firstChangedLine, fullAfter, type DiffRow, type FileDiff } from '../diff'
 
 /** Строк вида до «Показать всё» (Write большого файла не растягивает ленту). */
 export const DIFF_SHOWN = 80
 /** Конец вида правки, урезанной при сохранении сессии. */
 export const TRUNCATED = '… остальные строки не сохранены'
+
+/** Файлы, которые можно показать как документ (со схемами mermaid). */
+const isMarkdown = (path: string) => /\.(md|markdown|mdx)$/i.test(path)
 
 const MARK = { a: '+', d: '−', n: ' ' } as const
 
@@ -62,9 +66,12 @@ function Line({ row, lit, w }: { row: DiffRow; lit: Piece[] | undefined; w: numb
 export const DiffView = memo(function DiffView({ diff, cwd }: { diff: FileDiff; cwd?: string | null }) {
   const parts = useMemo(() => diffParts(diff), [diff])
   const stat = useMemo(() => diffStat(diff), [diff])
+  // Документ — только когда известен весь новый текст файла (фрагмент Edit сломал бы разметку).
+  const doc = useMemo(() => (isMarkdown(diff.path) ? fullAfter(diff) : undefined), [diff])
   const [open, setOpen] = useState<ReadonlySet<number>>(() => new Set())
   const [all, setAll] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [asDoc, setAsDoc] = useState(false)
   useEffect(() => {
     if (!copied) return
     const t = setTimeout(() => setCopied(false), 1500)
@@ -134,6 +141,11 @@ export const DiffView = memo(function DiffView({ diff, cwd }: { diff: FileDiff; 
         </span>
         {path && (
           <span className="dv-btns">
+            {doc !== undefined && (
+              <button type="button" className="dv-btn" aria-pressed={asDoc} onClick={() => setAsDoc((v) => !v)}>
+                {asDoc ? 'Как изменения' : 'Как документ'}
+              </button>
+            )}
             <button type="button" className="dv-btn" onClick={edit}>
               Открыть в редакторе
             </button>
@@ -143,7 +155,13 @@ export const DiffView = memo(function DiffView({ diff, cwd }: { diff: FileDiff; 
           </span>
         )}
       </div>
-      {entries.length > 0 && (
+      {asDoc && doc !== undefined && (
+        <div className="dv-doc">
+          <Markdown text={doc} />
+          {diff.truncated && <div className="dv-doc-cut">{TRUNCATED}</div>}
+        </div>
+      )}
+      {!(asDoc && doc !== undefined) && entries.length > 0 && (
         <div className={'diff dv-body' + (w === 0 ? ' nonum' : '')}>
           {entries.map((e) =>
             e.kind === 'row' ? (

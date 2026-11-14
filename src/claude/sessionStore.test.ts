@@ -54,6 +54,22 @@ describe('enterClaude (команда `claude` в строке ввода)', () 
     }
   })
 
+  it('подсказка про схемы: флаг запуска — из настроек (по умолчанию вкл.)', async () => {
+    enterClaude('p', '/w')
+    await flush()
+    expect(calls('claude_start')[0][1]).toMatchObject({ diagramsHint: true })
+    stopClaude('p')
+    const prev = useSettings.getState().settings
+    useSettings.setState({ settings: { ...prev, claudeDiagrams: false } })
+    try {
+      enterClaude('p', '/w')
+      await flush()
+      expect(calls('claude_start')[1][1]).toMatchObject({ diagramsHint: false })
+    } finally {
+      useSettings.setState({ settings: prev })
+    }
+  })
+
   it('подсказка следующего сообщения: флаг запуска — из настроек (по умолчанию вкл.)', async () => {
     enterClaude('p', '/w')
     await flush()

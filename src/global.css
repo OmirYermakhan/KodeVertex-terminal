@@ -411,6 +411,8 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .dv-btns { display: flex; gap: 6px; margin-left: auto; flex: none; }
 .dv-btn { font: inherit; font-size: 11px; color: var(--accText); background: transparent; border: 1px solid var(--rule); border-radius: 4px; padding: 1px 7px; cursor: pointer; }
 .dv-btn:hover, .dv-btn:focus-visible { border-color: var(--acc); color: var(--strong); outline: none; }
+.dv-doc { padding: 8px 12px; overflow-wrap: anywhere; max-height: 480px; overflow-y: auto; }
+.dv-doc-cut { margin-top: 6px; color: var(--com); font-family: var(--font-code); font-size: calc(var(--size-code) - 1px); }
 .diff.dv-body { white-space: normal; padding: 6px 0; overflow-wrap: anywhere; }
 .dv-body .dl { display: flex; padding: 0 10px; color: var(--text); }
 .dv-body .dl.a { color: var(--add); background: color-mix(in srgb, var(--add) 12%, transparent); }
@@ -437,7 +439,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .q-opts.p-wait .q-row { opacity: 0.55; cursor: default; }
 .sum { box-sizing: border-box; background: var(--sumBg); border: 1px solid var(--sumRule); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; max-width: 100ch; color: var(--text); font-family: var(--font-text); }
 .sum .who { display: flex; justify-content: space-between; gap: 12px; color: var(--accText); }
-.card .turn-meta { margin-top: 6px; font-size: 11px; color: var(--muted); font-family: var(--font-code); }
+.card .turn-meta { margin-left: auto; color: var(--muted); text-transform: none; letter-spacing: 0; }
 .sum .sum-meta { color: var(--muted); text-transform: none; letter-spacing: 0; }
 .sum.err { border-color: var(--del); }
 .sum.err .who > span:first-child { color: var(--del); }
@@ -471,6 +473,16 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .md-copy { position: absolute; top: 6px; right: 6px; font-family: var(--font-text); font-size: 11px; color: var(--muted); background: var(--panel); border: 1px solid var(--rule); border-radius: 5px; padding: 1px 8px; cursor: pointer; opacity: 0; transition: opacity 0.12s; }
 .md-code:hover .md-copy, .md-copy:focus-visible { opacity: 1; }
 .md-copy:hover { color: var(--strong); border-color: var(--acc); }
+/* Схемы mermaid картинкой (рамка и кнопки — как у блока кода). */
+.dg { margin: 0 0 10px; background: var(--bg); border-radius: 6px; padding: 10px 12px 8px; }
+.dg-pic { overflow-x: auto; }
+.dg-pic img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+.dg-note { font-family: var(--font-text); font-size: 11px; color: var(--muted); margin: 6px 0 0; }
+.dg > .dg-note { margin: 0 0 6px; }
+.md .dg-src { padding: 8px 0 0; background: none; border-radius: 0; }
+.dg-bar { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+.dg-btn { font-family: var(--font-text); font-size: 11px; color: var(--muted); background: var(--panel); border: 1px solid var(--rule); border-radius: 5px; padding: 1px 8px; cursor: pointer; transition: color 0.12s, border-color 0.12s; }
+.dg-btn:hover, .dg-btn[aria-pressed="true"] { color: var(--strong); border-color: var(--acc); }
 .hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-type, .hljs-meta .hljs-keyword { color: var(--kw); }
 .hljs-string, .hljs-regexp, .hljs-symbol, .hljs-char, .hljs-template-tag, .hljs-addition { color: var(--str); }
 .hljs-title, .hljs-function, .hljs-built_in, .hljs-attr, .hljs-attribute, .hljs-property, .hljs-selector-class, .hljs-selector-id { color: var(--fn); }
