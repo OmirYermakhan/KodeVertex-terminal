@@ -2,7 +2,10 @@ import { create } from 'zustand'
 import { gitStatus, projectRoot, type Change } from './api'
 
 export type Tool = 'project' | 'changes' | 'git'
-export type ViewerTab = { kind: 'file'; rel: string } | { kind: 'diff'; rel: string; rev: string | null }
+export type ViewerTab =
+  | { kind: 'file'; rel: string }
+  /** oldPath — прежний путь переименованного файла. */
+  | { kind: 'diff'; rel: string; rev: string | null; oldPath?: string }
 
 export const WIDTH_MIN = 200
 export const WIDTH_MAX = 600
@@ -46,7 +49,7 @@ interface ProjectState {
   setRoot(cwd: string): void
   refresh(): void
   openFile(rel: string, line?: number): void
-  openDiff(rel: string, rev: string | null): void
+  openDiff(rel: string, rev: string | null, oldPath?: string | null): void
   closeTab(i: number): void
   setCursor(rel: string, line: number): void
   markClaudeTouched(absPath: string): void
@@ -133,7 +136,8 @@ export const useProject = create<ProjectState>((set, get) => {
         ...openTab(s, { kind: 'file', rel }, line ?? null),
         ...(line ? { cursors: { ...s.cursors, [rel]: line } } : {}),
       })),
-    openDiff: (rel, rev) => set((s) => openTab(s, { kind: 'diff', rel, rev }, null)),
+    openDiff: (rel, rev, oldPath) =>
+      set((s) => openTab(s, oldPath ? { kind: 'diff', rel, rev, oldPath } : { kind: 'diff', rel, rev }, null)),
     closeTab: (i) =>
       set((s) => {
         if (i < 0 || i >= s.tabs.length) return {}

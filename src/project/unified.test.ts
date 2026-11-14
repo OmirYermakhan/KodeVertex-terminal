@@ -43,7 +43,13 @@ index 1..2 100644
     expect(r.hunks[0].lines).toEqual(['--- x', ' ', ' z'])
     expect(r.del).toBe(1)
   })
+  it('метка «Файл усечён» (большой неотслеживаемый) — fileCut, не truncated, не строка', () => {
+    const r = parseUnified('--- /dev/null\n+++ b/n.ts\n@@ -0,0 +1,2 @@\n+a\n+b\n\\ Файл усечён\n')
+    expect(r.fileCut).toBe(true)
+    expect(r.truncated).toBe(false)
+    expect(r.hunks[0].lines).toEqual(['+a', '+b'])
+  })
   it('пустой текст', () => {
-    expect(parseUnified('')).toEqual({ hunks: [], add: 0, del: 0, truncated: false })
+    expect(parseUnified('')).toEqual({ hunks: [], add: 0, del: 0, truncated: false, fileCut: false })
   })
 })

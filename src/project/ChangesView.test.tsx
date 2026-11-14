@@ -105,6 +105,23 @@ describe('ChangesView', () => {
     expect(useProject.getState().tabs[1]).toEqual({ kind: 'file', rel: `${P}/PaymentApi.kt` })
   })
 
+  it('переименованный — изменения с прежним путём; удалённый — ⌘↓ ничего не делает', () => {
+    act(() =>
+      useProject.setState({
+        changes: [
+          { path: 'src/New.kt', oldPath: 'src/Old.kt', status: 'R', add: 1, del: 1 },
+          { path: 'src/Gone.kt', status: 'D', add: 0, del: 3 },
+        ],
+      }),
+    )
+    render(<ChangesView />)
+    fireEvent.click(rows()[0])
+    expect(useProject.getState().tabs).toEqual([{ kind: 'diff', rel: 'src/New.kt', rev: null, oldPath: 'src/Old.kt' }])
+    fireEvent.click(rows()[1])
+    fireEvent.keyDown(screen.getByTestId('changes-view'), { key: 'ArrowDown', metaKey: true })
+    expect(useProject.getState().tabs.some((t) => t.kind === 'file')).toBe(false)
+  })
+
   it('группа сворачивается по клику на заголовок', () => {
     render(<ChangesView />)
     fireEvent.click(document.querySelectorAll('.grp')[0])

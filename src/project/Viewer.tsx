@@ -69,7 +69,7 @@ export default function Viewer() {
         })}
       </div>
       {cur?.kind === 'file' && <FileView key={cur.rel} rel={cur.rel} />}
-      {cur?.kind === 'diff' && <DiffTab key={`${cur.rel}\0${cur.rev ?? ''}`} rel={cur.rel} rev={cur.rev} />}
+      {cur?.kind === 'diff' && <DiffTab key={`${cur.rel}\0${cur.rev ?? ''}`} rel={cur.rel} rev={cur.rev} oldPath={cur.oldPath} />}
     </div>
   )
 }

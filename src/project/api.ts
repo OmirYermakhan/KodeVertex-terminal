@@ -44,5 +44,6 @@ export const projectRead = (root: string, rel: string) => invoke<FileText>('proj
 export const gitStatus = (root: string) => invoke<Change[]>('git_status', { root })
 export const gitLog = (root: string, skip: number, limit: number) => invoke<Commit[]>('git_log', { root, skip, limit })
 export const gitCommitFiles = (root: string, hash: string) => invoke<Change[]>('git_commit_files', { root, hash })
-/** rev = null — изменения рабочего дерева. */
-export const gitDiff = (root: string, rel: string, rev: string | null) => invoke<string>('git_diff', { root, rel, rev })
+/** rev = null — изменения рабочего дерева; oldRel — прежний путь переименованного (git сведёт их в одно изменение). */
+export const gitDiff = (root: string, rel: string, rev: string | null, oldRel: string | null = null) =>
+  invoke<string>('git_diff', { root, rel, oldRel, rev })

@@ -4,12 +4,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 let text = ''
 let fail: string | null = null
-const diff = vi.fn(async (_root: string, _rel: string, _rev: string | null): Promise<string> => {
+const diff = vi.fn(async (_root: string, _rel: string, _rev: string | null, _old?: string | null): Promise<string> => {
   if (fail) throw fail
   return text
 })
 vi.mock('./api', () => ({
-  gitDiff: (root: string, rel: string, rev: string | null) => diff(root, rel, rev),
+  gitDiff: (root: string, rel: string, rev: string | null, old?: string | null) => diff(root, rel, rev, old),
 }))
 
 const { default: DiffTab, DIFF_TAB_SHOWN } = await import('./DiffTab')
@@ -59,7 +59,7 @@ describe('DiffTab', () => {
   it('локальные: заголовок — путь, +a −d, «HEAD → рабочая копия», «Открыть файл»', async () => {
     render(<DiffTab rel={REL} rev={null} />)
     await waitFor(() => expect(dls().length).toBeGreaterThan(0))
-    expect(diff).toHaveBeenCalledWith('/w/shop-app', REL, null)
+    expect(diff).toHaveBeenCalledWith('/w/shop-app', REL, null, null)
     const h = document.querySelector('.dvh') as HTMLElement
     expect(h.querySelector('b')?.textContent).toBe(REL)
     expect(h.querySelector('.pa')?.textContent).toBe('+4')
@@ -87,7 +87,7 @@ describe('DiffTab', () => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
     render(<DiffTab rel="x.kt" rev={HASH} />)
     await waitFor(() => expect(dls()).toHaveLength(8))
-    expect(diff).toHaveBeenCalledWith('/w/shop-app', 'x.kt', HASH)
+    expect(diff).toHaveBeenCalledWith('/w/shop-app', 'x.kt', HASH, null)
     expect(document.querySelector('.dvh .pa')?.textContent).toBe('+8')
     expect(document.querySelector('.dvh .pd')).toBeNull()
     expect(document.querySelector('.dvh .ro')?.textContent).toBe('новый файл в a41c9e2')
@@ -132,6 +132,28 @@ describe('DiffTab', () => {
     fail = 'git: таймаут'
     render(<DiffTab rel={REL} rev={null} />)
     expect(await screen.findByText('git: таймаут')).toBeInTheDocument()
+  })
+
+  it('переименованный: прежний путь — в git_diff и в заголовке «old → new»', async () => {
+    render(<DiffTab rel="src/New.kt" rev={HASH} oldPath="src/Old.kt" />)
+    await waitFor(() => expect(dls().length).toBeGreaterThan(0))
+    expect(diff).toHaveBeenCalledWith('/w/shop-app', 'src/New.kt', HASH, 'src/Old.kt')
+    expect(document.querySelector('.dvh b')?.textContent).toBe('src/Old.kt → src/New.kt')
+  })
+
+  it('локально удалённый — без «Открыть файл»', async () => {
+    act(() => useProject.setState({ changes: [{ path: REL, status: 'D', add: 0, del: 9 }] }))
+    render(<DiffTab rel={REL} rev={null} />)
+    await waitFor(() => expect(dls().length).toBeGreaterThan(0))
+    expect(screen.queryByRole('button', { name: 'Открыть файл' })).toBeNull()
+  })
+
+  it('большой неотслеживаемый — последняя строка «Файл усечён»', async () => {
+    text = NEW_FILE(3) + '\\ Файл усечён\n'
+    render(<DiffTab rel="x.kt" rev={null} />)
+    await waitFor(() => expect(dls()).toHaveLength(4))
+    expect(dls()[3]).toHaveClass('dl gap')
+    expect(dls()[3].textContent).toBe('Файл усечён')
   })
 
   it('локальные перечитываются при обновлении статуса', async () => {

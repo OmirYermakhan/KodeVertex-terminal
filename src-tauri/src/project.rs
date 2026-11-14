@@ -397,27 +397,38 @@ fn untracked_diff(root: &Path, rel: &str) -> Result<String, String> {
 }
 
 pub fn git_diff_at(root: &Path, rel: &str, rev: Option<&str>) -> Result<String, String> {
-  if !valid_rel(rel) || rev.is_some_and(|h| !valid_hash(h)) {
+  git_diff_pair(root, rel, None, rev)
+}
+
+/// Как `git_diff_at`; `old_rel` — прежний путь переименованного файла: оба пути идут в pathspec, и `-M`
+/// сводит их в одно переименование (иначе новый путь — «весь файл добавлен»).
+pub fn git_diff_pair(root: &Path, rel: &str, old_rel: Option<&str>, rev: Option<&str>) -> Result<String, String> {
+  if !valid_rel(rel) || old_rel.is_some_and(|o| !valid_rel(o)) || rev.is_some_and(|h| !valid_hash(h)) {
     return Err("Неверный путь или ревизия".to_string());
   }
+  let paths: Vec<&str> = old_rel.into_iter().chain([rel]).collect();
   let g = Git::new(root)?;
   const OPTS: [&str; 5] = ["-U3", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/"];
   let opts = || OPTS.iter().copied().chain(["--dst-prefix=b/"]);
   if let Some(h) = rev {
     let mut a = vec!["show", "--no-show-signature", "--format=", "-m", "--first-parent", "-M"];
     a.extend(opts());
-    a.extend([h, "--", rel]);
+    a.extend([h, "--"]);
+    a.extend(&paths);
     return g.run_raw(&a, DIFF_MAX).map(cut_mark).ok_or_else(|| "Коммит не найден".to_string());
   }
   // Неотслеживаемый: у git для него diff пуст, поэтому синтезируем.
-  let untracked = g.run(&["ls-files", "--others", "--exclude-standard", "-z", "--", rel]).is_some_and(|s| !s.is_empty());
+  let untracked = old_rel.is_none()
+    && g.run(&["ls-files", "--others", "--exclude-standard", "-z", "--", rel]).is_some_and(|s| !s.is_empty());
   if untracked {
     return untracked_diff(root, rel);
   }
   let mut a = vec!["diff"];
   a.push(if g.has_head() { "HEAD" } else { "--cached" });
+  a.push("-M");
   a.extend(opts());
-  a.extend(["--", rel]);
+  a.push("--");
+  a.extend(&paths);
   g.run_raw(&a, DIFF_MAX).map(cut_mark).ok_or_else(|| "Не удалось получить изменения".to_string())
 }
 
@@ -447,8 +458,8 @@ pub fn git_commit_files(root: String, hash: String) -> Result<Vec<Change>, Strin
 }
 
 #[tauri::command(async)]
-pub fn git_diff(root: String, rel: String, rev: Option<String>) -> Result<String, String> {
-  git_diff_at(Path::new(&root), &rel, rev.as_deref())
+pub fn git_diff(root: String, rel: String, old_rel: Option<String>, rev: Option<String>) -> Result<String, String> {
+  git_diff_pair(Path::new(&root), &rel, old_rel.as_deref(), rev.as_deref())
 }
 
 #[cfg(test)]
@@ -778,6 +789,31 @@ mod tests {
     commit_all(p, "c");
     fs::remove_file(p.join("s.txt")).unwrap();
     assert!(git_diff_at(p, "s.txt", None).unwrap().contains("-1"));
+  }
+
+  /// Переименование с правкой: в коммите и в индексе — куски с «−» и «+», а не «весь файл добавлен».
+  #[test]
+  fn diff_rename_pairs_old_and_new() {
+    let d = new_repo();
+    let p = d.path();
+    let body: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+    touch(p, "old.txt", &body);
+    commit_all(p, "c1");
+    git(p, &["mv", "old.txt", "new.txt"]);
+    touch(p, "new.txt", &body.replace("line 10\n", "line ten\n"));
+    git(p, &["add", "new.txt"]);
+    let staged = git_diff_pair(p, "new.txt", Some("old.txt"), None).unwrap();
+    assert!(staged.contains("rename from old.txt") && staged.contains("-line 10") && staged.contains("+line ten"), "{staged}");
+    assert!(!staged.contains("+line 1\n"), "{staged}");
+    commit_all(p, "c2");
+    let h = git_log_at(p, 0, 1).unwrap().remove(0).hash;
+    let c = git_diff_pair(p, "new.txt", Some("old.txt"), Some(&h)).unwrap();
+    assert!(c.contains("rename from old.txt") && c.contains("-line 10") && c.contains("+line ten"), "{c}");
+    assert!(!c.contains("+line 1\n"), "{c}");
+    // Без прежнего пути — как раньше: новый файл целиком.
+    assert!(git_diff_at(p, "new.txt", Some(&h)).unwrap().contains("+line 1\n"));
+    assert!(git_diff_pair(p, "new.txt", Some("../x"), None).is_err());
+    assert!(git_diff_pair(p, "new.txt", Some(""), Some(&h)).is_err());
   }
 
   #[test]

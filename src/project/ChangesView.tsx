@@ -45,17 +45,17 @@ export default function ChangesView() {
     el?.scrollIntoView?.({ block: 'nearest' })
   }, [sel])
 
-  const openDiff = (c: Change) => useProject.getState().openDiff(c.path, null)
+  const openDiff = (c: Change) => useProject.getState().openDiff(c.path, null, c.oldPath)
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.ctrlKey || e.altKey) return
     const i = nav.findIndex((c) => c.path === sel)
     const cur = i >= 0 ? nav[i] : null
     if (e.metaKey) {
-      // ⌘↓ — открыть сам файл (как в AS «Jump to Source»).
+      // ⌘↓ — открыть сам файл (как в AS «Jump to Source»); удалённого на диске нет — ничего.
       if (e.key !== 'ArrowDown' || !cur) return
       e.preventDefault()
-      useProject.getState().openFile(cur.path)
+      if (cur.status !== 'D') useProject.getState().openFile(cur.path)
       return
     }
     const go = (c: Change | undefined) => c && setSel(c.path)

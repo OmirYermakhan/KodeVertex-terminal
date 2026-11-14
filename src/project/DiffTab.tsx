@@ -10,6 +10,7 @@ import { parseUnified } from './unified'
 /** Строк до «… ещё N строк · Показать всё»: огромный diff не рисуется целиком сразу. */
 export const DIFF_TAB_SHOWN = 1000
 const TRUNCATED = 'Изменения урезаны: больше 4 МБ'
+const FILE_CUT = 'Файл усечён'
 const MARK = { a: '+', d: '−', n: ' ' } as const
 
 type Loaded = { kind: 'text'; text: string } | { kind: 'error'; message: string }
@@ -39,10 +40,12 @@ function Line({ row, lit }: { row: DiffRow; lit: Piece[] | undefined }) {
  * Изменения файла во вкладке просмотра (макет 07 `.dvh` + `.dl`): локальные (rev = null, «HEAD → рабочая копия»)
  * или в коммите. Строки — как в DiffView (diffParts), вид — два столбца номеров, метка, тонированный фон.
  */
-export default function DiffTab({ rel, rev }: { rel: string; rev: string | null }) {
+export default function DiffTab({ rel, rev, oldPath }: { rel: string; rev: string | null; oldPath?: string }) {
   const root = useProject((s) => s.root)
   // Локальные изменения перечитываются при каждом обновлении статуса; коммит не меняется.
   const changes = useProject((s) => (rev === null ? s.changes : null))
+  // Локально удалённый: файла на диске нет — «Открыть файл» не показываем.
+  const deleted = useProject((s) => rev === null && s.changes?.some((c) => c.path === rel && c.status === 'D') === true)
   const [data, setData] = useState<Loaded | null>(null)
   const [all, setAll] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -50,14 +53,14 @@ export default function DiffTab({ rel, rev }: { rel: string; rev: string | null 
   useEffect(() => {
     if (!root) return
     let alive = true
-    gitDiff(root, rel, rev).then(
+    gitDiff(root, rel, rev, oldPath ?? null).then(
       (text) => alive && setData({ kind: 'text', text }),
       (e) => alive && setData({ kind: 'error', message: String(e) }),
     )
     return () => {
       alive = false
     }
-  }, [root, rel, rev, changes])
+  }, [root, rel, rev, oldPath, changes])
 
   useEffect(() => {
     if (!copied) return
@@ -121,7 +124,7 @@ export default function DiffTab({ rel, rev }: { rel: string; rev: string | null 
   if (!data) body = null
   else if (data.kind === 'error') body = <div className="ed-msg">{data.message}</div>
   else if (binary) body = <div className="ed-msg">Бинарный файл</div>
-  else if (entries.length === 0 && !parsed?.truncated) body = <div className="ed-msg">Изменений нет</div>
+  else if (entries.length === 0 && !parsed?.truncated && !parsed?.fileCut) body = <div className="ed-msg">Изменений нет</div>
   else
     body = (
       <div className="code">
@@ -140,6 +143,7 @@ export default function DiffTab({ rel, rev }: { rel: string; rev: string | null 
               {`… ещё ${cut} ${plural(cut, 'строка', 'строки', 'строк')} · Показать всё`}
             </button>
           )}
+          {parsed?.fileCut && <div className="dl gap">{FILE_CUT}</div>}
           {parsed?.truncated && <div className="dl gap">{TRUNCATED}</div>}
         </div>
       </div>
@@ -148,14 +152,16 @@ export default function DiffTab({ rel, rev }: { rel: string; rev: string | null 
   return (
     <div className="ed-body dvw">
       <div className="dvh">
-        <b title={rel}>{rel}</b>
+        <b title={oldPath ? `${oldPath} → ${rel}` : rel}>{oldPath ? `${oldPath} → ${rel}` : rel}</b>
         {parsed && parsed.add > 0 && <span className="pa">+{parsed.add}</span>}
         {parsed && parsed.del > 0 && <span className="pd">−{parsed.del}</span>}
         <span className="ro">{badge}</span>
         {rev === null ? (
-          <button type="button" className="ebtn" onClick={() => useProject.getState().openFile(rel)}>
-            Открыть файл
-          </button>
+          !deleted && (
+            <button type="button" className="ebtn" onClick={() => useProject.getState().openFile(rel)}>
+              Открыть файл
+            </button>
+          )
         ) : (
           <button type="button" className="ebtn" onClick={copy}>
             {copied ? 'Скопировано' : 'Копировать хэш'}

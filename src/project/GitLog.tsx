@@ -8,6 +8,8 @@ import { useProject } from './store'
 export const LOG_PAGE = 100
 /** За сколько пикселей до конца списка догружать. */
 const NEAR_END_PX = 300
+/** Выбор стрелками: файлы коммита запрашиваем, когда выбор задержался (быстрая прокрутка не плодит git show). */
+export const FILES_DELAY_MS = 150
 
 const MONTHS = ['янв.', 'февр.', 'мар.', 'апр.', 'мая', 'июн.', 'июл.', 'авг.', 'сент.', 'окт.', 'нояб.', 'дек.']
 const pad = (n: number) => String(n).padStart(2, '0')
@@ -46,6 +48,8 @@ export function parseRefs(refs: string[]): Ref[] {
 type Item = { key: string; kind: 'local' } | { key: string; kind: 'commit'; c: Commit } | { key: string; kind: 'file'; c: Commit; f: Change }
 
 const commitKey = (hash: string) => `c:${hash}`
+/** Подпись страницы: хэши и метки — та же подпись, значит, перерисовывать нечего. */
+const signature = (list: Commit[]) => list.map((c) => `${c.hash}\0${c.refs.join('\0')}`).join('\n')
 const fileKey = (hash: string, path: string) => `f:${hash}\0${path}`
 
 export default function GitLog({ now }: { now?: Date }) {
@@ -72,24 +76,54 @@ function Log({ root, now }: { root: string; now?: Date }) {
   const [sel, setSel] = useState<string | null>(null)
   const commitsRef = useRef<Commit[] | null>(null)
   const paging = useRef(false)
-  const asked = useRef(new Set<string>())
+  /** Запросы файлов коммитов в пути. */
+  const inflight = useRef(new Set<string>())
+  const filesRef = useRef(files)
+  const expandedRef = useRef(expanded)
   useEffect(() => {
     commitsRef.current = commits
-  }, [commits])
+    filesRef.current = files
+    expandedRef.current = expanded
+  }, [commits, files, expanded])
 
-  // Первая страница: при открытии и при каждом обновлении статуса (появился коммит — лог другой).
-  // Та же вершина — список не трогаем: догруженные страницы и раскрытые коммиты остаются.
+  const ensureFiles = useCallback(
+    (hash: string) => {
+      // Уже есть список или запрос в пути — не спрашиваем; ошибка не запоминается: следующий раз — снова.
+      if (inflight.current.has(hash) || Array.isArray(filesRef.current.get(hash))) return
+      inflight.current.add(hash)
+      gitCommitFiles(root, hash).then(
+        (list) => {
+          inflight.current.delete(hash)
+          setFiles((m) => new Map(m).set(hash, list))
+        },
+        (e) => {
+          inflight.current.delete(hash)
+          setFiles((m) => new Map(m).set(hash, String(e)))
+        },
+      )
+    },
+    [root],
+  )
+
+  // Первая страница: при открытии и при каждом обновлении статуса (появился коммит, сдвинулась ветка).
+  // Ничего не изменилось — список не трогаем; та же вершина (сменились только метки) — догруженный хвост остаётся.
   useEffect(() => {
     let alive = true
     gitLog(root, 0, LOG_PAGE).then(
       (page) => {
         if (!alive) return
         setError(null)
+        // Раскрытые коммиты, чьи файлы не загрузились, — повторить.
+        for (const h of expandedRef.current) if (typeof filesRef.current.get(h) === 'string') ensureFiles(h)
         const cur = commitsRef.current
-        if (cur && cur.length > 0 && page.length > 0 && cur[0].hash === page[0].hash) return
-        commitsRef.current = page
-        setCommits(page)
-        setMore(page.length === LOG_PAGE)
+        if (cur && signature(cur.slice(0, page.length)) === signature(page) && (cur.length > 0 || page.length === 0)) return
+        let next = page
+        if (cur && page.length > 0 && cur.length > page.length && cur[0].hash === page[0].hash) {
+          const seen = new Set(page.map((c) => c.hash))
+          next = [...page, ...cur.slice(page.length).filter((c) => !seen.has(c.hash))]
+        } else setMore(page.length === LOG_PAGE)
+        commitsRef.current = next
+        setCommits(next)
       },
       (e) => {
         if (!alive) return
@@ -100,7 +134,7 @@ function Log({ root, now }: { root: string; now?: Date }) {
     return () => {
       alive = false
     }
-  }, [root, changes])
+  }, [root, changes, ensureFiles])
 
   const loadMore = useCallback(() => {
     const cur = commitsRef.current
@@ -111,29 +145,19 @@ function Log({ root, now }: { root: string; now?: Date }) {
         paging.current = false
         // Пока грузилось, лог перечитался с начала — эта страница уже не к месту.
         if (commitsRef.current !== cur) return
-        const next = [...cur, ...page]
+        // Пока листали, сверху мог появиться коммит — страница начнётся с уже показанных.
+        const seen = new Set(cur.map((c) => c.hash))
+        const next = [...cur, ...page.filter((c) => !seen.has(c.hash))]
         commitsRef.current = next
         setCommits(next)
         setMore(page.length === LOG_PAGE)
       },
       () => {
+        // Ошибка (таймаут) — не конец лога: следующая прокрутка попробует снова.
         paging.current = false
-        setMore(false)
       },
     )
   }, [root])
-
-  const ensureFiles = useCallback(
-    (hash: string) => {
-      if (asked.current.has(hash)) return
-      asked.current.add(hash)
-      gitCommitFiles(root, hash).then(
-        (list) => setFiles((m) => new Map(m).set(hash, list)),
-        (e) => setFiles((m) => new Map(m).set(hash, String(e))),
-      )
-    },
-    [root],
-  )
 
   // Строка состояния: «хэш · N файла · +a −d» коммита под выбором (или коммита выбранного файла).
   const selHash = sel?.startsWith('c:') ? sel.slice(2) : sel?.startsWith('f:') ? sel.slice(2, sel.indexOf('\0')) : null
@@ -141,7 +165,9 @@ function Log({ root, now }: { root: string; now?: Date }) {
   const selFiles = selHash ? files.get(selHash) : undefined
   const stat = selCommit && Array.isArray(selFiles) ? commitSummary(selCommit.short, selFiles) : null
   useEffect(() => {
-    if (selHash) ensureFiles(selHash)
+    if (!selHash) return
+    const t = setTimeout(() => ensureFiles(selHash), FILES_DELAY_MS)
+    return () => clearTimeout(t)
   }, [selHash, ensureFiles])
   useEffect(() => {
     useProject.setState({ commitStat: stat })
@@ -173,13 +199,13 @@ function Log({ root, now }: { root: string; now?: Date }) {
       else n.delete(hash)
       return n
     })
-    ensureFiles(hash)
+    if (open ?? !expanded.has(hash)) ensureFiles(hash)
   }
   const showChanges = () => useProject.setState({ tool: 'changes' })
   const activate = (it: Item) => {
     if (it.kind === 'local') showChanges()
     else if (it.kind === 'commit') toggle(it.c.hash)
-    else useProject.getState().openDiff(it.f.path, it.c.hash)
+    else useProject.getState().openDiff(it.f.path, it.c.hash, it.f.oldPath)
   }
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -279,7 +305,7 @@ function Log({ root, now }: { root: string; now?: Date }) {
                   sel={sel === fk}
                   onClick={() => {
                     setSel(fk)
-                    useProject.getState().openDiff(f.path, c.hash)
+                    useProject.getState().openDiff(f.path, c.hash, f.oldPath)
                   }}
                 />
               </div>

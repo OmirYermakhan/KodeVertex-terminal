@@ -5,11 +5,15 @@ import type { Change, Commit } from './api'
 let commits: Commit[] = []
 let files: Record<string, Change[]> = {}
 let logFail: string | null = null
+let filesFail: string | null = null
 const log = vi.fn(async (_root: string, skip: number, limit: number): Promise<Commit[]> => {
   if (logFail) throw logFail
   return commits.slice(skip, skip + limit)
 })
-const commitFiles = vi.fn(async (_root: string, hash: string): Promise<Change[]> => files[hash] ?? [])
+const commitFiles = vi.fn(async (_root: string, hash: string): Promise<Change[]> => {
+  if (filesFail) throw filesFail
+  return files[hash] ?? []
+})
 vi.mock('./api', () => ({
   gitLog: (root: string, skip: number, limit: number) => log(root, skip, limit),
   gitCommitFiles: (root: string, hash: string) => commitFiles(root, hash),
@@ -79,6 +83,7 @@ describe('GitLog', () => {
     commits = MOCK
     files = { [A41]: A41_FILES }
     logFail = null
+    filesFail = null
     log.mockClear()
     commitFiles.mockClear()
     useProject.setState({
@@ -201,6 +206,76 @@ describe('GitLog', () => {
     await waitFor(() => expect(cms()).toHaveLength(6))
     expect(cms()[0].querySelector('.msg')?.textContent).toBe('Новый')
     expect(document.querySelector('.local')).toBeNull()
+  })
+
+  it('та же вершина, но метки сменились — метки обновляются', async () => {
+    render(<GitLog now={NOW} />)
+    await waitFor(() => expect(cms()).toHaveLength(5))
+    commits = [{ ...MOCK[0], refs: ['HEAD -> feature/payments', 'origin/feature/payments'] }, ...MOCK.slice(1)]
+    act(() => useProject.setState({ changes: [] }))
+    await waitFor(() => expect(cms()[0].querySelectorAll('.ref')).toHaveLength(3))
+  })
+
+  it('файлы коммита при выборе стрелками — с задержкой, только последнего; ошибка — повтор при следующем выборе', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      render(<GitLog now={NOW} />)
+      await waitFor(() => expect(cms()).toHaveLength(5))
+      const host = screen.getByTestId('git-log')
+      fireEvent.keyDown(host, { key: 'ArrowDown' })
+      fireEvent.keyDown(host, { key: 'ArrowDown' })
+      fireEvent.keyDown(host, { key: 'ArrowDown' })
+      fireEvent.keyDown(host, { key: 'ArrowDown' })
+      expect(commitFiles).not.toHaveBeenCalled()
+      await act(async () => {
+        vi.advanceTimersByTime(200)
+      })
+      expect(commitFiles).toHaveBeenCalledTimes(1)
+      expect(commitFiles).toHaveBeenLastCalledWith('/w/shop-app', MOCK[2].hash)
+      // Ошибка не запоминается навсегда: раскрытие того же коммита спрашивает снова.
+      commitFiles.mockClear()
+      filesFail = 'git: таймаут'
+      fireEvent.click(cms()[1])
+      await waitFor(() => expect(screen.getByText('git: таймаут')).toBeInTheDocument())
+      filesFail = null
+      fireEvent.click(cms()[1])
+      fireEvent.click(cms()[1])
+      await waitFor(() => expect(commitFiles).toHaveBeenCalledTimes(2))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('переименованный файл коммита — изменения с прежним путём', async () => {
+    files = { [A41]: [{ path: 'b/New.kt', oldPath: 'a/Old.kt', status: 'R', add: 1, del: 1 }] }
+    render(<GitLog now={NOW} />)
+    await waitFor(() => expect(cms()).toHaveLength(5))
+    fireEvent.click(cms()[0])
+    await waitFor(() => expect(chs()).toHaveLength(1))
+    fireEvent.click(chs()[0])
+    expect(useProject.getState().tabs).toEqual([{ kind: 'diff', rel: 'b/New.kt', rev: A41, oldPath: 'a/Old.kt' }])
+  })
+
+  it('ошибка догрузки не останавливает её; повторы коммитов на стыке страниц отбрасываются', async () => {
+    commits = Array.from({ length: 150 }, (_, i) => C(`c${String(i).padStart(6, '0')}`, `Коммит ${i}`, at(2026, 9, 1, 10, 0)))
+    render(<GitLog now={NOW} />)
+    await waitFor(() => expect(cms()).toHaveLength(100))
+    const host = screen.getByTestId('git-log')
+    Object.defineProperty(host, 'scrollHeight', { configurable: true, value: 2400 })
+    Object.defineProperty(host, 'clientHeight', { configurable: true, value: 600 })
+    host.scrollTop = 1700
+    logFail = 'git: таймаут'
+    fireEvent.scroll(host)
+    await waitFor(() => expect(log).toHaveBeenCalledTimes(2))
+    logFail = null
+    // Пока листали, сверху появился коммит: следующая страница начинается с уже показанного.
+    commits = [C('fff0001', 'Новый', at(2026, 10, 14, 15, 0)), ...commits]
+    await act(async () => {
+      fireEvent.scroll(host)
+    })
+    await waitFor(() => expect(cms()).toHaveLength(150))
+    const hashes = cms().map((c) => c.querySelector('.h')?.textContent)
+    expect(new Set(hashes).size).toBe(hashes.length)
   })
 
   it('не git и пустой лог — сообщения', async () => {
