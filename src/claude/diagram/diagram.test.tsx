@@ -34,7 +34,7 @@ describe('схемы mermaid', () => {
     expect(img.getAttribute('src')).toMatch(/^blob:/)
     expect(container.querySelector('svg')).toBeNull()
     expect(container.querySelector('script')).toBeNull()
-    expect(mermaid.initialize).toHaveBeenCalledWith(expect.objectContaining({ securityLevel: 'strict', htmlLabels: false, startOnLoad: false }))
+    expect(mermaid.initialize).toHaveBeenCalledWith(expect.objectContaining({ securityLevel: 'strict', htmlLabels: false, startOnLoad: false, suppressErrorRendering: true }))
   })
 
   it('пока печатается — код и «Схема рисуется…», mermaid не вызван', async () => {
@@ -64,6 +64,33 @@ describe('схемы mermaid', () => {
     expect(mermaid.render).toHaveBeenCalledTimes(2)
     expect(mermaid.initialize).toHaveBeenCalledTimes(2)
     expect(mermaid.initialize).toHaveBeenLastCalledWith(expect.objectContaining({ themeVariables: expect.objectContaining({ background: '#f6f5f0' }) }))
+  })
+
+  it('смена темы — старая картинка видна, пока рисуется новая', async () => {
+    const { container } = render(<Markdown text={fence('graph TD; A-->B')} />)
+    const first = (await screen.findByAltText('Схема')).getAttribute('src')
+    let finish: (v: { svg: string; diagramType: string }) => void = () => {}
+    mermaid.render.mockImplementationOnce(() => new Promise((r) => (finish = r)))
+    act(() => useSettings.setState((s) => ({ settings: { ...s.settings, theme: 'light' } })))
+    await act(async () => {})
+    expect(mermaid.render).toHaveBeenCalledTimes(2)
+    expect(screen.getByAltText('Схема').getAttribute('src')).toBe(first)
+    expect(screen.queryByText('Схема рисуется…')).toBeNull()
+    expect(container.querySelector('pre')).toBeNull()
+    await act(async () => finish({ svg: '<svg viewBox="0 0 1 1"></svg>', diagramType: 'flowchart' }))
+    await waitFor(() => expect(screen.getByAltText('Схема').getAttribute('src')).not.toBe(first))
+  })
+
+  it('кэш LRU: схема, к которой обращались, вытесняется последней', async () => {
+    await renderDiagram('graph TD; first', 'kv')
+    for (let i = 0; i < 99; i++) await renderDiagram(`graph TD; n${i}`, 'kv')
+    await renderDiagram('graph TD; first', 'kv') // попадание — в конец очереди
+    await renderDiagram('graph TD; extra', 'kv') // 101-я — вытесняет самую старую
+    const calls = mermaid.render.mock.calls.length
+    await renderDiagram('graph TD; first', 'kv')
+    expect(mermaid.render.mock.calls.length).toBe(calls)
+    await renderDiagram('graph TD; n0', 'kv')
+    expect(mermaid.render.mock.calls.length).toBe(calls + 1)
   })
 
   it('выключено в настройках — обычный блок кода', async () => {

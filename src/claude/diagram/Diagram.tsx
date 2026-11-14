@@ -7,17 +7,18 @@ import { cachedDiagram, renderDiagram, type DiagramResult } from './render'
 export function Diagram({ source }: { source: string }) {
   const theme = useSettings((s) => s.settings.theme)
   const key = `${theme}\n${source}`
-  // Результат хранится вместе с ключом: сменились тема или исходник — старый результат не показываем.
-  const [done, setDone] = useState<{ key: string; res: DiagramResult }>()
+  // Результат хранится вместе с ключом. Сменилась только тема — до новой картинки показываем старую
+  // (без мигания на код и «Схема рисуется…»); сменился исходник — старый результат не показываем.
+  const [done, setDone] = useState<{ key: string; source: string; res: DiagramResult }>()
   const [showSource, setShowSource] = useState(false)
   const [copied, copy] = useCopied()
-  const res = done?.key === key ? done.res : cachedDiagram(source, theme)
+  const prev = done?.source === source && done.res.ok ? done.res : undefined
+  const res = (done?.key === key ? done.res : cachedDiagram(source, theme)) ?? prev
 
   useEffect(() => {
-    if (cachedDiagram(source, theme)) return
     let alive = true
     void renderDiagram(source, theme).then((r) => {
-      if (alive) setDone({ key: `${theme}\n${source}`, res: r })
+      if (alive) setDone({ key: `${theme}\n${source}`, source, res: r })
     })
     return () => {
       alive = false

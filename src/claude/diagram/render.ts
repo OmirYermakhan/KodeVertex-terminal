@@ -13,7 +13,17 @@ const CACHE_LIMIT = 100
 /** Шрифт системный: внешние шрифты внутри <img> не загружаются. */
 const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif'
 
+/** Кэш LRU: Map хранит порядок вставки, при попадании запись переносится в конец. */
 const cache = new Map<string, DiagramResult>()
+
+function touch(key: string): DiagramResult | undefined {
+  const hit = cache.get(key)
+  if (hit) {
+    cache.delete(key)
+    cache.set(key, hit)
+  }
+  return hit
+}
 let lib: Promise<Mermaid> | undefined
 let initedTheme: ThemeId | undefined
 /** mermaid не реентерабелен — все вызовы идут по очереди. */
@@ -27,6 +37,8 @@ function config(themeId: ThemeId): MermaidConfig {
     startOnLoad: false,
     securityLevel: 'strict',
     htmlLabels: false,
+    // Без SVG-«бомбы» с ошибкой: mermaid бросает исключение и сам убирает временные узлы.
+    suppressErrorRendering: true,
     theme: 'base',
     fontFamily: FONT,
     themeVariables: {
@@ -75,7 +87,7 @@ async function draw(src: string, themeId: ThemeId): Promise<DiagramResult> {
     const { svg } = await mermaid.render(id, src)
     return { ok: true, url: URL.createObjectURL(new Blob([fixSize(svg)], { type: 'image/svg+xml' })) }
   } catch (e) {
-    // При ошибке mermaid может оставить временный элемент для замеров.
+    // Страховка: mermaid может оставить временный элемент для замеров.
     document.getElementById(`d${id}`)?.remove()
     document.getElementById(id)?.remove()
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
@@ -84,16 +96,16 @@ async function draw(src: string, themeId: ThemeId): Promise<DiagramResult> {
 
 /** Готовый результат из кэша — чтобы повторная отрисовка ленты не мигала «Схема рисуется…». */
 export function cachedDiagram(src: string, themeId: ThemeId): DiagramResult | undefined {
-  return cache.get(`${themeId}\n${src}`)
+  return touch(`${themeId}\n${src}`)
 }
 
 export function renderDiagram(src: string, themeId: ThemeId): Promise<DiagramResult> {
   const key = `${themeId}\n${src}`
-  const hit = cache.get(key)
+  const hit = touch(key)
   if (hit) return Promise.resolve(hit)
   const job = queue.then(async () => {
     // Пока ждали очереди, ту же схему мог нарисовать другой вызов.
-    const again = cache.get(key)
+    const again = touch(key)
     if (again) return again
     try {
       const res = await draw(src, themeId)
