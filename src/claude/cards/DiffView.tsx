@@ -4,12 +4,16 @@
 import { Fragment, memo, useEffect, useMemo, useState } from 'react'
 import { openPath } from '../../attach/preview/api'
 import { highlightLines, type Piece } from '../../attach/preview/highlight'
+import { Markdown } from '../Markdown'
 import { diffParts, diffStat, firstChangedLine, type DiffRow, type FileDiff } from '../diff'
 
 /** Строк вида до «Показать всё» (Write большого файла не растягивает ленту). */
 export const DIFF_SHOWN = 80
 /** Конец вида правки, урезанной при сохранении сессии. */
 export const TRUNCATED = '… остальные строки не сохранены'
+
+/** Файлы, которые можно показать как документ (со схемами mermaid). */
+const isMarkdown = (path: string) => /\.(md|markdown|mdx)$/i.test(path)
 
 const MARK = { a: '+', d: '−', n: ' ' } as const
 
@@ -65,6 +69,7 @@ export const DiffView = memo(function DiffView({ diff, cwd }: { diff: FileDiff; 
   const [open, setOpen] = useState<ReadonlySet<number>>(() => new Set())
   const [all, setAll] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [asDoc, setAsDoc] = useState(false)
   useEffect(() => {
     if (!copied) return
     const t = setTimeout(() => setCopied(false), 1500)
@@ -134,6 +139,11 @@ export const DiffView = memo(function DiffView({ diff, cwd }: { diff: FileDiff; 
         </span>
         {path && (
           <span className="dv-btns">
+            {isMarkdown(path) && (
+              <button type="button" className="dv-btn" onClick={() => setAsDoc((v) => !v)}>
+                {asDoc ? 'Как изменения' : 'Как документ'}
+              </button>
+            )}
             <button type="button" className="dv-btn" onClick={edit}>
               Открыть в редакторе
             </button>
@@ -143,7 +153,12 @@ export const DiffView = memo(function DiffView({ diff, cwd }: { diff: FileDiff; 
           </span>
         )}
       </div>
-      {entries.length > 0 && (
+      {asDoc && (
+        <div className="dv-doc">
+          <Markdown text={diff.after.replace(/\n?… остальные строки не сохранены$/, '')} />
+        </div>
+      )}
+      {!asDoc && entries.length > 0 && (
         <div className={'diff dv-body' + (w === 0 ? ' nonum' : '')}>
           {entries.map((e) =>
             e.kind === 'row' ? (
