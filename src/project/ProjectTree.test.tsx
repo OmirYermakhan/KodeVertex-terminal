@@ -34,11 +34,11 @@ beforeEach(() => {
     app: ls(d('src'), f('AndroidManifest.xml'), f('build.gradle.kts')),
     'app/src': ls(d('main')),
     'app/src/main': ls(d('java')),
-    'app/src/main/java': ls(d('com'), d('org')),
-    'app/src/main/java/org': ls(d('shop')),
-    'app/src/main/java/org/shop': ls(d('cart')),
-    'app/src/main/java/org/shop/cart': ls(f('Cart.kt'), f('Item.kt')),
-    'app/src/main/java/com': ls(f('PaymentApi.kt'), f('RetryPolicy.kt')),
+    'app/src/main/java': ls(d('com')),
+    'app/src/main/java/com': ls(d('shop')),
+    'app/src/main/java/com/shop': ls(d('cart'), d('payments')),
+    'app/src/main/java/com/shop/cart': ls(f('Cart.kt')),
+    'app/src/main/java/com/shop/payments': ls(f('PaymentApi.kt'), f('RetryPolicy.kt')),
   }
   list.mockClear()
   openFile.mockClear()
@@ -83,26 +83,32 @@ describe('ProjectTree', () => {
     const chain = await screen.findByText('src/main/java')
     expect(chain.closest('.n')!.querySelector('.fold')).toHaveClass('src')
     expect((chain.closest('.n') as HTMLElement).style.paddingLeft).toBe('38px')
-    expect(row('com').style.paddingLeft).toBe('54px')
-    // внутри корня исходников цепочка — пакет через точку
-    fireEvent.click(row('org'))
-    expect(await screen.findByText('org.shop.cart')).toBeInTheDocument()
-    expect(row('Cart.kt').style.paddingLeft).toBe('70px')
+    // цепочка кончается на корне исходников; ниже — новая, пакетом через точку
+    expect(await screen.findByText('com.shop')).toBeInTheDocument()
+    expect(row('com.shop').style.paddingLeft).toBe('54px')
+    expect(row('com.shop').querySelector('.tw-a')).toHaveTextContent('▾')
+    const names = rows().map(name)
+    expect(names.slice(names.indexOf('com.shop') + 1, names.indexOf('com.shop') + 3)).toEqual(['cart', 'payments'])
+    expect(row('cart').style.paddingLeft).toBe('70px')
+    fireEvent.click(row('cart'))
+    expect(await screen.findByText('Cart.kt')).toBeInTheDocument()
+    expect(row('Cart.kt').style.paddingLeft).toBe('86px')
     // свернуть — дети исчезают
     fireEvent.click(row('app'))
     expect(screen.queryByText('AndroidManifest.xml')).toBeNull()
   })
 
   it('цвета статусов и dirm у папок с изменениями внутри; удалённый — в своей папке, зачёркнут', async () => {
-    fs['app/src/main/java/com'] = ls(f('PaymentApi.kt'), f('RetryPolicy.kt'), f('Zeta.kt'))
+    const P = 'app/src/main/java/com/shop/payments'
+    fs[P] = ls(f('PaymentApi.kt'), f('RetryPolicy.kt'), f('Zeta.kt'))
     await mount([
       { path: 'README.md', status: 'M' },
-      { path: 'app/src/main/java/com/PaymentApi.kt', status: 'M' },
-      { path: 'app/src/main/java/com/RetryPolicy.kt', status: '?' },
-      { path: 'app/src/main/java/com/Added.kt', status: 'A' },
-      { path: 'app/src/main/java/com/LegacyPay.kt', status: 'D' },
+      { path: `${P}/PaymentApi.kt`, status: 'M' },
+      { path: `${P}/RetryPolicy.kt`, status: '?' },
+      { path: `${P}/Added.kt`, status: 'A' },
+      { path: `${P}/LegacyPay.kt`, status: 'D' },
     ])
-    fs['app/src/main/java/com'].entries.splice(0, 0, f('Added.kt'))
+    fs[P].entries.splice(0, 0, f('Added.kt'))
     expect(row('README.md')).toHaveClass('mod')
     expect(rows()[0]).toHaveClass('dirm')
     expect(row('app')).toHaveClass('dirm')
@@ -112,11 +118,19 @@ describe('ProjectTree', () => {
     expect(await screen.findByText('src/main/java')).toBeInTheDocument()
     expect(row('src')).toBeUndefined()
     expect(row('src/main/java')).toHaveClass('dirm')
-    fireEvent.click(await screen.findByText('com'))
+    expect(await screen.findByText('com.shop')).toHaveClass('lbl')
+    expect(row('com.shop')).toHaveClass('dirm')
+    fireEvent.click(row('payments'))
     await screen.findByText('PaymentApi.kt')
     const names = rows().map(name)
-    const i = names.indexOf('com')
-    expect(names.slice(i + 1, i + 6)).toEqual(['Added.kt', 'LegacyPay.kt', 'PaymentApi.kt', 'RetryPolicy.kt', 'Zeta.kt'])
+    const i = names.indexOf('payments')
+    expect(names.slice(i + 1, i + 6)).toEqual([
+      'Added.kt',
+      'LegacyPay.kt',
+      'PaymentApi.kt',
+      'RetryPolicy.kt',
+      'Zeta.kt',
+    ])
     expect(row('Added.kt')).toHaveClass('add')
     expect(row('LegacyPay.kt')).toHaveClass('del')
     expect(row('PaymentApi.kt')).toHaveClass('mod')
@@ -193,6 +207,63 @@ describe('ProjectTree', () => {
     fs[''] = ls(d('.gradle'), d('app'), f('NEW.md'), f('README.md'), f('settings.gradle.kts'))
     act(() => useProject.setState({ changes: [{ path: 'NEW.md', status: '?' }] }))
     await waitFor(() => expect(row('NEW.md')).toHaveClass('new'))
+  })
+
+  it('перечитывание — одним обновлением на все раскрытые папки; те же пути и статусы — без запросов', async () => {
+    await mount([{ path: 'README.md', status: 'M' }])
+    fireEvent.click(row('app'))
+    await screen.findByText('AndroidManifest.xml')
+    list.mockClear()
+    // тот же набор (новая ссылка) — не перечитываем
+    act(() => useProject.setState({ changes: [{ path: 'README.md', status: 'M' }] }))
+    await act(async () => {})
+    expect(list).not.toHaveBeenCalled()
+    // другой набор: корень ответил сразу, app — позже; новое видно только когда готовы все
+    let releaseApp!: () => void
+    const gate = new Promise<void>((r) => (releaseApp = r))
+    list.mockImplementation(async (_root: string, rel: string) => {
+      if (rel === 'app') await gate
+      return fs[rel]
+    })
+    fs[''] = ls(d('.gradle'), d('app'), f('NEW.md'), f('README.md'), f('settings.gradle.kts'))
+    fs.app = ls(d('src'), f('AndroidManifest.xml'), f('build.gradle.kts'), f('Z.kt'))
+    act(() =>
+      useProject.setState({
+        changes: [
+          { path: 'README.md', status: 'M' },
+          { path: 'NEW.md', status: '?' },
+        ],
+      }),
+    )
+    await act(async () => {})
+    expect(list.mock.calls.map((c) => c[1]).sort()).toEqual(['', 'app'])
+    expect(row('NEW.md')).toBeUndefined()
+    await act(async () => releaseApp())
+    await waitFor(() => expect(row('NEW.md')).toBeDefined())
+    expect(row('Z.kt')).toBeDefined()
+    list.mockImplementation(async (_root: string, rel: string) => {
+      const x = fs[rel]
+      if (!x) throw new Error('нет каталога')
+      return x
+    })
+  })
+
+  it('свернули папку с выбранной строкой внутри — выбор переходит на папку', async () => {
+    await mount()
+    fireEvent.click(row('app'))
+    fireEvent.click(await screen.findByText('AndroidManifest.xml'))
+    expect(sel()).toBe('AndroidManifest.xml')
+    tree().focus()
+    key('ArrowUp')
+    key('ArrowUp')
+    expect(sel()).toBe('app')
+    key('ArrowDown')
+    fireEvent.click(row('app'))
+    expect(sel()).toBe('app')
+    fireEvent.click(row('app'))
+    fireEvent.click(await screen.findByText('build.gradle.kts'))
+    fireEvent.click(rows()[0])
+    expect(sel()).toBe('shop-app')
   })
 
   it('фокус с окна переходит в дерево при открытии', async () => {

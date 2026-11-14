@@ -67,6 +67,9 @@ export interface ThemeTokens {
   vcsDel: string
   /** Фон под наведением / открытой кнопкой в полосе окна (макет 07 --hover). */
   hover: string
+  /** Выбранная строка дерева (макет 07 --sel) и она же без фокуса (--selDim). */
+  sel: string
+  selDim: string
   /** Значки полосы инструментов (макет 07 .sb: #a8adb5). */
   sbIcon: string
 }
@@ -141,6 +144,8 @@ export const THEMES: Record<ThemeId, Theme> = {
       vcsNew: '#d1675a',
       vcsDel: '#8a9199',
       hover: '#1d2126',
+      sel: '#26301a',
+      selDim: '#1a1e22',
       sbIcon: '#a8adb5',
     },
   },
@@ -206,6 +211,8 @@ export const THEMES: Record<ThemeId, Theme> = {
       vcsNew: '#d1675a',
       vcsDel: '#948d82',
       hover: '#2c2a27',
+      sel: '#3a3628',
+      selDim: '#2a2825',
       sbIcon: '#a8adb5',
     },
   },
@@ -271,6 +278,8 @@ export const THEMES: Record<ThemeId, Theme> = {
       vcsNew: '#d1675a',
       vcsDel: '#8592a3',
       hover: '#242b35',
+      sel: '#253a5c',
+      selDim: '#212a37',
       sbIcon: '#a8adb5',
     },
   },
@@ -336,6 +345,8 @@ export const THEMES: Record<ThemeId, Theme> = {
       vcsNew: '#b8483a',
       vcsDel: '#6d737b',
       hover: '#e2e1d9',
+      sel: '#d9e3c2',
+      selDim: '#e6e5de',
       sbIcon: '#5f646b',
     },
   },
@@ -401,6 +412,8 @@ export const THEMES: Record<ThemeId, Theme> = {
       vcsNew: '#d1675a',
       vcsDel: '#6f737a',
       hover: '#2f3136',
+      sel: '#2e436e',
+      selDim: '#2a3346',
       sbIcon: '#a8adb5',
     },
   },

@@ -199,7 +199,8 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .tree .n .ic { width: 16px; height: 16px; flex: none; display: grid; place-items: center; }
 .tree .n .lbl b { font-weight: 600; }
 .tree .n .hint { color: var(--muted); font-size: 12px; margin-left: 4px; }
-.tree .n.sel { background: var(--you); }
+.tree .n.sel { background: var(--selDim); }
+.tree:focus .n.sel { background: var(--sel); }
 .tree .n.mod { color: var(--vcsMod); }
 .tree .n.add { color: var(--vcsAdd); }
 .tree .n.new { color: var(--vcsNew); }
