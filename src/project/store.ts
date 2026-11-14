@@ -136,9 +136,11 @@ export const useProject = create<ProjectState>((set, get) => {
   }
 })
 
-const STATUS = { M: 'mod', R: 'mod', A: 'add', '?': 'new', D: 'del' } as const
+/** Код git-статуса → класс строки (макет 07 `.n.mod/.add/.new/.del`). */
+export const STATUS = { M: 'mod', R: 'mod', A: 'add', '?': 'new', D: 'del' } as const
+export type VcsClass = (typeof STATUS)[keyof typeof STATUS]
 
-export function statusOf(changes: Change[] | null, rel: string): 'mod' | 'add' | 'new' | 'del' | null {
+export function statusOf(changes: Change[] | null, rel: string): VcsClass | null {
   const c = changes?.find((x) => x.path === rel)
   return c ? STATUS[c.status] : null
 }

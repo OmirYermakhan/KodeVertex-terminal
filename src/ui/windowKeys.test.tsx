@@ -343,7 +343,8 @@ describe('панель проекта и фокус', () => {
     expect(document.activeElement).toBe(inputOf(a))
     fireEvent.keyDown(document.activeElement!, { key: '¡', code: 'Digit1', metaKey: true, altKey: true })
     await flush()
-    expect(document.activeElement).toBe(document.querySelector('[data-testid="toolwindow"]'))
+    // фокус в окне — на самом дереве, чтобы стрелки работали сразу
+    expect(document.activeElement).toBe(document.querySelector('[data-testid="project-tree"]'))
     fireEvent.keyDown(document.activeElement!, { key: 'Escape', code: 'Escape' })
     await flush()
     expect(useProject.getState().tool).toBeNull()

@@ -192,6 +192,40 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .twh .acts button { padding: 0; border: 0; background: transparent; color: inherit; font-family: inherit; cursor: default; }
 .twh .acts button:hover { background: var(--hover); color: var(--strong); }
 .tw .tree { flex: 1; min-height: 0; overflow: auto; padding: 2px 0; font-size: 13px; }
+.tw .tree:focus { outline: none; }
+/* Дерево проекта (макет 07 .n): строка 24px, стрелка, значок, имя цветом git-статуса. */
+.tree .n { display: flex; align-items: center; gap: 5px; height: 24px; padding-right: 10px; white-space: nowrap; color: var(--text); user-select: none; cursor: default; }
+.tree .n .tw-a { width: 12px; color: var(--muted); font-size: 9px; text-align: center; flex: none; }
+.tree .n .ic { width: 16px; height: 16px; flex: none; display: grid; place-items: center; }
+.tree .n .lbl b { font-weight: 600; }
+.tree .n .hint { color: var(--muted); font-size: 12px; margin-left: 4px; }
+.tree .n.sel { background: var(--you); }
+.tree .n.mod { color: var(--vcsMod); }
+.tree .n.add { color: var(--vcsAdd); }
+.tree .n.new { color: var(--vcsNew); }
+.tree .n.del { color: var(--vcsDel); text-decoration: line-through; }
+.tree .n.dirm .lbl { color: var(--vcsMod); }
+.tree .n.more { color: var(--muted); }
+.tree-hint { padding: 8px 12px; color: var(--muted); font-size: 12.5px; }
+/* Значки папок и файлов (макет 07 .fold/.fi) — общие для дерева, вкладок и списков изменений. */
+.fold { width: 15px; height: 12px; border-radius: 2px; background: #87939a; position: relative; }
+.fold::before { content: ""; position: absolute; left: 0; top: -2px; width: 7px; height: 3px; border-radius: 2px 2px 0 0; background: #87939a; }
+.fold.src, .fold.src::before { background: #4f8bd6; }
+.fold.res, .fold.res::before { background: #c9a34e; }
+.fi.pfi { font-family: var(--font-text); font-size: 8.5px; font-weight: 700; line-height: 1; width: 14px; height: 14px; margin: 0; vertical-align: baseline; border-radius: 3px; display: grid; place-items: center; color: #fff; flex: none; }
+.fi.pfi.kt { background: linear-gradient(135deg, #7f52ff, #c711e1); }
+.fi.pfi.xml { background: #e8a33d; color: #1e1f22; }
+.fi.pfi.gr { background: #5ea06a; }
+.fi.pfi.md { background: #5f7a99; }
+.fi.pfi.txt { background: #6f737a; }
+.fi.pfi.ts { background: #3178c6; }
+.fi.pfi.js { background: #d9b92f; color: #1e1f22; }
+.fi.pfi.rs { background: #c4643b; }
+.fi.pfi.json { background: #a8894a; }
+.fi.pfi.py { background: #3b77a8; }
+.fi.pfi.java { background: #c45a3b; }
+.fi.pfi.swift { background: #e8663d; }
+.fi.pfi.go { background: #2b9fbf; }
 .tw .log { flex: 1; min-height: 0; overflow: auto; }
 .tw-resize { position: absolute; top: 0; bottom: 0; right: -3px; width: 6px; z-index: 3; cursor: col-resize; }
 body.tw-resizing, body.tw-resizing * { cursor: col-resize !important; user-select: none !important; }

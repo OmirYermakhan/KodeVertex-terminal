@@ -1,4 +1,381 @@
-/** Дерево файлов проекта — заглушка; настоящее — Task 5. */
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { projectList, type Change, type DirEntry, type DirList } from "./api";
+import { fileIcon, folderIcon } from "./fileIcon";
+import { STATUS, useProject, type VcsClass } from "./store";
+
+/** Отступ уровня дерева (макет 07): корень — 6px, каждый уровень +16px. */
+const INDENT0 = 6;
+const INDENT = 16;
+/** Пауза набора, после которой поиск по буквам начинается заново. */
+const TYPE_RESET_MS = 1000;
+
+const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
+/** Порядок как у project_list: папки первыми, затем файлы, без учёта регистра. */
+const byName = (a: DirEntry, b: DirEntry) => {
+  if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+  const x = a.name.toLowerCase();
+  const y = b.name.toLowerCase();
+  return x < y ? -1 : x > y ? 1 : 0;
+};
+/** Домашний каталог → «~» для серой подписи корня. */
+const tildify = (p: string) =>
+  p.replace(/^(\/Users|\/home)\/[^/]+(?=\/|$)/, "~");
+/** Внутри корня исходников Java/Kotlin цепочка папок — пакет через точку (`com.shop.payments`). */
+const inSourceRoot = (rel: string) =>
+  /(^|\/)src\/[^/]+\/(java|kotlin)(\/|$)/.test(rel);
+
+/** Поиск по изменениям, построенный один раз на список: статус файла, папки с изменениями, удалённые. */
+interface Vcs {
+  status: Map<string, VcsClass>;
+  dirs: Set<string>;
+  /** Каталог → удалённые прямые потомки (файлы и целиком удалённые папки — их нет на диске). */
+  deleted: Map<string, Map<string, boolean>>;
+}
+
+function buildVcs(changes: Change[] | null): Vcs {
+  const vcs: Vcs = { status: new Map(), dirs: new Set(), deleted: new Map() };
+  for (const c of changes ?? []) {
+    vcs.status.set(c.path, STATUS[c.status]);
+    const parts = c.path.split("/");
+    for (let i = 0; i < parts.length; i++) {
+      const dir = parts.slice(0, i).join("/");
+      vcs.dirs.add(dir);
+      if (c.status !== "D") continue;
+      let m = vcs.deleted.get(dir);
+      if (!m) vcs.deleted.set(dir, (m = new Map()));
+      const isDir = i < parts.length - 1;
+      m.set(parts[i], (m.get(parts[i]) ?? false) || isDir);
+    }
+  }
+  return vcs;
+}
+
+/** Содержимое каталога: с диска плюс удалённые (их на диске нет) на своих местах по порядку. */
+function childrenOf(
+  rel: string,
+  v: Vcs,
+  ls: Map<string, DirList>,
+): DirEntry[] | null {
+  const l = ls.get(rel);
+  if (!l) return null;
+  const del = v.deleted.get(rel);
+  if (!del) return l.entries;
+  const have = new Set(l.entries.map((e) => e.name));
+  const extra = [...del]
+    .filter(([n]) => !have.has(n))
+    .map(([name, isDir]) => ({ name, isDir }));
+  return extra.length ? [...l.entries, ...extra].sort(byName) : l.entries;
+}
+
+interface Row {
+  /** Ключ выбора: путь папки, которую строка раскрывает (у цепочки — верхней), файла; корень — ''. */
+  key: string;
+  /** Путь, чьё содержимое под строкой (у цепочки — нижняя папка). */
+  rel: string;
+  parent: string | null;
+  depth: number;
+  label: string;
+  kind: "root" | "dir" | "file" | "more";
+  open: boolean;
+  cls: string;
+}
+
+/** Окно инструмента открылось с фокусом на себе — фокус в дерево, чтобы стрелки работали сразу. */
+function useTakeFocus(ref: React.RefObject<HTMLDivElement | null>) {
+  useEffect(() => {
+    const el = ref.current;
+    if (el && document.activeElement === el.closest(".tw")) el.focus();
+  }, [ref]);
+}
+
 export default function ProjectTree() {
-  return <div className="tree" data-testid="project-tree" />
+  const root = useProject((s) => s.root);
+  return root ? <Tree key={root} root={root} /> : <NoRoot />;
+}
+
+function NoRoot() {
+  const ref = useRef<HTMLDivElement>(null);
+  useTakeFocus(ref);
+  return (
+    <div ref={ref} className="tree" data-testid="project-tree" tabIndex={0}>
+      <div className="tree-hint">Папка проекта ещё не известна</div>
+    </div>
+  );
+}
+
+function Tree({ root }: { root: string }) {
+  const host = useRef<HTMLDivElement>(null);
+  useTakeFocus(host);
+  const changes = useProject((s) => s.changes);
+  const openFile = useProject((s) => s.openFile);
+  const vcs = useMemo(() => buildVcs(changes), [changes]);
+  const [lists, setLists] = useState<Map<string, DirList>>(() => new Map());
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set([""]));
+  const [sel, setSel] = useState<string | null>(null);
+  const typed = useRef({ text: "", at: 0 });
+  const reqs = useRef(new Map<string, number>());
+  // Копии состояния для асинхронных ответов project_list; меняются вместе с setState.
+  const vcsRef = useRef(vcs);
+  useLayoutEffect(() => {
+    vcsRef.current = vcs;
+  }, [vcs]);
+  const expandedRef = useRef(expanded);
+  const listsRef = useRef(lists);
+
+  const load = useCallback(
+    (top: string) => {
+      const loadDir = (rel: string) => {
+        const id = (reqs.current.get(rel) ?? 0) + 1;
+        reqs.current.set(rel, id);
+        const done = (l: DirList) => {
+          if (reqs.current.get(rel) !== id) return;
+          const next = new Map(listsRef.current).set(rel, l);
+          listsRef.current = next;
+          setLists(next);
+          // Папка из одной папки — раскрываем и её: цепочка показывается одной строкой (`src/main/java`).
+          const kids = rel ? childrenOf(rel, vcsRef.current, next) : null;
+          if (kids?.length === 1 && kids[0].isDir && l.more === 0) {
+            const c = join(rel, kids[0].name);
+            if (!expandedRef.current.has(c)) {
+              const ex = new Set(expandedRef.current).add(c);
+              expandedRef.current = ex;
+              setExpanded(ex);
+              loadDir(c);
+            }
+          }
+        };
+        // Каталога нет (удалён целиком) или не читается — пусто; удалённые файлы добавятся сами.
+        projectList(root, rel).then(done, () => done({ entries: [], more: 0 }));
+      };
+      loadDir(top);
+    },
+    [root],
+  );
+
+  useEffect(() => load(""), [load]);
+
+  // Новый список изменений — перечитать раскрытые папки (файлы могли появиться и исчезнуть).
+  const firstChanges = useRef(true);
+  useEffect(() => {
+    if (firstChanges.current) {
+      firstChanges.current = false;
+      return;
+    }
+    for (const rel of expandedRef.current)
+      if (listsRef.current.has(rel)) load(rel);
+  }, [changes, load]);
+
+  const toggle = (key: string) => {
+    const ex = new Set(expandedRef.current);
+    if (ex.has(key)) ex.delete(key);
+    else {
+      ex.add(key);
+      load(key);
+    }
+    expandedRef.current = ex;
+    setExpanded(ex);
+  };
+
+  const rows = useMemo(() => {
+    const out: Row[] = [];
+    const name = root.replace(/\/+$/, "").split("/").pop() || root;
+    const rootOpen = expanded.has("");
+    out.push({
+      key: "",
+      rel: "",
+      parent: null,
+      depth: 0,
+      label: name,
+      kind: "root",
+      open: rootOpen,
+      cls: vcs.dirs.has("") ? "dirm" : "",
+    });
+    const walk = (dir: string, parentKey: string, depth: number) => {
+      const kids = childrenOf(dir, vcs, lists);
+      if (!kids) return;
+      for (const e of kids) {
+        const top = join(dir, e.name);
+        const gone =
+          vcs.deleted.get(dir)?.has(e.name) &&
+          !lists.get(dir)?.entries.some((x) => x.name === e.name);
+        if (!e.isDir) {
+          out.push({
+            key: top,
+            rel: top,
+            parent: parentKey,
+            depth,
+            label: e.name,
+            kind: "file",
+            open: false,
+            cls: vcs.status.get(top) ?? "",
+          });
+          continue;
+        }
+        const open = expanded.has(top);
+        let cur = top;
+        const parts = [e.name];
+        if (open) {
+          // Цепочка папок по одной — одной строкой, пока следующая раскрыта.
+          for (;;) {
+            const k = childrenOf(cur, vcs, lists);
+            if (
+              !k ||
+              k.length !== 1 ||
+              !k[0].isDir ||
+              (lists.get(cur)?.more ?? 0) > 0
+            )
+              break;
+            const next = join(cur, k[0].name);
+            if (!expanded.has(next)) break;
+            parts.push(k[0].name);
+            cur = next;
+          }
+        }
+        const label = parts.join(inSourceRoot(dir) ? "." : "/");
+        const cls = gone ? "del" : vcs.dirs.has(cur) ? "dirm" : "";
+        out.push({
+          key: top,
+          rel: cur,
+          parent: parentKey,
+          depth,
+          label,
+          kind: "dir",
+          open,
+          cls,
+        });
+        if (open) walk(cur, top, depth + 1);
+      }
+      const more = lists.get(dir)?.more ?? 0;
+      if (more > 0)
+        out.push({
+          key: `${dir}\0more`,
+          rel: dir,
+          parent: parentKey,
+          depth,
+          label: `ещё ${more}`,
+          kind: "more",
+          open: false,
+          cls: "more",
+        });
+    };
+    if (rootOpen) walk("", "", 1);
+    return out;
+  }, [root, expanded, lists, vcs]);
+
+  // Выбранная строка — в видимой области.
+  useEffect(() => {
+    if (sel === null) return;
+    const el = [
+      ...(host.current?.querySelectorAll<HTMLElement>("[data-key]") ?? []),
+    ].find((x) => x.dataset.key === sel);
+    el?.scrollIntoView?.({ block: "nearest" });
+  }, [sel]);
+
+  const activate = (r: Row) => {
+    if (r.kind === "file") openFile(r.rel);
+    else if (r.kind !== "more") toggle(r.key);
+  };
+
+  const nav = rows.filter((r) => r.kind !== "more");
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const i = nav.findIndex((r) => r.key === sel);
+    const cur = i >= 0 ? nav[i] : null;
+    const go = (r: Row | undefined) => r && setSel(r.key);
+    let handled = true;
+    if (e.key === "ArrowDown")
+      go(nav[i < 0 ? 0 : Math.min(nav.length - 1, i + 1)]);
+    else if (e.key === "ArrowUp")
+      go(nav[i < 0 ? nav.length - 1 : Math.max(0, i - 1)]);
+    else if (e.key === "Home") go(nav[0]);
+    else if (e.key === "End") go(nav[nav.length - 1]);
+    else if (e.key === "ArrowRight") {
+      if (cur && cur.kind !== "file") {
+        if (!cur.open) toggle(cur.key);
+        else if (nav[i + 1]?.parent === cur.key) go(nav[i + 1]);
+      }
+    } else if (e.key === "ArrowLeft") {
+      if (cur && cur.kind !== "file" && cur.open) toggle(cur.key);
+      else if (cur && cur.parent !== null)
+        go(nav.find((r) => r.key === cur.parent));
+    } else if (e.key === "Enter") {
+      if (cur) activate(cur);
+    } else if (e.key.length === 1 && e.key !== " ") {
+      // Набор букв — переход к первому совпадению по имени (как speed search в AS).
+      const t = typed.current;
+      t.text =
+        (e.timeStamp - t.at > TYPE_RESET_MS ? "" : t.text) +
+        e.key.toLowerCase();
+      t.at = e.timeStamp;
+      const hit =
+        nav.find((r) => r.label.toLowerCase().startsWith(t.text)) ??
+        nav.find((r) => r.label.toLowerCase().includes(t.text));
+      go(hit);
+      e.preventDefault();
+      return;
+    } else handled = false;
+    if (handled) {
+      typed.current.text = "";
+      e.preventDefault();
+    }
+  };
+
+  return (
+    <div
+      ref={host}
+      className="tree"
+      data-testid="project-tree"
+      tabIndex={0}
+      role="tree"
+      aria-label="Проект"
+      onKeyDown={onKeyDown}
+    >
+      {rows.map((r) => (
+        <div
+          key={r.key}
+          data-key={r.key}
+          role="treeitem"
+          aria-expanded={
+            r.kind === "dir" || r.kind === "root" ? r.open : undefined
+          }
+          aria-selected={r.key === sel}
+          className={["n", r.cls, r.key === sel ? "sel" : ""]
+            .filter(Boolean)
+            .join(" ")}
+          style={{ paddingLeft: INDENT0 + INDENT * r.depth }}
+          onClick={() => {
+            if (r.kind === "more") return;
+            setSel(r.key);
+            activate(r);
+          }}
+        >
+          <span className="tw-a">
+            {r.kind === "dir" || r.kind === "root" ? (r.open ? "▾" : "▸") : ""}
+          </span>
+          {r.kind !== "more" && (
+            <span className="ic">
+              {r.kind === "file" ? fileIcon(r.label) : folderIcon(r.rel)}
+            </span>
+          )}
+          {r.kind === "root" ? (
+            <>
+              <span className="lbl">
+                <b>{r.label}</b>
+              </span>
+              <span className="hint">{tildify(root)}</span>
+            </>
+          ) : (
+            <span className="lbl">{r.label}</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
