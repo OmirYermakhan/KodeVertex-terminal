@@ -88,6 +88,21 @@ describe('StatusBar', () => {
     expect(container.textContent).toContain('170k/200k')
   })
 
+  it('открыт файл в просмотре — справа «Имя · строка:столбец · Язык · UTF-8» вместо часов (макет 07)', () => {
+    const now = new Date(2026, 0, 1, 14, 32)
+    const { container, rerender } = render(
+      <StatusBar cwd="/Users/me/shop-app" git={git} now={now} file={{ name: 'PaymentService.kt', line: 10, col: 1 }} />,
+    )
+    expect(container.querySelector('.sg.right')!.textContent).toBe('PaymentService.kt · 10:1 · Kotlin · UTF-8')
+    expect(container.textContent).not.toContain('14:32')
+    rerender(<StatusBar cwd="/Users/me/shop-app" git={git} now={now} file={{ name: 'App.tsx', line: 3, col: 1 }} />)
+    expect(container.querySelector('.sg.right')!.textContent).toBe('App.tsx · 3:1 · TypeScript · UTF-8')
+    rerender(<StatusBar cwd="/Users/me/shop-app" git={git} now={now} file={{ name: 'LICENSE', line: 1, col: 1 }} />)
+    expect(container.querySelector('.sg.right')!.textContent).toBe('LICENSE · 1:1 · Текст · UTF-8')
+    rerender(<StatusBar cwd="/Users/me/shop-app" git={git} now={now} file={null} />)
+    expect(container.querySelector('.sg.right')!.textContent).toBe('14:32')
+  })
+
   it('omits the branch segment without git', () => {
     const { container } = render(<StatusBar cwd="/tmp/x" git={null} now={new Date(2026, 0, 1, 9, 5)} />)
     expect(container.textContent).not.toContain('⎇')

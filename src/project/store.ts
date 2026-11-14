@@ -31,6 +31,8 @@ interface ProjectState {
   tabs: ViewerTab[]
   active: number
   focusLine: number | null
+  /** Текущая строка (с 1) открытых файлов: клик в просмотре, открытие со строкой. */
+  cursors: Record<string, number>
   /** Относительные пути, которые правил Claude в этой сессии. */
   claudeTouched: Set<string>
   /** Повторное нажатие на активный инструмент закрывает панель. */
@@ -42,6 +44,7 @@ interface ProjectState {
   openFile(rel: string, line?: number): void
   openDiff(rel: string, rev: string | null): void
   closeTab(i: number): void
+  setCursor(rel: string, line: number): void
   markClaudeTouched(absPath: string): void
 }
 
@@ -84,6 +87,7 @@ export const useProject = create<ProjectState>((set, get) => {
     tabs: [],
     active: 0,
     focusLine: null,
+    cursors: {},
     claudeTouched: new Set(),
     toggle: (tool) => set((s) => ({ tool: s.tool === tool ? null : tool })),
     close: () => set({ tool: null }),
@@ -101,7 +105,7 @@ export const useProject = create<ProjectState>((set, get) => {
         (root) => {
           if (root === get().root) return
           seq++
-          set({ root, changes: null, notGit: false, tabs: [], active: 0, focusLine: null, claudeTouched: new Set() })
+          set({ root, changes: null, notGit: false, tabs: [], active: 0, focusLine: null, cursors: {}, claudeTouched: new Set() })
           run()
         },
         () => {},
@@ -117,7 +121,11 @@ export const useProject = create<ProjectState>((set, get) => {
           run()
         }, wait)
     },
-    openFile: (rel, line) => set((s) => openTab(s, { kind: 'file', rel }, line ?? null)),
+    openFile: (rel, line) =>
+      set((s) => ({
+        ...openTab(s, { kind: 'file', rel }, line ?? null),
+        ...(line ? { cursors: { ...s.cursors, [rel]: line } } : {}),
+      })),
     openDiff: (rel, rev) => set((s) => openTab(s, { kind: 'diff', rel, rev }, null)),
     closeTab: (i) =>
       set((s) => {
@@ -126,6 +134,7 @@ export const useProject = create<ProjectState>((set, get) => {
         const active = i < s.active || (i === s.active && i >= tabs.length) ? Math.max(0, s.active - 1) : s.active
         return { tabs, active: Math.min(active, Math.max(0, tabs.length - 1)) }
       }),
+    setCursor: (rel, line) => set((s) => (s.cursors[rel] === line ? {} : { cursors: { ...s.cursors, [rel]: line } })),
     markClaudeTouched: (absPath) => {
       const root = get().root
       if (!root) return

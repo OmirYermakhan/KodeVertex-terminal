@@ -72,6 +72,10 @@ export interface ThemeTokens {
   selDim: string
   /** Значки полосы инструментов (макет 07 .sb: #a8adb5). */
   sbIcon: string
+  /** Просмотр файла (макет 07 .ln): номера строк, фон текущей строки и её номер. */
+  edLn: string
+  edCur: string
+  edCurLn: string
 }
 
 export interface Theme {
@@ -147,6 +151,9 @@ export const THEMES: Record<ThemeId, Theme> = {
       sel: '#26301a',
       selDim: '#1a1e22',
       sbIcon: '#a8adb5',
+      edLn: '#4b5157',
+      edCur: '#171a1e',
+      edCurLn: '#a8aeb5',
     },
   },
   warm: {
@@ -214,6 +221,9 @@ export const THEMES: Record<ThemeId, Theme> = {
       sel: '#3a3628',
       selDim: '#2a2825',
       sbIcon: '#a8adb5',
+      edLn: '#58544d',
+      edCur: '#272523',
+      edCurLn: '#aaa397',
     },
   },
   cold: {
@@ -281,6 +291,9 @@ export const THEMES: Record<ThemeId, Theme> = {
       sel: '#253a5c',
       selDim: '#212a37',
       sbIcon: '#a8adb5',
+      edLn: '#4c5563',
+      edCur: '#1f2630',
+      edCurLn: '#a3adba',
     },
   },
   light: {
@@ -348,6 +361,9 @@ export const THEMES: Record<ThemeId, Theme> = {
       sel: '#d9e3c2',
       selDim: '#e6e5de',
       sbIcon: '#5f646b',
+      edLn: '#a9acaf',
+      edCur: '#ebeae2',
+      edCurLn: '#4f545a',
     },
   },
   as: {
@@ -415,6 +431,9 @@ export const THEMES: Record<ThemeId, Theme> = {
       sel: '#2e436e',
       selDim: '#2a3346',
       sbIcon: '#a8adb5',
+      edLn: '#4b5059',
+      edCur: '#26282e',
+      edCurLn: '#a1a3ab',
     },
   },
 }

@@ -1,11 +1,18 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { act } from 'react'
-import { beforeEach, describe, expect, it } from 'vitest'
-import Viewer from './Viewer'
-import { useProject } from './store'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('./api', () => ({
+  projectRead: async () => ({ kind: 'text', lines: ['fun main() {}'], truncated: false, size: 13 }),
+  gitDiff: async () => '',
+}))
+vi.mock('../attach/preview/api', () => ({ openPath: async () => {} }))
+
+const { default: Viewer } = await import('./Viewer')
+const { useProject } = await import('./store')
 
 describe('Viewer', () => {
-  beforeEach(() => useProject.setState({ tabs: [], active: 0 }))
+  beforeEach(() => useProject.setState({ tabs: [], active: 0, root: '/r', changes: [], notGit: false, cursors: {} }))
 
   it('без вкладок — ничего', () => {
     const { container } = render(<Viewer />)
@@ -26,15 +33,41 @@ describe('Viewer', () => {
     render(<Viewer />)
     const tabs = screen.getAllByRole('tab')
     expect(tabs.map((t) => t.textContent)).toEqual([
-      'PaymentApi.kt✕',
-      'PaymentService.kt · изменения✕',
-      'PayScreen.kt · a41c9e2✕',
+      'KPaymentApi.kt✕',
+      'KPaymentService.kt · изменения✕',
+      'KPayScreen.kt · a41c9e2✕',
     ])
     expect(tabs[1]).toHaveClass('et', 'on')
     fireEvent.click(tabs[0])
     expect(useProject.getState().active).toBe(0)
     fireEvent.click(screen.getAllByRole('button', { name: 'Закрыть вкладку' })[2])
     expect(useProject.getState().tabs).toHaveLength(2)
+  })
+
+  it('вкладка файла: значок, имя цветом git-статуса; содержимое — просмотр файла', async () => {
+    act(() =>
+      useProject.setState({
+        changes: [
+          { path: 'app/PaymentApi.kt', status: 'M' },
+          { path: 'app/PaymentService.kt', status: 'A' },
+          { path: 'app/New.kt', status: '?' },
+        ],
+        tabs: [
+          { kind: 'file', rel: 'app/PaymentApi.kt' },
+          { kind: 'file', rel: 'app/PaymentService.kt' },
+          { kind: 'file', rel: 'app/New.kt' },
+          { kind: 'file', rel: 'README.md' },
+        ],
+        active: 1,
+      }),
+    )
+    render(<Viewer />)
+    const tabs = screen.getAllByRole('tab')
+    expect(tabs[0].querySelector('.fi.pfi.kt')?.textContent).toBe('K')
+    expect(tabs[3].querySelector('.fi.pfi.md')).not.toBeNull()
+    expect(tabs.map((t) => t.className)).toEqual(['et mod', 'et on add', 'et new', 'et'])
+    expect(await screen.findByText('fun')).toBeInTheDocument()
+    expect(document.querySelector('.ed-body .code')).not.toBeNull()
   })
 
   it('открылась вкладка изменений — фокус в просмотре', () => {

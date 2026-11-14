@@ -240,7 +240,32 @@ body.tw-resizing, body.tw-resizing * { cursor: col-resize !important; user-selec
 .et.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--acc); }
 .et .x { color: var(--muted); font-size: 11px; margin-left: 4px; padding: 0; border: 0; background: transparent; font-family: inherit; cursor: default; }
 .et .x:hover { color: var(--strong); }
+.et.mod { color: var(--vcsMod); }
+.et.add { color: var(--vcsAdd); }
+.et.new { color: var(--vcsNew); }
+.et.del { color: var(--vcsDel); text-decoration: line-through; }
 .ed-body { flex: 1; min-height: 0; overflow: auto; }
+/* Просмотр файла (макет 07 .ebar/.ro/.ebtn/.code/.ln): видимое окно строк, высота строки 21px. */
+.ed-body.fv { display: flex; flex-direction: column; overflow: hidden; }
+.ebar { display: flex; align-items: center; gap: 8px; height: 28px; box-sizing: border-box; padding: 0 12px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--rule); flex: none; white-space: nowrap; }
+.ebar .crumb { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ebar .crumb b { color: var(--text); font-weight: 400; }
+.ro { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 11px; font-family: var(--font-code); color: var(--muted); border: 1px solid var(--rule); border-radius: 4px; padding: 1px 7px; flex: none; box-sizing: border-box; }
+.ebtn { font-size: 11.5px; font-family: var(--font-text); line-height: normal; color: var(--text); border: 1px solid var(--rule); border-radius: 4px; padding: 1px 8px; margin: 0; box-sizing: border-box; background: transparent; cursor: default; flex: none; }
+.ebtn:hover { color: var(--strong); background: var(--hover); }
+.fv .code { flex: 1; min-height: 0; overflow: auto; font-family: var(--font-code); font-size: 13px; line-height: 21px; padding-top: 6px; color: var(--text); font-variant-ligatures: var(--liga); }
+.fv .code-in { display: inline-block; min-width: 100%; box-sizing: border-box; }
+.fv .ln { display: block; white-space: pre; height: 21px; }
+.fv .ln .g { display: inline-block; width: 46px; box-sizing: border-box; text-align: right; padding-right: 10px; color: var(--edLn); user-select: none; }
+.fv .ln .vc { display: inline-block; width: 3px; height: 21px; vertical-align: top; margin-right: 12px; }
+.fv .ln .vc.m { background: var(--vcsMod); }
+.fv .ln .vc.a { background: var(--vcsAdd); }
+.fv .ln.cur { background: var(--edCur); }
+.fv .ln.cur .g { color: var(--edCurLn); }
+.ed-note { flex: none; padding: 5px 12px; font-size: 12px; color: var(--warn); border-bottom: 1px solid var(--rule); }
+.ed-msg { padding: 24px 16px; font-size: 12.5px; color: var(--muted); text-align: center; }
+.ed-link { padding: 0; margin: 0; border: 0; background: transparent; font: inherit; color: var(--accText); cursor: pointer; }
+.ed-link:hover { text-decoration: underline; }
 
 /* Окно настроек */
 .st-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 100; }

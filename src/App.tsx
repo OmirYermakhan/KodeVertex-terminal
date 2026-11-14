@@ -45,6 +45,11 @@ export default function App() {
   // Вкладка изменений занимает всю область справа: панели терминала скрыты как неактивная вкладка
   // (смонтированы; при возврате — фокус в строку ввода и доведённые анимации, см. PaneView).
   const diffOpen = useProject((s) => s.tabs[s.active]?.kind === 'diff')
+  const viewerFile = useProject((s) => {
+    const t = s.tabs[s.active]
+    return t?.kind === 'file' ? t.rel : null
+  })
+  const viewerLine = useProject((s) => (viewerFile ? (s.cursors[viewerFile] ?? 1) : 1))
   const attachments = useAttachCount((s) => (focusedPane ? (s.counts[focusedPane] ?? 0) : 0))
 
   useEffect(() => {
@@ -107,7 +112,22 @@ export default function App() {
         </div>
       </div>
       <div data-testid="statusbar" className="statusbar">
-        <StatusBar cwd={cwd} git={git} claude={claude} attachments={attachments} permissionMode={permissionMode} />
+        <StatusBar
+          cwd={cwd}
+          git={git}
+          claude={claude}
+          attachments={attachments}
+          permissionMode={permissionMode}
+          file={
+            viewerFile
+              ? {
+                  name: viewerFile.slice(viewerFile.lastIndexOf('/') + 1),
+                  line: viewerLine,
+                  col: 1,
+                }
+              : null
+          }
+        />
       </div>
       <Toasts />
       {paletteOpen && <CommandPalette onClose={() => useUi.getState().setPaletteOpen(false)} />}

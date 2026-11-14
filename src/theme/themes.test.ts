@@ -6,7 +6,7 @@ const ids = ['kv', 'warm', 'cold', 'light', 'as'] as ThemeId[]
 describe('themes', () => {
   it('every theme has all tokens as hex colors', () => {
     const keys = Object.keys(THEMES.as.tokens)
-    expect(keys).toHaveLength(60)
+    expect(keys).toHaveLength(63)
     for (const id of ids) {
       expect(Object.keys(THEMES[id].tokens).sort()).toEqual([...keys].sort())
       for (const v of Object.values(THEMES[id].tokens)) expect(v).toMatch(/^#[0-9a-f]{6}$/i)
@@ -18,6 +18,9 @@ describe('themes', () => {
   it('цвета git как в макете 07 (тема AS); удалённый — приглушённый', () => {
     expect(THEMES.as.tokens).toMatchObject({ vcsMod: '#6c9fef', vcsAdd: '#73bd79', vcsNew: '#d1675a', vcsDel: '#6f737a', hover: '#2f3136', sbIcon: '#a8adb5', sel: '#2e436e', selDim: '#2a3346' })
     for (const id of ids) expect(THEMES[id].tokens.vcsDel).toBe(THEMES[id].tokens.muted)
+  })
+  it('поля кода в просмотре файла как в макете 07 (тема AS)', () => {
+    expect(THEMES.as.tokens).toMatchObject({ edLn: '#4b5059', edCur: '#26282e', edCurLn: '#a1a3ab' })
   })
   it('only light is not dark', () => {
     expect(THEMES.light.dark).toBe(false)
