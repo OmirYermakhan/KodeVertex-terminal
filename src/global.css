@@ -163,13 +163,12 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .tab:hover .tab-close { visibility: visible; }
 .tab-close:hover { color: var(--strong); }
 
-/* Кнопка проекта слева вверху (макет 07 .proj): значок с двумя буквами, имя, ветка, «▾».
+/* Кнопка проекта слева вверху (макет 07 .proj): значок с двумя буквами, имя, ветка.
    margin-right 14 + gap 4 = 18 — как gap 8 + margin-left 10 у .tabs макета. */
 .proj { display: flex; align-items: center; gap: 7px; flex: none; height: 26px; margin: 0 14px 0 0; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; font-family: var(--font-text); font-size: 12.5px; font-weight: 500; line-height: normal; color: var(--strong); white-space: nowrap; user-select: none; cursor: default; }
 .proj.on, .proj:hover { background: var(--hover); }
 .proj .pi { width: 16px; height: 16px; border-radius: 4px; background: var(--projIcon); color: #fff; font-size: 9.5px; font-weight: 600; display: grid; place-items: center; font-family: var(--font-text); }
 .proj .br { color: var(--muted); font-weight: 400; display: flex; align-items: center; gap: 5px; }
-.proj .chev { color: var(--muted); font-size: 10px; }
 
 /* Окно под полосой вкладок: полоса инструментов, окно инструмента, панели терминала, просмотр (макет 07 .body/.main). */
 .win-body { flex: 1; display: flex; min-height: 0; }

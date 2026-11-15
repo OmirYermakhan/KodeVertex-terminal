@@ -7,7 +7,7 @@ import { useProject, type Tool } from './store'
 
 /** Заголовок окна (макет 07 `.twh`): название, серая подпись, кнопки справа; «—» — скрыть. */
 const HEAD: Record<Tool, { title: string; sub: (branch: string | null) => string; acts: string[] }> = {
-  project: { title: 'Проект', sub: () => '▾', acts: ['⌖', '⇕', '⋮'] },
+  project: { title: 'Проект', sub: () => '', acts: ['⌖', '⇕', '⋮'] },
   changes: { title: 'Изменения', sub: (b) => b ?? '', acts: ['↻', '⇕'] },
   git: { title: 'Git', sub: (b) => (b ? `лог · ${b}` : 'лог'), acts: ['⌕', '↻'] },
 }
@@ -84,7 +84,7 @@ export default function ToolWindow({ git }: { git: GitInfo | null }) {
       }}
     >
       <div className="twh">
-        {head.title} <span className="sub">{head.sub(branch)}</span>
+        {head.title} {head.sub(branch) && <span className="sub">{head.sub(branch)}</span>}
         <div className="acts">
           {head.acts.map((a) =>
             // ↻ — перечитать git-статус (лог перечитается вслед за ним).

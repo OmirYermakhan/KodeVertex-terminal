@@ -10,7 +10,7 @@ export function projectInitials(name: string): string {
 }
 
 /**
- * Кнопка проекта слева вверху (макет 07 `.proj`): значок, имя, ветка, «▾».
+ * Кнопка проекта слева вверху (макет 07 `.proj`): значок, имя, ветка.
  * Имя — как в строке состояния (projectName), ветка — из того же git, что считает App.
  * Клик — окно «Проект» (повторный — скрыть).
  */
@@ -33,7 +33,6 @@ export default function ProjectButton({ cwd, git }: { cwd: string | undefined; g
           {git.branch}
         </span>
       )}
-      <span className="chev">▾</span>
     </button>
   )
 }

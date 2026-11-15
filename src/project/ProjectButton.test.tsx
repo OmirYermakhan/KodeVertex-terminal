@@ -13,7 +13,7 @@ describe('ProjectButton', () => {
     expect(b).toHaveTextContent('SA')
     expect(b).toHaveTextContent('shop-app')
     expect(b).toHaveTextContent('feature/payments')
-    expect(b).toHaveTextContent('▾')
+    expect(b).not.toHaveTextContent('▾')
   })
 
   it('без git — имя папки и без ветки', () => {
