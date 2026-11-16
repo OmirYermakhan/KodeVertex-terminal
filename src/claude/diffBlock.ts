@@ -58,11 +58,25 @@ function textOf(n: HNode): string {
 const span = (cls: string[], children: HNode[]): HNode => ({ type: 'element', tagName: 'span', properties: { className: cls }, children })
 const txt = (value: string): HNode => ({ type: 'text', value })
 
+/** Угаданные языки по коду: тот же блок (ответ дописан, перерисовка) не угадывается заново. */
+const guessed = new Map<string, string | null>()
+const GUESSED_MAX = 64
+
+/** guessLanguage с памятью: highlightAuto прогоняет код через все языки — дорого. */
+function guessCached(code: string): string | null {
+  const hit = guessed.get(code)
+  if (hit !== undefined) return hit
+  const lang = guessLanguage(code)
+  if (guessed.size >= GUESSED_MAX) guessed.delete(guessed.keys().next().value as string)
+  guessed.set(code, lang)
+  return lang
+}
+
 /**
  * Строки diff → hast: `span.md-dl.<вид>` на строку (знак `span.md-dm` + подсвеченный код, `\n` в конце,
  * чтобы копирование давало тот же текст). Каждый файл (`diff --git`) подсвечивается своим языком.
  */
-export function diffToHast(text: string, hintLang: string | null): HNode[] {
+export function diffToHast(text: string, hintLang: string | null, guess = true): HNode[] {
   const lines = parseDiff(text.replace(/\n$/, ''))
   // Разделы по файлам: язык из `+++ b/путь` / `diff --git`, иначе подсказка, иначе угадывается по коду.
   const sections: number[][] = []
@@ -75,7 +89,8 @@ export function diffToHast(text: string, hintLang: string | null): HNode[] {
     const header = idx.filter((i) => lines[i].kind === 'm').map((i) => lines[i].code).join('\n')
     const codeIdx = idx.filter((i) => lines[i].kind === 'a' || lines[i].kind === 'd' || lines[i].kind === 'c')
     const code = codeIdx.map((i) => lines[i].code)
-    const lang = langFromText(header) ?? hintLang ?? guessLanguage(code.join('\n'))
+    // Без имени файла язык угадывается (highlightAuto); guess false — нет (блок ещё печатается).
+    const lang = langFromText(header) ?? hintLang ?? (guess ? guessCached(code.join('\n')) : null)
     const lit = highlightLinesIn(code, lang)
     const pieces = new Map(codeIdx.map((i, k) => [i, lit[k]]))
     for (const i of idx) {
@@ -96,8 +111,13 @@ function classes(n: HNode | undefined): string[] {
   return Array.isArray(c) ? (c as string[]) : []
 }
 
-/** rehype-плагин (до rehype-highlight): блоки diff → строки с фоном и подсветкой языка файла. */
-export function rehypeDiff() {
+/**
+ * rehype-плагин (до rehype-highlight): блоки diff → строки с фоном и подсветкой языка файла.
+ * guess: false — язык без имени файла не угадывается (печатающийся хвост ответа: угадывание на
+ * каждый токен — highlightAuto всего блока); угадается, когда блок допишется.
+ */
+export function rehypeDiff(options: { guess?: boolean } = {}) {
+  const guess = options.guess !== false
   return (tree: HNode) => {
     const walk = (parent: HNode) => {
       const kids = parent.children ?? []
@@ -120,7 +140,7 @@ export function rehypeDiff() {
             break
           }
         }
-        code.children = diffToHast(text, hint)
+        code.children = diffToHast(text, hint, guess)
         code.properties = { ...code.properties, className: ['no-highlight', 'md-diff-code'] }
         n.properties = { ...n.properties, className: [...classes(n), 'md-diff'] }
       })

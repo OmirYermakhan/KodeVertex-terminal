@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { act } from 'react'
+import { act, Profiler } from 'react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { useClaudeSessions } from '../claude/sessionStore'
 import { initialClaude, type ClaudeState } from '../claude/reducer'
@@ -75,5 +75,24 @@ describe('TabBar', () => {
     expect(useTabs.getState().active).toBe(useTabs.getState().tabs[0].id)
     fireEvent(first, new MouseEvent('auxclick', { bubbles: true, button: 1 }))
     expect(useTabs.getState().tabs).toHaveLength(1)
+  })
+
+  it('токены ответа в панели (статус тот же) полосу не перерисовывают; смена статуса — перерисовывает', () => {
+    const [a] = useTabs.getState().tabs
+    let renders = 0
+    render(
+      <Profiler id="tabs" onRender={() => void renders++}>
+        <TabBar />
+      </Profiler>,
+    )
+    const busy = { ...mockupScene(), agents: mockupScene().agents.filter((x) => x.status !== 'waiting') }
+    setSession(a.focused, busy)
+    const before = renders
+    setSession(a.focused, { ...busy, items: [...busy.items, { type: 'note', text: 'токен' }] })
+    setSession(a.focused, { ...busy, items: [...busy.items, { type: 'note', text: 'ещё токен' }] })
+    expect(renders).toBe(before)
+    setSession(a.focused, mockupScene())
+    expect(renders).toBe(before + 1)
+    expect(dots()).toEqual(['waiting'])
   })
 })

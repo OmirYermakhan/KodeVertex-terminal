@@ -2,7 +2,7 @@
 // чтобы его читали лента панели, панель агентов и статус-бар.
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { create } from 'zustand'
-import { canEdit, cancelPrompts, freezeTodos, clearSession, dropSuggestion, decidePermission, finishQuestion, gotoStep, initialClaude, newProcess, newSession, questionSteps, recordAnswer, reduceClaude, replaceFrom, userSent, type ClaudeState } from './reducer'
+import { canEdit, cancelPrompts, closeUnfinished, freezeTodos, clearSession, dropSuggestion, decidePermission, finishQuestion, gotoStep, initialClaude, newProcess, newSession, questionSteps, recordAnswer, reduceClaude, replaceFrom, userSent, type ClaudeState } from './reducer'
 import { allowResponse, alwaysResponse, answerResponse, denyResponse, parsePermissionRequest } from './questions'
 import type { FeedClaudeItem, PermissionDecision } from './reducer'
 import { historyItems, type SessionHistory, type SessionInfo } from './resume'
@@ -111,29 +111,48 @@ function get(paneId: string): PaneClaude {
   )
 }
 
+/**
+ * Изменить сессию панели. Сессии нет (панель закрыли, stopClaude) — ничего: поздний ответ
+ * (смена модели, ошибка отправки, ответ на вопрос) не воскрешает сессию закрытой панели, которая
+ * потом ещё и сохранилась бы. Создаёт сессию только ensure — в начале действий пользователя.
+ */
 function patch(paneId: string, f: (p: PaneClaude) => PaneClaude): void {
-  useClaudeSessions.setState((st) => ({ sessions: { ...st.sessions, [paneId]: f(get(paneId)) } }))
+  useClaudeSessions.setState((st) => {
+    const cur = st.sessions[paneId]
+    return cur ? { sessions: { ...st.sessions, [paneId]: f(cur) } } : st
+  })
+}
+
+/** Сессия панели есть (новая — по умолчанию): с этого начинаются действия пользователя. */
+function ensure(paneId: string): void {
+  if (paneId in useClaudeSessions.getState().sessions) return
+  useClaudeSessions.setState((st) => (paneId in st.sessions ? st : { sessions: { ...st.sessions, [paneId]: get(paneId) } }))
 }
 
 const patchState = (paneId: string, f: (s: ClaudeState) => ClaudeState) =>
   patch(paneId, (p) => ({ ...p, state: f(p.state) }))
 
-/** Ход оборвался ошибкой: карточка ошибки, сессия не занята, главный агент — «Ошибка». */
+/**
+ * Ход оборвался ошибкой: карточка ошибки, сессия не занята, агенты хода — «Ошибка».
+ * Недоигранное закрыто (closeUnfinished): иначе следующий ответ допишется в старую карточку над
+ * новым «Вы», а действие так и крутило бы «Сейчас выполняю…».
+ */
 function failed(s: ClaudeState, text: string, now: number): ClaudeState {
   return {
     ...s,
     busy: false,
     pending: 0,
     currentAgentId: null,
-    items: [...s.items, { type: 'error', text }],
+    items: [...closeUnfinished(s.items), { type: 'error', text }],
     agents: s.agents.map((a) =>
-      a.id === 'main' && (a.status === 'running' || a.status === 'waiting') && a.startedAt > 0
+      (a.status === 'running' || a.status === 'waiting') && a.startedAt > 0
         ? { ...a, status: 'error', now: 'Ошибка', endedAt: now }
         : a,
     ),
   }
 }
 
+/** Ход прерван (⌃C, смена каталога, правка): сессия не занята, недоигранное закрыто. */
 function stopped(s: ClaudeState, now: number): ClaudeState {
   if (!s.busy) return s
   return {
@@ -141,6 +160,7 @@ function stopped(s: ClaudeState, now: number): ClaudeState {
     busy: false,
     pending: 0,
     currentAgentId: null,
+    items: closeUnfinished(s.items),
     agents: s.agents.map((a) =>
       a.status === 'running' || (a.status === 'waiting' && a.startedAt > 0) ? { ...a, status: 'done', now: 'Остановлено', endedAt: now } : a,
     ),
@@ -208,9 +228,12 @@ function start(paneId: string): Proc {
     const prevState = get(paneId).state
     const before = prevState.pending
     patchState(paneId, (s) => reduceClaude(s, line, Date.now(), proc.interrupted))
-    // Закончились правки файлов или команды — панель проекта обновляется.
-    const tools = finishedTools(prevState, get(paneId).state)
-    if (tools.length > 0) emitClaudeEvent({ kind: 'tools', tools })
+    // Закончились правки файлов или команды — панель проекта обновляется. Действия закрывают только
+    // tool_result и result: на остальных строках (токены ответа) ленту не просматриваем.
+    if (line.includes('"tool_result"') || line.includes('"result"')) {
+      const tools = finishedTools(prevState, get(paneId).state)
+      if (tools.length > 0) emitClaudeEvent({ kind: 'tools', tools })
+    }
     // Ход закончился (не прерван) — следующее сообщение из очереди.
     if (before > 0 && get(paneId).state.pending === 0 && !proc.interrupted) sendNextQueued(paneId, undefined)
   })
@@ -348,6 +371,7 @@ const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
  * (с `--resume`, если сессия была). В ленте — заметка, статус-бар обновляется ответом set_model.
  */
 export async function chooseModel(paneId: string, paneCwd: string | undefined, c: ModelChoice): Promise<void> {
+  ensure(paneId)
   const cwd = switchCwd(paneId, paneCwd)
   if (cwd === null) {
     patchState(paneId, (s) => failed(s, NO_CWD, Date.now()))
@@ -490,6 +514,7 @@ function switchCwd(paneId: string, paneCwd: string | undefined): string | null {
  * в ленте — строка с каталогом и подсказкой; вопросы дальше — через askClaude.
  */
 export function enterClaude(paneId: string, paneCwd: string | undefined): boolean {
+  ensure(paneId)
   const cwd = switchCwd(paneId, paneCwd)
   if (cwd === null) {
     patchState(paneId, (s) => failed(s, NO_CWD, Date.now()))
@@ -534,6 +559,7 @@ export async function resumeClaude(
   s: SessionInfo,
   onReplace?: (from: number) => void,
 ): Promise<boolean> {
+  ensure(paneId)
   const seq = (resumeSeqs.get(paneId) ?? 0) + 1
   resumeSeqs.set(paneId, seq)
   const cwd = paneCwd ?? get(paneId).cwd
@@ -548,7 +574,8 @@ export async function resumeClaude(
     if (resumeSeqs.get(paneId) === seq) addError(paneId, `Не удалось прочитать разговор: ${errText(e)}`)
     return false
   }
-  if (resumeSeqs.get(paneId) !== seq) return false
+  // Панель закрыли, пока читалась история: процесс не запускаем.
+  if (resumeSeqs.get(paneId) !== seq || !(paneId in useClaudeSessions.getState().sessions)) return false
   switchCwd(paneId, cwd)
   onReplace?.(get(paneId).state.items.length)
   // Очередь не теряется: она уходит в продолженный разговор (в его каталог), как обычно — по одному за ход.
@@ -596,6 +623,7 @@ export function claudeCwdKnown(paneId: string, paneCwd: string | undefined): boo
  * с тех пор перешла в другой каталог — новая сессия там; начало новой сессии отмечается в ленте.
  */
 export async function askClaude(paneId: string, paneCwd: string | undefined, text: string, tokens?: Attachment[]): Promise<void> {
+  ensure(paneId)
   const toks = tokens && tokens.length > 0 ? tokens : undefined
   // Ход идёт (в т. ч. ждёт ответа на вопрос или разрешение) — в очередь: в stdin посреди хода не пишем.
   if (get(paneId).state.busy) {

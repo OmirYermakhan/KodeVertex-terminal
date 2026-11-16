@@ -1,19 +1,61 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ARM_MS } from './PermissionPrompt'
 import type { Agent } from './reducer'
 import { OWN_ANSWER, QuestionPrompt, RECOMMENDED_TAG, SEND_ANSWERS, promptKeys } from './QuestionPrompt'
 import { questionItem } from './fixtures/questionItem'
 
 const agent = { id: 'main', name: 'Главный', model: 'claude-opus-5-5' } as Agent
 
-function setup(item = questionItem()) {
+const arm = () => act(() => void vi.advanceTimersByTime(ARM_MS))
+
+/** armed — сразу после отсчёта ARM_MS (как будто вопрос висит давно). */
+function setup(item = questionItem(), armed = true) {
   const h = { onAnswer: vi.fn(), onStep: vi.fn(), onSubmit: vi.fn(), onLeave: vi.fn() }
   const r = render(<QuestionPrompt item={item} agent={agent} {...h} />)
   const box = r.container.querySelector('.aprompt') as HTMLElement
+  if (armed) arm()
   return { ...r, h, box, key: (k: string) => fireEvent.keyDown(box, { key: k }) }
 }
 
 describe('QuestionPrompt', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it(`первые ${ARM_MS} мс ↵ и щелчок по варианту не отвечают; набор своего ответа — сразу; новый вопрос — отсчёт заново`, () => {
+    const one = questionItem({ questions: [questionItem().questions[0]] })
+    const { key, h, box, rerender } = setup(one, false)
+    expect(box.querySelector('.q-opts')).toHaveClass('p-wait')
+    key('Enter')
+    fireEvent.click(screen.getAllByRole('option')[1])
+    act(() => void vi.advanceTimersByTime(ARM_MS - 1))
+    key('Enter')
+    expect(h.onAnswer).not.toHaveBeenCalled()
+    // Своё — печатается и отправляется сразу: случайным ↵ его не набрать.
+    key('M')
+    const input = box.querySelector('input.q-own') as HTMLInputElement
+    expect(input.value).toBe('M')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(h.onAnswer).toHaveBeenCalledWith(0, 'M')
+    h.onAnswer.mockClear()
+    act(() => void vi.advanceTimersByTime(1))
+    expect(box.querySelector('.q-opts')).not.toHaveClass('p-wait')
+    const blue = screen.getAllByRole('option')[1]
+    fireEvent.mouseDown(blue)
+    expect(h.onAnswer).not.toHaveBeenCalled()
+    fireEvent.click(blue)
+    expect(h.onAnswer).toHaveBeenCalledWith(0, 'Blue')
+    // Следующий вопрос в том же блоке — снова ждёт.
+    rerender(<QuestionPrompt item={{ ...one, requestId: 'next' }} agent={agent} {...h} />)
+    h.onAnswer.mockClear()
+    key('1')
+    key('Enter')
+    expect(h.onAnswer).not.toHaveBeenCalled()
+    arm()
+    key('Enter')
+    expect(h.onAnswer).toHaveBeenCalledWith(0, 'Red (Recommended)')
+  })
+
   it('заголовок, «1 из 2», вкладки, вопрос; варианты с описанием и меткой «рекомендуется»', () => {
     const { box } = setup()
     expect(box.querySelector('.ap-who')!.textContent).toBe('? Вопрос · Главный · Opus 5.5')

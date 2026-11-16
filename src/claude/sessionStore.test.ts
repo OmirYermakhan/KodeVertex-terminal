@@ -966,3 +966,89 @@ describe('смена режима разрешений в настройках',
     }
   })
 })
+
+describe('ход оборвался: недоигранное закрыто', () => {
+  let ch: { onLine: { onmessage(m: string): void }; onExit: { onmessage(e: unknown): void } } | null = null
+  beforeEach(() => {
+    stopClaude('u')
+    invoke.mockReset()
+    ch = null
+    invoke.mockImplementation((cmd: string, a: Record<string, unknown>) => {
+      if (cmd === 'claude_start') ch = a as unknown as typeof ch
+      return Promise.resolve(cmd === 'claude_start' ? 'pu' : undefined)
+    })
+  })
+  const delta = (text: string) =>
+    JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text } } })
+  const bash = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'b1', name: 'Bash', input: { command: 'ls' } }] } })
+
+  it('выход посреди ответа: ответ и действие закрыты, следующий ответ — новой карточкой после нового «Вы»; панель проекта узнаёт про Bash', async () => {
+    const { onClaudeEvent } = await import('./toolEvents')
+    const got: unknown[] = []
+    const off = onClaudeEvent((e) => got.push(e))
+    try {
+      await askClaude('u', '/w', 'первый')
+      ch!.onLine.onmessage(bash)
+      ch!.onLine.onmessage(delta('недописан'))
+      ch!.onExit.onmessage({ code: 1, stderr: 'boom' })
+      const st = useClaudeSessions.getState().sessions.u.state
+      expect(st.items.find((i) => i.type === 'assistant')).toMatchObject({ streaming: false })
+      expect(st.items.find((i) => i.type === 'action')).toMatchObject({ status: 'error' })
+      expect(got).toEqual([{ kind: 'tools', tools: [{ tool: 'Bash', path: null, ok: false }] }])
+      await askClaude('u', '/w', 'второй')
+      ch!.onLine.onmessage(delta('новый'))
+      const answers = items('u').filter((i) => i.type === 'assistant')
+      expect(answers.map((a) => a.type === 'assistant' && a.text)).toEqual(['недописан', 'новый'])
+      const at = (t: string) => items('u').findIndex((i) => (i.type === 'assistant' || i.type === 'user') && i.text === t)
+      expect(at('новый')).toBeGreaterThan(at('второй'))
+    } finally {
+      off()
+    }
+  })
+
+  it('claude_send не прошёл — печатавшийся ответ тоже закрыт', async () => {
+    await askClaude('u', '/w', 'первый')
+    ch!.onLine.onmessage(JSON.stringify({ type: 'result', result: '', duration_ms: 1, total_cost_usd: 0 }))
+    invoke.mockImplementation((cmd: string) => (cmd === 'claude_send' ? Promise.reject(new Error('нет')) : Promise.resolve(undefined)))
+    const sent = askClaude('u', '/w', 'второй')
+    ch!.onLine.onmessage(delta('часть'))
+    await sent
+    const st = useClaudeSessions.getState().sessions.u.state
+    expect(st.busy).toBe(false)
+    expect(st.items.find((i) => i.type === 'assistant')).toMatchObject({ text: 'часть', streaming: false })
+  })
+
+  it('разрешение решено — агент снова «работает», не ждёт до tool_result', async () => {
+    await askClaude('u', '/w', 'запусти')
+    ch!.onLine.onmessage(
+      JSON.stringify({ type: 'control_request', request_id: 'r1', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' } } }),
+    )
+    expect(useClaudeSessions.getState().sessions.u.state.agents[0].status).toBe('waiting')
+    await answerPermission('u', 'r1', 'allow')
+    expect(useClaudeSessions.getState().sessions.u.state.agents[0]).toMatchObject({ status: 'running' })
+  })
+})
+
+describe('поздние ответы после закрытия панели', () => {
+  it('ошибка смены модели и ответ на вопрос не воскрешают сессию закрытой панели', async () => {
+    stopClaude('z')
+    invoke.mockReset()
+    let rejectModel: (e: Error) => void = () => {}
+    invoke.mockImplementation((cmd: string, a: Record<string, unknown>) => {
+      if (cmd === 'claude_control' && (a.request as { subtype?: string }).subtype === 'set_model') {
+        return new Promise((_, rej) => (rejectModel = rej))
+      }
+      return Promise.resolve(cmd === 'claude_start' ? 'pz' : undefined)
+    })
+    const done = chooseModel('z', '/w', { alias: 'opus', effort: null, persist: false })
+    await flush()
+    await flush()
+    stopClaude('z')
+    rejectModel(new Error('нет'))
+    await done
+    await answerQuestion('z', 'rq', 0, 'да')
+    await submitQuestion('z', 'rq')
+    await answerPermission('z', 'rp', 'allow')
+    expect('z' in useClaudeSessions.getState().sessions).toBe(false)
+  })
+})

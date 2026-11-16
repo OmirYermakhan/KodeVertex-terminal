@@ -3,6 +3,7 @@
 // «Отправить ответы». Клавиши: ↑↓/1–9 выбор, пробел — отметить (несколько ответов), ↵, esc — к вводу.
 import { forwardRef, useEffect, useRef, useState } from 'react'
 import { AgentPrompt } from './AgentPrompt'
+import { ARM_MS } from './PermissionPrompt'
 import { agentSignature } from './cards/AssistantCard'
 import { displayLabel, isRecommended, questionKey, type QuestionCursor } from './questions'
 import { questionSteps, type Agent, type FeedClaudeItem } from './reducer'
@@ -47,6 +48,15 @@ export const QuestionPrompt = forwardRef<HTMLDivElement, QuestionPromptProps>(fu
   const ownText = own[item.step] ?? ''
   const setOwnText = (t: string) => setOwn((o) => ({ ...o, [item.step]: t }))
   useEffect(() => setOwn({}), [item.requestId])
+  // Как у разрешения: первые ARM_MS после появления вопроса ↵ и щелчок по варианту не отвечают —
+  // ↵, нажатый ради строки ввода в момент, когда вопрос забрал фокус, не должен выбрать вариант.
+  // Блок не пересоздаётся на каждый вопрос — отсчёт заново по requestId. Набор своего ответа не ждёт.
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    setArmed(false)
+    const t = setTimeout(() => setArmed(true), ARM_MS)
+    return () => clearTimeout(t)
+  }, [item.requestId])
   // Новая вкладка: курсор — на прежний ответ (если был), на шаге отправки — на «Отправить ответы».
   // Прежний ответ не из вариантов — это свой ответ: курсор на поле, текст в нём.
   useEffect(() => {
@@ -107,6 +117,10 @@ export const QuestionPrompt = forwardRef<HTMLDivElement, QuestionPromptProps>(fu
       p.onStep(Math.max(0, Math.min(steps - 1, item.step + (e.key === 'ArrowLeft' ? -1 : 1))))
       return
     }
+    if (e.key === 'Enter' && !armed) {
+      handled()
+      return
+    }
     if (sendStep) {
       const n = total + 1
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -160,10 +174,15 @@ export const QuestionPrompt = forwardRef<HTMLDivElement, QuestionPromptProps>(fu
       role="option"
       aria-selected={sel}
       className={'q-row' + (sel ? ' sel' : '') + extra}
+      aria-disabled={!armed}
       onMouseDown={(e) => {
         // Клик в само поле — ставит каретку как обычно.
         if (e.target === ownRef.current) return setCur({ ...cur, cursor: i })
+        // Фокус остаётся, где был; выбор — по отпусканию (click), а не по нажатию.
         e.preventDefault()
+      }}
+      onClick={(e) => {
+        if (e.target === ownRef.current || !armed) return
         pick(i)
       }}
     >
@@ -211,7 +230,7 @@ export const QuestionPrompt = forwardRef<HTMLDivElement, QuestionPromptProps>(fu
         </div>
       )}
       {sendStep ? (
-        <div className="q-opts" role="listbox">
+        <div className={'q-opts' + (armed ? '' : ' p-wait')} role="listbox">
           {item.questions.map((x, i) =>
             row(
               i,
@@ -236,7 +255,7 @@ export const QuestionPrompt = forwardRef<HTMLDivElement, QuestionPromptProps>(fu
       ) : (
         <>
           <div className="q-text">{q.question}</div>
-          <div className="q-opts" role="listbox">
+          <div className={'q-opts' + (armed ? '' : ' p-wait')} role="listbox">
             {q.options.map((o, i) =>
               row(
                 i,

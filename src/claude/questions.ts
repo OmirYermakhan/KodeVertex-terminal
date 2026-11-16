@@ -95,7 +95,9 @@ const clip = (t: string, max = 160) => (t.length > max ? t.slice(0, max - 1) + '
  * Невидимые и «переворачивающие» символы: управляющие C0 (кроме \n и \t), DEL и C1, мягкий перенос,
  * нулевой ширины и метки направления (U+200B–200F), разделители строк/абзацев (U+2028/2029),
  * встраивания и переопределения направления (U+202A–202E), невидимые операторы (U+2060–2064),
- * изоляты (U+2066–2069), BOM (U+FEFF). Ими команду в запросе можно показать не той, что выполнится.
+ * изоляты (U+2066–2069), BOM (U+FEFF), комбинирующий невидимый (U+034F), монгольский разделитель
+ * гласных (U+180E), селекторы вариантов (U+FE00–FE0F, U+E0100–E01EF) и теги (U+E0000–E007F).
+ * Ими команду в запросе можно показать не той, что выполнится.
  */
 function isHidden(c: number): boolean {
   return (
@@ -108,16 +110,22 @@ function isHidden(c: number): boolean {
     (c >= 0x202a && c <= 0x202e) ||
     (c >= 0x2060 && c <= 0x2064) ||
     (c >= 0x2066 && c <= 0x2069) ||
-    c === 0xfeff
+    c === 0xfeff ||
+    c === 0x034f ||
+    c === 0x180e ||
+    (c >= 0xfe00 && c <= 0xfe0f) ||
+    (c >= 0xe0000 && c <= 0xe007f) ||
+    (c >= 0xe0100 && c <= 0xe01ef)
   )
 }
 
 /** Невидимые символы — видимой меткой `⟨U+202E⟩`: в запросе разрешения видно всё, что уйдёт в инструмент. */
 export function neutralize(s: string): string {
   let out = ''
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i)
-    out += isHidden(c) ? `⟨U+${c.toString(16).toUpperCase().padStart(4, '0')}⟩` : s[i]
+  // По кодовым точкам, а не по UTF-16: теги (U+E0000…) — суррогатные пары.
+  for (const ch of s) {
+    const c = ch.codePointAt(0)!
+    out += isHidden(c) ? `⟨U+${c.toString(16).toUpperCase().padStart(4, '0')}⟩` : ch
   }
   return out
 }

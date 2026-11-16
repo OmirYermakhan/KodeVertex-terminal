@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import raw from './fixtures/bash-ls.jsonl?raw'
-import { canEdit, editInfo, lastEditable, messagesLabel, newSession, replaceFrom, actionTitle, cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaude, pendingPrompt, pendingQuestion, recordAnswer, modelLabel, nowLabel, reduceClaude, userSent, dropSuggestion, clearSession, newProcess } from './reducer'
+import { canEdit, editInfo, lastEditable, messagesLabel, newSession, replaceFrom, actionTitle, cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaude, pendingPrompt, pendingQuestion, recordAnswer, modelLabel, nowLabel, reduceClaude, userSent, dropSuggestion, clearSession, newProcess, RESULT_MAX } from './reducer'
 import type { ClaudeState } from './reducer'
 
 const lines = raw
@@ -575,5 +575,50 @@ describe('стоимость хода и сессии', () => {
     expect((s.items.filter((i) => i.type === 'summary').at(-1) as { costUsd: number }).costUsd).toBeCloseTo(0.1)
     s = turn(s, 'c', 0.3)
     expect(s.costUsd).toBeCloseTo(0.8)
+  })
+})
+
+describe('ждущий агент после ответа на запрос', () => {
+  const req = (rid: string, tool: string, input: object) => ({
+    type: 'control_request',
+    request_id: rid,
+    request: { subtype: 'can_use_tool', tool_name: tool, input },
+  })
+  const ask = { questions: [{ question: 'Да?', header: '', multiSelect: false, options: [{ label: 'Да', description: '' }] }] }
+  const main = (s: ClaudeState) => s.agents.find((a) => a.id === 'main')!
+
+  it('разрешение решено — агент снова работает; остался другой запрос — ещё ждёт', () => {
+    let s = userSent(initialClaude(), 'go', 5)
+    s = run(s, [req('a', 'Bash', { command: 'ls' }), req('b', 'Bash', { command: 'pwd' })])
+    expect(main(s).status).toBe('waiting')
+    s = decidePermission(s, 'a', 'allow')
+    expect(main(s).status).toBe('waiting')
+    s = decidePermission(s, 'b', 'deny')
+    expect(main(s)).toMatchObject({ status: 'running', now: 'Думает' })
+  })
+
+  it('вопрос отвечен или отменён CLI — агент снова работает', () => {
+    let s = run(userSent(initialClaude(), 'go', 5), [req('q', 'AskUserQuestion', ask)])
+    expect(main(s).status).toBe('waiting')
+    s = finishQuestion(recordAnswer(s, 'q', 0, 'Да'), 'q')
+    expect(main(s).status).toBe('running')
+    s = run(s, [req('q2', 'AskUserQuestion', ask)])
+    expect(main(s).status).toBe('waiting')
+    s = reduceClaude(s, { type: 'control_cancel_request', request_id: 'q2' }, 6)
+    expect(main(s).status).toBe('running')
+  })
+
+  it('простаивающий главный агент (начальный «ждёт») не трогается', () => {
+    const s = cancelPrompts(initialClaude())
+    expect(main(s).status).toBe('waiting')
+  })
+})
+
+describe('результат инструмента в состоянии — только начало', () => {
+  it('длинный вывод обрезается до RESULT_MAX, ведущие пустые строки убираются', () => {
+    let s = reduceClaude(initialClaude(), assistant([toolUse('t1', 'Bash', { command: 'cat big' })]), 1)
+    s = reduceClaude(s, toolResult('t1', '\n\n  ' + 'x'.repeat(30000)), 2)
+    const it = s.items.find((i) => i.type === 'action')
+    expect(it?.type === 'action' && it.result).toBe('x'.repeat(RESULT_MAX))
   })
 })

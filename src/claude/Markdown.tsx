@@ -2,7 +2,7 @@
 // HTML из текста не исполняется: без rehype-raw react-markdown выводит его как обычный текст.
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { memo, useRef, type MouseEvent, type ReactNode } from 'react'
-import ReactMarkdown, { type Components } from 'react-markdown'
+import ReactMarkdown, { type Components, type Options } from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
 import { useSettings } from '../settings/store'
@@ -124,10 +124,61 @@ function componentsFor(diagrams: boolean, streaming: boolean): Components {
   return c
 }
 
+type PluggableList = NonNullable<Options['rehypePlugins']>
+
 const REMARK = [remarkGfm]
 // Сначала diff (свои строки с подсветкой языка файла, помечены no-highlight), потом остальной код.
-const REHYPE = [rehypeDiff, rehypeHighlight]
-const REHYPE_STREAMING = [rehypeDiff, rehypeHighlight, rehypeCaret]
+const REHYPE: PluggableList = [rehypeDiff, rehypeHighlight]
+// Печатающийся хвост: язык diff без имени файла не угадываем на каждый токен; курсор в конце.
+const REHYPE_TAIL: PluggableList = [[rehypeDiff, { guess: false }], rehypeHighlight, rehypeCaret]
+
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/
+const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})\s*$/
+const LIST_ITEM = /^([-*+]|\d{1,9}[.)])(\s|$)/
+/** Определение ссылки или сноски (`[x]: url`, `[^1]: …`): действует на весь текст — его не делим. */
+const DEFINITION = /^ {0,3}\[[^\]]+\]:/m
+
+/**
+ * Текст ответа → блоки верхнего уровня, которые разбираются независимо: граница — пустая строка вне
+ * ``` перед строкой с начала строки, которая не продолжает предыдущее (не пункт списка — свободный
+ * список не рвётся; не отступ — продолжение пункта или код; не ``` — у блока diff подсказка языка
+ * в абзаце перед ним). Пока ответ печатается, дописывается только последний блок: готовые не
+ * разбираются заново на каждый токен (иначе весь markdown — на каждый токен, O(n²) за ответ).
+ */
+export function splitBlocks(text: string): string[] {
+  if (DEFINITION.test(text)) return [text]
+  const lines = text.split('\n')
+  const out: string[] = []
+  let start = 0
+  let fence: string | null = null
+  let blank = false
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]
+    if (fence !== null) {
+      const c = FENCE_CLOSE.exec(l)
+      if (c && c[1][0] === fence[0] && c[1].length >= fence.length) fence = null
+      continue
+    }
+    const open = FENCE_OPEN.exec(l)
+    if (blank && l !== '' && !/^\s/.test(l) && !LIST_ITEM.test(l) && !open) {
+      out.push(lines.slice(start, i).join('\n'))
+      start = i
+    }
+    if (open) fence = open[1]
+    blank = l.trim() === ''
+  }
+  out.push(lines.slice(start).join('\n'))
+  return out
+}
+
+/** Готовый блок печатающегося ответа: тот же текст — не разбирается заново. */
+const Block = memo(function Block({ text, rehype, components }: { text: string; rehype: PluggableList; components: Components }) {
+  return (
+    <ReactMarkdown remarkPlugins={REMARK} rehypePlugins={rehype} components={components}>
+      {text}
+    </ReactMarkdown>
+  )
+})
 
 export const Markdown = memo(function Markdown({
   text,
@@ -140,15 +191,22 @@ export const Markdown = memo(function Markdown({
   diagrams?: boolean
 }) {
   const fromSettings = useSettings((s) => s.settings.claudeDiagrams)
+  const components = componentsFor(diagrams ?? fromSettings, streaming)
+  if (!streaming) {
+    // Ответ готов — разбирается один раз целиком (сноски, ссылки и списки — как в исходнике).
+    return (
+      <div className="md">
+        <Block text={text} rehype={REHYPE} components={components} />
+      </div>
+    )
+  }
+  const blocks = splitBlocks(text)
+  const last = blocks.length - 1
   return (
     <div className="md">
-      <ReactMarkdown
-        remarkPlugins={REMARK}
-        rehypePlugins={streaming ? REHYPE_STREAMING : REHYPE}
-        components={componentsFor(diagrams ?? fromSettings, streaming)}
-      >
-        {text}
-      </ReactMarkdown>
+      {blocks.map((b, i) => (
+        <Block key={i} text={b} rehype={i === last ? REHYPE_TAIL : REHYPE} components={components} />
+      ))}
     </div>
   )
 })

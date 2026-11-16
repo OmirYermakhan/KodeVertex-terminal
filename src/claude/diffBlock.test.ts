@@ -38,4 +38,10 @@ describe('блок diff в ответе', () => {
     const lines = diffToHast(d, 'kotlin') as N[]
     expect(has(lines[4], 'hljs-keyword')).toBe(true)
   })
+
+  it('guess false (печатается) — язык без имени файла не угадывается; с подсказкой — подсвечен', () => {
+    const d = '@@ -1 +1 @@\n-fun a(): Int = 1\n+fun b(): Int = 2'
+    expect((diffToHast(d, null, false) as N[]).some((l) => has(l, 'hljs-keyword'))).toBe(false)
+    expect((diffToHast(d, 'kotlin', false) as N[]).some((l) => has(l, 'hljs-keyword'))).toBe(true)
+  })
 })

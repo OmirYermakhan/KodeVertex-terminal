@@ -302,12 +302,7 @@ export function newSession(s: ClaudeState): ClaudeState {
  */
 export function clearSession(s: ClaudeState): ClaudeState {
   const fresh = initialClaude()
-  const items = s.items.map((it): FeedClaudeItem => {
-    if (it.type === 'assistant' && it.streaming) return { ...it, streaming: false }
-    if (it.type === 'action' && it.status === 'running') return { ...it, status: 'error' }
-    if (it.type === 'todo' && !it.frozen) return { ...it, frozen: true }
-    return it
-  })
+  const items = closeUnfinished(s.items).map((it): FeedClaudeItem => (it.type === 'todo' && !it.frozen ? { ...it, frozen: true } : it))
   return {
     ...newSession(cancelPrompts({ ...s, items }, undefined, 'stop')),
     busy: false,
@@ -322,6 +317,20 @@ export function clearSession(s: ClaudeState): ClaudeState {
     agents: fresh.agents,
     edits: {},
   }
+}
+
+/**
+ * Недоигранное закрыто: печатающийся ответ дописан, идущее действие — «ошибка». Ход оборвался
+ * (ошибка, выход процесса, /clear, правка): иначе следующий ответ допишется в старую карточку.
+ * Ничего не идёт — тот же массив.
+ */
+export function closeUnfinished(items: FeedClaudeItem[]): FeedClaudeItem[] {
+  if (!items.some((it) => (it.type === 'assistant' && it.streaming) || (it.type === 'action' && it.status === 'running'))) return items
+  return items.map((it): FeedClaudeItem => {
+    if (it.type === 'assistant' && it.streaming) return { ...it, streaming: false }
+    if (it.type === 'action' && it.status === 'running') return { ...it, status: 'error' }
+    return it
+  })
 }
 
 function patchAgent(s: ClaudeState, id: string, patch: Partial<Agent> | ((a: Agent) => Partial<Agent>)): ClaudeState {
@@ -359,6 +368,18 @@ function parse(line: string | object): Rec | null {
   } catch {
     return null
   }
+}
+
+/**
+ * Сколько знаков результата инструмента храним: карточка показывает только первую непустую строку
+ * (до 80 знаков), а целиком (файлы, вывод Bash) он лишь раздувал бы состояние и сохранение.
+ */
+export const RESULT_MAX = 200
+
+/** Начало результата для карточки: без ведущих пустых строк, не длиннее RESULT_MAX. */
+export function shortResultText(t: string): string {
+  const s = t.trimStart()
+  return s.length > RESULT_MAX ? s.slice(0, RESULT_MAX) : s
 }
 
 function resultText(content: unknown): string {
@@ -531,7 +552,7 @@ function onUser(s: ClaudeState, ev: Rec, now: number): ClaudeState {
     if (!id) continue
     const isError = b.is_error === true
     const status = isError ? 'error' : 'done'
-    const result = resultText(b.content)
+    const result = shortResultText(resultText(b.content))
     let actionAgent: string | null = null
     next = {
       ...next,
@@ -701,13 +722,36 @@ export function pendingPrompt(s: ClaudeState): PromptItem | null {
   return s.items.find(isPending) ?? null
 }
 
+/**
+ * Запросы агентов agentIds закрыты (ответ, решение, отмена): агент, который ждал только их, снова
+ * работает — панель агентов, точка вкладки и индикатор «думает» не застревают в «ждёт» до tool_result.
+ * Агент, у которого ещё есть ждущий запрос, остаётся ждать.
+ */
+function resumeWaiting(s: ClaudeState, agentIds: ReadonlySet<string>): ClaudeState {
+  if (agentIds.size === 0) return s
+  const still = new Set(s.items.filter(isPending).map((it) => it.agentId))
+  if (!s.agents.some((a) => agentIds.has(a.id) && a.status === 'waiting' && a.startedAt > 0 && !still.has(a.id))) return s
+  return {
+    ...s,
+    agents: s.agents.map((a) =>
+      agentIds.has(a.id) && a.status === 'waiting' && a.startedAt > 0 && !still.has(a.id) ? { ...a, status: 'running', now: 'Думает' } : a,
+    ),
+  }
+}
+
 /** Ждущие запросы отменены (все или только requestId): ответа на них больше не ждут. */
 export function cancelPrompts(s: ClaudeState, requestId?: string, reason: CancelReason = 'stop'): ClaudeState {
   if (!s.items.some((it) => isPending(it) && (requestId === undefined || it.requestId === requestId))) return s
-  return {
+  const agents = new Set<string>()
+  const next = {
     ...s,
-    items: s.items.map((it) => (isPending(it) && (requestId === undefined || it.requestId === requestId) ? { ...it, cancelled: reason } : it)),
+    items: s.items.map((it) => {
+      if (!isPending(it) || (requestId !== undefined && it.requestId !== requestId)) return it
+      agents.add(it.agentId)
+      return { ...it, cancelled: reason }
+    }),
   }
+  return resumeWaiting(next, agents)
 }
 
 /** Решение по запросу разрешения. */
@@ -717,7 +761,7 @@ export function decidePermission(s: ClaudeState, requestId: string, decision: Pe
   if (!it || it.type !== 'permission' || !isPending(it)) return s
   const items = s.items.slice()
   items[i] = { ...it, done: true, decision }
-  return { ...s, items }
+  return resumeWaiting({ ...s, items }, new Set([it.agentId]))
 }
 
 function patchQuestion(
@@ -756,9 +800,12 @@ export function gotoStep(s: ClaudeState, requestId: string, step: number): Claud
 
 /** Все ответы есть — вопрос закрыт (ответ уходит процессу). */
 export function finishQuestion(s: ClaudeState, requestId: string): ClaudeState {
-  return patchQuestion(s, requestId, (q) =>
+  const next = patchQuestion(s, requestId, (q) =>
     q.questions.every((_, i) => (q.answers[i] ?? '') !== '') ? { ...q, done: true } : null,
   )
+  if (next === s) return s
+  const q = next.items.find((it) => it.type === 'question' && it.requestId === requestId)
+  return q?.type === 'question' ? resumeWaiting(next, new Set([q.agentId])) : next
 }
 
 /** Первый ждущий вопрос (не разрешение). */
@@ -850,11 +897,7 @@ export function messagesLabel(n: number): string {
  */
 export function replaceFrom(s: ClaudeState, index: number): ClaudeState {
   if (index < 0 || index >= s.items.length) return s
-  const old = s.items.slice(index).map((it): FeedClaudeItem => {
-    if (it.type === 'assistant' && it.streaming) return { ...it, streaming: false }
-    if (it.type === 'action' && it.status === 'running') return { ...it, status: 'error' }
-    return it
-  })
+  const old = closeUnfinished(s.items.slice(index))
   const count = old.filter((it) => it.type === 'user').length
   const items = s.items.slice(0, index)
   items.push({ type: 'replaced', items: old, count })

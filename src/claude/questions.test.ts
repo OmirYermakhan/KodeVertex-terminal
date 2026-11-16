@@ -23,6 +23,13 @@ describe('neutralize', () => {
       expect(neutralize(`x${String.fromCharCode(c)}y`)).toBe(`x⟨U+${c.toString(16).toUpperCase().padStart(4, '0')}⟩y`)
     }
   })
+  it('теги Unicode (суррогатные пары), U+034F, U+180E, селекторы вариантов — меткой с полной кодовой точкой', () => {
+    expect(neutralize('rm\u{E0072}\u{E0066}x')).toBe('rm⟨U+E0072⟩⟨U+E0066⟩x')
+    expect(neutralize('a\u{E0000}\u{E007F}b')).toBe('a⟨U+E0000⟩⟨U+E007F⟩b')
+    expect(neutralize('a͏b᠎c︀d️e\u{E0100}')).toBe('a⟨U+034F⟩b⟨U+180E⟩c⟨U+FE00⟩d⟨U+FE0F⟩e⟨U+E0100⟩')
+    // Обычная суррогатная пара (эмодзи) — как есть.
+    expect(neutralize('👋')).toBe('👋')
+  })
   it('обычный текст, кириллица, эмодзи и пробелы не трогает', () => {
     const s = 'git commit -m "Привет 👋" && echo  ok'
     expect(neutralize(s)).toBe(s)

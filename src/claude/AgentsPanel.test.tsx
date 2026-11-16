@@ -157,3 +157,23 @@ describe('AgentsPanel', () => {
     }
   })
 })
+
+describe('перерисовка', () => {
+  it('новый токен ответа (агенты те же) панель не перерисовывает; изменились агенты — перерисовывает', () => {
+    const s = mockupScene()
+    const same = (AgentsPanel as unknown as { compare(a: object, b: object): boolean }).compare
+    const props = (state: typeof s) => ({ state, onExit: () => {}, queued: 0 })
+    expect(same(props(s), props({ ...s, items: [...s.items, { type: 'note', text: 'токен' }] }))).toBe(true)
+    expect(same(props(s), props({ ...s, agents: s.agents.map((a) => ({ ...a, now: 'Пишет x.ts' })) }))).toBe(false)
+    expect(same(props(s), props({ ...s, currentAgentId: 'другой' }))).toBe(false)
+    expect(same(props(s), { ...props(s), queued: 2 })).toBe(false)
+  })
+
+  it('agentRows: дерево из многих агентов — дети под родителем, в порядке появления', () => {
+    const many = [agent({ id: 'main', name: 'Главный', parentId: null }), ...Array.from({ length: 300 }, (_, i) => agent({ id: `a${i}`, name: 'А', parentId: i % 2 ? 'main' : `a${i - 1}` }))]
+    const rows = agentRows(many)
+    expect(rows).toHaveLength(301)
+    expect(rows.slice(0, 4).map((r) => [r.agent.id, r.depth])).toEqual([['main', 0], ['a1', 1], ['a2', 2], ['a3', 1]])
+  })
+})
+

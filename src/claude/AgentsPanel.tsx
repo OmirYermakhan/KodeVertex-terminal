@@ -1,6 +1,6 @@
 // Панель агентов над строкой ввода (макет 04-main-window `.dh/.row/.detail`): кто из агентов
 // Claude-сессии панели работает, ждёт или закончил; ↑↓ — выбор, ↵ — подробности, esc — назад к вводу.
-import { forwardRef, Fragment, useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
+import { forwardRef, Fragment, memo, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { modelLabel, type Agent, type ClaudeState } from './reducer'
 import { Collapse } from '../ui/motion'
 
@@ -43,13 +43,21 @@ export function agentsHeader(agents: Agent[]): { running: string; rest: string[]
 /** Порядок строк: дерево (дети сразу под родителем), корни — в порядке появления. */
 export function agentRows(agents: Agent[]): { agent: Agent; depth: number }[] {
   const ids = new Set(agents.map((a) => a.id))
+  // Дети по родителю (в порядке появления): обход за O(a), а не перебор всех на каждом узле.
+  const kids = new Map<string, Agent[]>()
+  for (const a of agents) {
+    if (a.parentId === null) continue
+    const list = kids.get(a.parentId)
+    if (list) list.push(a)
+    else kids.set(a.parentId, [a])
+  }
   const out: { agent: Agent; depth: number }[] = []
   const seen = new Set<string>()
   const walk = (a: Agent, depth: number) => {
     if (seen.has(a.id)) return
     seen.add(a.id)
     out.push({ agent: a, depth })
-    for (const c of agents) if (c.parentId === a.id) walk(c, depth + 1)
+    for (const c of kids.get(a.id) ?? []) walk(c, depth + 1)
   }
   for (const a of agents) if (a.parentId === null || !ids.has(a.parentId)) walk(a, 0)
   // Циклы parentId (мусор в событиях) — всё равно показать.
@@ -180,8 +188,8 @@ function useTicker(fixed: number | undefined, live: boolean): number {
   return fixed ?? now
 }
 
-export const AgentsPanel = forwardRef<AgentsPanelHandle, AgentsPanelProps>(function AgentsPanel(p, ref) {
-  const rows = agentRows(p.state.agents)
+const AgentsPanelView = forwardRef<AgentsPanelHandle, AgentsPanelProps>(function AgentsPanel(p, ref) {
+  const rows = useMemo(() => agentRows(p.state.agents), [p.state.agents])
   const [sel, setSel] = useState<string | null>(null)
   const [open, setOpen] = useState<string | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
@@ -265,3 +273,17 @@ export const AgentsPanel = forwardRef<AgentsPanelHandle, AgentsPanelProps>(funct
     </div>
   )
 })
+
+/**
+ * Панель читает из состояния сессии только агентов и текущего агента: токены ответа (новый текст
+ * в items, агенты те же) её не перерисовывают. onExit — «фокус в строку ввода», его новая ссылка
+ * на каждом рендере родителя поводом не считается.
+ */
+export const AgentsPanel = memo(
+  AgentsPanelView,
+  (a, b) =>
+    a.state.agents === b.state.agents &&
+    a.state.currentAgentId === b.state.currentAgentId &&
+    a.queued === b.queued &&
+    a.now === b.now,
+)
