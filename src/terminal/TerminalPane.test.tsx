@@ -654,6 +654,8 @@ describe('TerminalPane', () => {
         ask('q1', 'AskUserQuestion', { questions: [{ question: 'Да?', header: '', multiSelect: false, options: [{ label: 'Да', description: '' }] }] })
         const prompt = document.querySelector('.aprompt') as HTMLElement
         expect(document.activeElement).toBe(prompt)
+        // Вопрос, как и разрешение, принимает ↵ только через ARM_MS.
+        await act(async () => await flush(ARM_MS + 20))
         await act(async () => {
           fireEvent.keyDown(prompt, { key: 'Enter' })
           await flush()
