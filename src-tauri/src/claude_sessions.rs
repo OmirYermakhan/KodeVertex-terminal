@@ -6,8 +6,8 @@
 // команды, уведомления, субагенты) пропускаются.
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
-use std::fs::{self, File};
+use std::collections::{HashMap, VecDeque};
+use std::fs;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -122,8 +122,15 @@ pub fn valid_id(id: &str) -> bool {
 
 /// Строки файла с позиции `from` (с середины строки — первая, неполная, пропускается), не больше
 /// `max` байт; строки длиннее MAX_LINE не отдаются. f → false — хватит.
-fn each_line(path: &Path, from: u64, max: u64, mut f: impl FnMut(&[u8]) -> bool) -> std::io::Result<()> {
-  let mut file = File::open(path)?;
+fn each_line(path: &Path, from: u64, max: u64, f: impl FnMut(&[u8]) -> bool) -> std::io::Result<()> {
+  each_line_ex(path, from, max, true, f).map(|_| ())
+}
+
+/// Как `each_line`; `tail` — отдавать ли последнюю строку без `\n` (её, может быть, ещё дописывают).
+/// Возвращает позицию сразу после последнего пройденного `\n`: с неё можно продолжить позже.
+fn each_line_ex(path: &Path, from: u64, max: u64, tail: bool, mut f: impl FnMut(&[u8]) -> bool) -> std::io::Result<u64> {
+  // Не обычный файл (FIFO на месте разговора) не читается: открытие без блокировки, тип — у дескриптора.
+  let (mut file, _) = crate::attach::open_regular(path)?;
   // from посреди строки (перед ним не `\n`) — первая строка неполная.
   let mut skip_first = false;
   if from > 0 {
@@ -134,18 +141,20 @@ fn each_line(path: &Path, from: u64, max: u64, mut f: impl FnMut(&[u8]) -> bool)
   }
   let mut r = BufReader::with_capacity(64 * 1024, file);
   let mut read: u64 = 0;
+  // Конец последней целой строки (после её `\n`) относительно from.
+  let mut done: u64 = 0;
   let mut line: Vec<u8> = Vec::new();
   let mut too_long = false;
   loop {
     if read >= max {
-      return Ok(());
+      return Ok(from + done);
     }
     let buf = r.fill_buf()?;
     if buf.is_empty() {
-      if !line.is_empty() && !too_long && !skip_first {
+      if tail && !line.is_empty() && !too_long && !skip_first {
         f(&line);
       }
-      return Ok(());
+      return Ok(from + done);
     }
     let take = buf.len().min((max - read) as usize);
     let chunk = &buf[..take];
@@ -165,12 +174,13 @@ fn each_line(path: &Path, from: u64, max: u64, mut f: impl FnMut(&[u8]) -> bool)
     r.consume(used);
     read += used as u64;
     if end.is_some() {
+      done = read;
       let go = if too_long || skip_first { true } else { f(&line) };
       line.clear();
       too_long = false;
       skip_first = false;
       if !go {
-        return Ok(());
+        return Ok(from + done);
       }
     }
   }
@@ -193,10 +203,10 @@ fn message_of(line: &[u8]) -> Option<HistoryMessage> {
   match v.get("type").and_then(Value::as_str)? {
     "user" => {
       // Уведомления задач и прочее не от человека.
-      if let Some(kind) = v.get("origin").and_then(|o| o.get("kind")).and_then(Value::as_str) {
-        if kind != "human" {
-          return None;
-        }
+      if let Some(kind) = v.get("origin").and_then(|o| o.get("kind")).and_then(Value::as_str)
+        && kind != "human"
+      {
+        return None;
       }
       let text = match content {
         Value::String(s) => s.clone(),
@@ -277,17 +287,20 @@ fn is_service(text: &str) -> bool {
 }
 
 /// Подряд идущие куски ответа (текст между вызовами инструментов) — одним сообщением.
-fn push_message(out: &mut Vec<HistoryMessage>, m: HistoryMessage) {
-  if m.role == "assistant" {
-    if let Some(last) = out.last_mut() {
-      if last.role == "assistant" {
-        last.text.push_str("\n\n");
-        last.text.push_str(&m.text);
-        return;
-      }
+/// Сообщение длиннее MESSAGE_CHARS всё равно обрезается: дальше не дописываем (память).
+fn push_message(out: &mut VecDeque<HistoryMessage>, m: HistoryMessage) {
+  if m.role == "assistant"
+    && let Some(last) = out.back_mut()
+    && last.role == "assistant"
+  {
+    // Байт больше 4·N — символов точно больше N: обрезка даст то же самое.
+    if last.text.len() <= MESSAGE_CHARS * 4 {
+      last.text.push_str("\n\n");
+      last.text.push_str(&m.text);
     }
+    return;
   }
-  out.push(m);
+  out.push_back(m);
 }
 
 fn clip(s: &str, max: usize) -> String {
@@ -302,52 +315,74 @@ fn title_of(text: &str) -> String {
   clip(&text.split_whitespace().collect::<Vec<_>>().join(" "), TITLE_CHARS)
 }
 
-/// Заголовок и число сообщений файла (первые MAX_SCAN байт). None — сообщений пользователя нет.
-pub fn summarize(path: &Path) -> Option<(String, usize, bool)> {
-  let len = fs::metadata(path).ok()?.len();
-  let mut title: Option<String> = None;
-  let mut count = 0usize;
-  let mut last_assistant = false;
-  each_line(path, 0, MAX_SCAN, |line| {
-    if let Some(m) = message_of(line) {
-      let assistant = m.role == "assistant";
-      if !assistant && title.is_none() {
-        title = Some(title_of(&m.text));
-      }
-      // Куски одного ответа — одно сообщение (как в истории).
-      if !(assistant && last_assistant) {
-        count += 1;
-      }
-      last_assistant = assistant;
+/// Разобранная часть файла для списка: где остановились и что насчитали. Файл разговора
+/// только дописывается — при росте читаем лишь новый хвост, а не весь файл заново.
+#[derive(Clone, Debug, Default)]
+struct Summary {
+  /// Позиция после последней целой разобранной строки.
+  offset: u64,
+  /// Первое сообщение пользователя.
+  title: Option<String>,
+  count: usize,
+  last_assistant: bool,
+}
+
+impl Summary {
+  /// Дочитывает файл с `offset` (не дальше MAX_SCAN от начала). Неполная последняя строка
+  /// (её ещё пишут) не учитывается — её прочитаем целиком в следующий раз.
+  fn advance(&mut self, path: &Path) -> std::io::Result<()> {
+    if self.offset >= MAX_SCAN {
+      return Ok(());
     }
-    true
-  })
-  .ok()?;
-  title.map(|t| (t, count, len > MAX_SCAN))
+    let s = &mut *self;
+    let end = each_line_ex(path, s.offset, MAX_SCAN - s.offset, false, |line| {
+      if let Some(m) = message_of(line) {
+        let assistant = m.role == "assistant";
+        if !assistant && s.title.is_none() {
+          s.title = Some(title_of(&m.text));
+        }
+        // Куски одного ответа — одно сообщение (как в истории).
+        if !(assistant && s.last_assistant) {
+          s.count += 1;
+        }
+        s.last_assistant = assistant;
+      }
+      true
+    })?;
+    self.offset = end;
+    Ok(())
+  }
+
+  fn result(&self, len: u64) -> Option<(String, usize, bool)> {
+    self.title.clone().map(|t| (t, self.count, len > MAX_SCAN))
+  }
 }
 
 fn millis(t: SystemTime) -> u64 {
   t.duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-type Cached = (SystemTime, u64, Option<(String, usize, bool)>);
-/// Разбор файла не повторяется, пока он не изменился (время и размер).
+type Cached = (SystemTime, u64, Summary);
+/// Разбор файла не повторяется, пока он не изменился (время и размер); дописанный — дочитывается.
 fn cache() -> &'static Mutex<HashMap<PathBuf, Cached>> {
   static C: OnceLock<Mutex<HashMap<PathBuf, Cached>>> = OnceLock::new();
   C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn summarize_cached(path: &Path, modified: SystemTime, len: u64) -> Option<(String, usize, bool)> {
-  if let Some((m, l, s)) = cache().lock().ok().and_then(|c| c.get(path).cloned()) {
-    if m == modified && l == len {
-      return s;
-    }
-  }
-  let s = summarize(path);
+  let prev = cache().lock().ok().and_then(|c| c.get(path).cloned());
+  let mut s = match prev {
+    Some((m, l, s)) if m == modified && l == len => return s.result(len),
+    // Вырос — дочитываем хвост; укоротился (переписан) — с начала.
+    Some((_, l, s)) if len >= l && s.offset <= len => s,
+    _ => Summary::default(),
+  };
+  s.advance(path).ok()?;
+  let r = s.result(len);
   if let Ok(mut c) = cache().lock() {
-    c.insert(path.to_path_buf(), (modified, len, s.clone()));
+    c.insert(path.to_path_buf(), (modified, len, s));
   }
-  s
+  r
 }
 
 /// Разговоры каталога cwd в корне root, новые первыми (не больше MAX_LIST файлов).
@@ -395,35 +430,40 @@ pub fn read_history(root: &Path, cwd: &str, id: &str) -> Result<SessionHistory, 
     .ok_or("разговор не найден")?;
   let len = fs::metadata(&path).map_err(|e| e.to_string())?.len();
   let from = len.saturating_sub(MAX_SCAN);
-  let mut all: Vec<HistoryMessage> = Vec::new();
+  // В памяти — только последние HISTORY_TURNS ходов: более ранние сообщения вытесняются по ходу чтения.
+  let mut kept: VecDeque<HistoryMessage> = VecDeque::new();
+  let mut users = 0usize;
+  let mut skipped = 0usize;
   let mut cost: Option<f64> = None;
   each_line(&path, from, MAX_SCAN, |line| {
     if let Some(m) = message_of(line) {
-      push_message(&mut all, m);
+      if m.role == "user" {
+        users += 1;
+      }
+      push_message(&mut kept, m);
+      while users > HISTORY_TURNS {
+        if let Some(old) = kept.pop_front() {
+          skipped += 1;
+          if old.role == "user" {
+            users -= 1;
+          }
+        }
+      }
     } else if let Some(c) = cost_of(line, id) {
       cost = Some(c);
     }
     true
   })
   .map_err(|e| e.to_string())?;
-  // Начало — с HISTORY_TURNS-го с конца сообщения пользователя.
-  let mut users = 0;
-  let mut start = 0;
-  for (i, m) in all.iter().enumerate().rev() {
-    if m.role == "user" {
-      users += 1;
-      if users == HISTORY_TURNS {
-        start = i;
-        break;
-      }
+  // Начало — с HISTORY_TURNS-го с конца сообщения пользователя (ответы перед ним не нужны).
+  if users == HISTORY_TURNS {
+    while kept.front().is_some_and(|m| m.role != "user") {
+      kept.pop_front();
+      skipped += 1;
     }
   }
-  let messages = all
-    .split_off(start)
-    .into_iter()
-    .map(|m| HistoryMessage { role: m.role, text: clip(&m.text, MESSAGE_CHARS) })
-    .collect();
-  Ok(SessionHistory { messages, skipped: start, cost })
+  let messages = kept.into_iter().map(|m| HistoryMessage { role: m.role, text: clip(&m.text, MESSAGE_CHARS) }).collect();
+  Ok(SessionHistory { messages, skipped, cost })
 }
 
 #[tauri::command]
@@ -442,6 +482,7 @@ pub async fn claude_session_history(cwd: String, id: String) -> Result<SessionHi
 mod tests {
   use super::*;
   use serde_json::json;
+  use std::fs::File;
   use std::io::Write;
 
   fn user(text: &str) -> String {
@@ -696,5 +737,63 @@ mod tests {
     assert!(valid_id("00000000-0000-4000-8000-000000000001"));
     assert!(!valid_id("a/b"));
     assert!(!valid_id("a.b"));
+  }
+
+  /// Дописанный файл дочитывается с прошлого места: строки до него повторно не разбираются.
+  #[test]
+  fn summary_is_incremental_and_skips_unfinished_line() {
+    let (t, dir, cwd) = setup();
+    let p = write(&dir, "inc", &[user("первый"), assistant("ответ")]);
+    set_mtime(&p, 1000);
+    let l = list_sessions(t.path(), cwd);
+    assert_eq!((l[0].title.as_str(), l[0].messages), ("первый", 2));
+    let off = cache().lock().unwrap().get(&p).unwrap().2.offset;
+    assert_eq!(off, fs::metadata(&p).unwrap().len());
+    // Портим уже разобранную часть (той же длины): при дочитывании она не перечитывается.
+    let mut bytes = fs::read(&p).unwrap();
+    bytes[..5].copy_from_slice(b"xxxxx");
+    fs::write(&p, &bytes).unwrap();
+    let mut f = File::options().append(true).open(&p).unwrap();
+    writeln!(f, "{}", user("второй")).unwrap();
+    // Строка без `\n` (её ещё пишут) не считается.
+    write!(f, "{}", user("недописан")).unwrap();
+    drop(f);
+    set_mtime(&p, 2000);
+    let l = list_sessions(t.path(), cwd);
+    assert_eq!((l[0].title.as_str(), l[0].messages), ("первый", 3));
+    let mut f = File::options().append(true).open(&p).unwrap();
+    writeln!(f).unwrap();
+    drop(f);
+    set_mtime(&p, 3000);
+    assert_eq!(list_sessions(t.path(), cwd)[0].messages, 4);
+  }
+
+  #[test]
+  fn history_keeps_only_last_turns_in_order() {
+    let (t, dir, cwd) = setup();
+    let mut lines = vec![assistant("пролог")];
+    for i in 0..(HISTORY_TURNS + 5) {
+      lines.push(user(&format!("вопрос {i}")));
+      lines.push(assistant(&format!("часть {i}")));
+      lines.push(assistant(&format!("ещё {i}")));
+    }
+    write(&dir, "h", &lines);
+    let h = read_history(t.path(), cwd, "h").unwrap();
+    assert_eq!(h.messages.len(), HISTORY_TURNS * 2);
+    assert_eq!(h.messages[0].text, "вопрос 5");
+    assert_eq!(h.messages[1].text, "часть 5\n\nещё 5");
+    // Пролог + 5 ранних ходов по 2 сообщения.
+    assert_eq!(h.skipped, 1 + 5 * 2);
+    // Ровно HISTORY_TURNS ходов: ответ до первого вопроса пропускается; меньше — показывается.
+    let mut lines = vec![assistant("пролог")];
+    for i in 0..HISTORY_TURNS {
+      lines.push(user(&format!("в{i}")));
+    }
+    write(&dir, "e", &lines);
+    let h = read_history(t.path(), cwd, "e").unwrap();
+    assert_eq!((h.messages.len(), h.skipped, h.messages[0].text.as_str()), (HISTORY_TURNS, 1, "в0"));
+    write(&dir, "s", &lines[..3]);
+    let h = read_history(t.path(), cwd, "s").unwrap();
+    assert_eq!((h.messages.len(), h.skipped, h.messages[0].text.as_str()), (3, 0, "пролог"));
   }
 }

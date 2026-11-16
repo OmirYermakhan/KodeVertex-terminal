@@ -66,10 +66,10 @@ pub fn parse_history(raw: &[u8], limit: usize) -> Vec<String> {
       out.push(acc);
     }
   }
-  if let Some(s) = cur {
-    if !s.trim().is_empty() {
-      out.push(s);
-    }
+  if let Some(s) = cur
+    && !s.trim().is_empty()
+  {
+    out.push(s);
   }
   if out.len() > limit {
     out.drain(..out.len() - limit);
@@ -87,14 +87,38 @@ fn history_path() -> Option<PathBuf> {
   dirs::home_dir().map(|h| h.join(".zsh_history"))
 }
 
+/// Сколько байт с конца файла читаем: 5000 команд с запасом, а многомегабайтная история
+/// не читается и не разбирается целиком.
+pub const TAIL_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Хвост файла не длиннее `max` байт. Если читали не с начала, первая (неполная) строка отбрасывается.
+pub fn read_tail(path: &std::path::Path, max: u64) -> std::io::Result<Vec<u8>> {
+  use std::io::{Read, Seek, SeekFrom};
+  let (mut f, meta) = crate::attach::open_regular(path)?;
+  let from = meta.len().saturating_sub(max);
+  // С байта перед from: если это «\n», строка с from целая и не теряется.
+  let start = from.saturating_sub(1);
+  f.seek(SeekFrom::Start(start))?;
+  let mut buf = Vec::new();
+  f.take(max + (from - start)).read_to_end(&mut buf)?;
+  if from > 0 {
+    let cut = buf.iter().position(|&b| b == b'\n').map_or(buf.len(), |i| i + 1);
+    buf.drain(..cut);
+  }
+  Ok(buf)
+}
+
 /// Последние команды истории zsh (старые первыми). Нет файла — пустой список.
+/// Чтение и разбор — в пуле блокирующих задач.
 #[tauri::command]
 pub async fn shell_history() -> Vec<String> {
   let Some(path) = history_path() else { return Vec::new() };
-  match std::fs::read(&path) {
+  crate::blocking(move || match read_tail(&path, TAIL_BYTES) {
     Ok(raw) => parse_history(&raw, HISTORY_LIMIT),
     Err(_) => Vec::new(),
-  }
+  })
+  .await
+  .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -145,5 +169,18 @@ mod tests {
   #[test]
   fn unterminated_continuation_is_kept() {
     assert_eq!(parse_history(b"echo a\\", 10), vec!["echo a"]);
+  }
+
+  #[test]
+  fn tail_drops_partial_first_line() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("h");
+    std::fs::write(&p, "aaaa\nbb\ncc\n").unwrap();
+    assert_eq!(read_tail(&p, 1 << 20).unwrap(), b"aaaa\nbb\ncc\n");
+    // С середины «aaaa»: неполная строка отброшена.
+    assert_eq!(read_tail(&p, 8).unwrap(), b"bb\ncc\n");
+    // Ровно с начала строки: она целая и остаётся.
+    assert_eq!(read_tail(&p, 6).unwrap(), b"bb\ncc\n");
+    assert!(read_tail(&d.path().join("нет"), 10).is_err());
   }
 }

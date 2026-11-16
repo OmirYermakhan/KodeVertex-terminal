@@ -16,8 +16,9 @@ fn clip(s: &str) -> &str {
 }
 
 /// Ошибка из webview (ловушка ошибок React, window.onerror, unhandledrejection).
+/// Async: запись в журнал — не в главном потоке (иначе поток ошибок тормозил бы интерфейс).
 #[tauri::command]
-pub fn frontend_log(level: String, message: String) {
+pub async fn frontend_log(level: String, message: String) {
   let m = clip(&message);
   match level.as_str() {
     "warn" => log::warn!(target: "frontend", "{m}"),

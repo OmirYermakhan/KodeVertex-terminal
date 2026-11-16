@@ -6,7 +6,8 @@ use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -89,22 +90,11 @@ fn push_line(out: &mut Vec<String>, bytes: &mut Vec<u8>, budget: &mut usize) {
 /// Окно текста: WINDOW строк вокруг line (или с начала), всего не больше TEXT_MAX; файл читается
 /// порциями до scan_max байт, чтобы посчитать строки. Строка дальше scan_max — окно с начала.
 pub fn read_text(path: &Path, line: Option<u32>, scan_max: u64) -> TextPreview {
-  let meta = match fs::metadata(path) {
-    Ok(m) => m,
-    Err(e) => return TextPreview::Error { message: io_message(&e) },
+  let (mut f, meta) = match open_text(path) {
+    Ok(v) => v,
+    Err(e) => return e,
   };
-  if meta.is_dir() {
-    return TextPreview::Error { message: "Это папка".to_string() };
-  }
-  // FIFO, устройство: чтение может не закончиться.
-  if !meta.is_file() {
-    return TextPreview::Error { message: "Особый файл".to_string() };
-  }
   let size = meta.len();
-  let mut f = match fs::File::open(path) {
-    Ok(f) => f,
-    Err(e) => return TextPreview::Error { message: io_message(&e) },
-  };
   let mut head = Vec::with_capacity(SNIFF);
   if let Err(e) = (&mut f).take(SNIFF as u64).read_to_end(&mut head) {
     return TextPreview::Error { message: io_message(&e) };
@@ -116,27 +106,42 @@ pub fn read_text(path: &Path, line: Option<u32>, scan_max: u64) -> TextPreview {
   let r = scan(head, f, from, scan_max);
   if r.lines.is_empty() && from > 1 && !r.complete {
     // Нужная строка дальше, чем читаем: показываем начало.
-    return match fs::File::open(path) {
-      Ok(f) => {
+    return match open_text(path) {
+      Ok((f, _)) => {
         let r = scan(Vec::new(), f, 1, scan_max);
         TextPreview::Text { start: 1, lines: r.lines, total: None, size }
       }
-      Err(e) => TextPreview::Error { message: io_message(&e) },
+      Err(e) => e,
     };
   }
   if r.lines.is_empty() && from > 1 && r.count > 0 {
     // Строка за концом файла: показываем его конец.
     let tail = r.count.saturating_sub(WINDOW as u32 - 1).max(1);
-    return match fs::File::open(path) {
-      Ok(f) => {
+    return match open_text(path) {
+      Ok((f, _)) => {
         let t = scan(Vec::new(), f, tail, scan_max);
         TextPreview::Text { start: tail, lines: t.lines, total: Some(r.count), size }
       }
-      Err(e) => TextPreview::Error { message: io_message(&e) },
+      Err(e) => e,
     };
   }
   let start = if r.lines.is_empty() { 1 } else { from };
   TextPreview::Text { start, lines: r.lines, total: r.complete.then_some(r.count), size }
+}
+
+/// Текстовый файл для окна просмотра: папка — «Это папка»; FIFO, устройство — «Особый файл»
+/// (чтение может не закончиться). Сначала stat (устройство не открываем вовсе), затем открытие
+/// без блокировки с проверкой типа у дескриптора: файл не подменить между проверкой и чтением.
+fn open_text(path: &Path) -> Result<(fs::File, fs::Metadata), TextPreview> {
+  let err = |message: String| TextPreview::Error { message };
+  let meta = fs::metadata(path).map_err(|e| err(io_message(&e)))?;
+  if meta.is_dir() {
+    return Err(err("Это папка".to_string()));
+  }
+  if !meta.is_file() {
+    return Err(err("Особый файл".to_string()));
+  }
+  open_regular(path).map_err(err)
 }
 
 struct Scan {
@@ -223,14 +228,13 @@ pub enum DirPreview {
 
 /// Первые limit записей папки (сначала папки, по имени; скрытые не показываем) и сколько всего.
 pub fn list_preview(path: &Path, limit: usize) -> DirPreview {
-  let all = match fs_complete::list_dir(path, false, false) {
+  // Отбор и сортировка — по всей папке, до среза: «первые 5» — первые по алфавиту.
+  let (first, total) = match fs_complete::list_matching(path, false, false, "", limit) {
     Ok(v) => v,
     Err(message) => return DirPreview::Error { message },
   };
-  let total = all.len();
-  let entries = all
+  let entries = first
     .into_iter()
-    .take(limit)
     .map(|e| {
       let p = path.join(&e.name);
       if e.is_dir {
@@ -534,46 +538,75 @@ pub fn editor_args(prog: &Path, mut args: Vec<String>, path: &str, line: Option<
   args
 }
 
-static EDITOR: OnceLock<(String, String)> = OnceLock::new();
-
 fn login_shell() -> String {
   std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/zsh".into())
 }
 
+/// Сколько ждать login-оболочку (rc-файлы бывают медленными).
+const SHELL_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Последние n строк вывода login-оболочки (rc-файлы могут печатать лишнее выше).
-fn shell_tail(args: &[&str], n: usize) -> Vec<String> {
-  let out = run_with_timeout(Command::new(login_shell()).args(args), Duration::from_secs(5)).unwrap_or_default();
+/// None — оболочка не ответила вовремя или не запустилась (такой ответ не кэшируется).
+fn shell_tail(args: &[&str], n: usize) -> Option<Vec<String>> {
+  let out = run_with_timeout(Command::new(login_shell()).args(args), SHELL_TIMEOUT)?;
   let text = String::from_utf8_lossy(&out);
   let lines: Vec<&str> = text.lines().collect();
   if lines.len() < n {
-    return vec![String::new(); n];
+    return Some(vec![String::new(); n]);
   }
-  lines[lines.len() - n..].iter().map(|l| l.trim().to_string()).collect()
+  Some(lines[lines.len() - n..].iter().map(|l| l.trim().to_string()).collect())
 }
 
-/// $VISUAL и путь к `code` — из login-оболочки (из Dock их не видно). Кэш на сеанс.
-fn editor_env() -> &'static (String, String) {
-  EDITOR.get_or_init(|| {
-    let t = shell_tail(&["-lic", r#"printf '\n%s\n%s\n' "$VISUAL" "$(command -v code 2>/dev/null)""#], 2);
-    let code = if t[1].starts_with('/') { t[1].clone() } else { String::new() };
-    (t[0].clone(), code)
-  })
+/// $VISUAL и путь к `code` — из login-оболочки (из Dock их не видно). Кэшируется на сеанс только
+/// полученный ответ: таймаут не запоминается пустым. Замок на время запроса не держится.
+fn editor_env() -> (String, String) {
+  static EDITOR: Mutex<Option<(String, String)>> = Mutex::new(None);
+  if let Some(v) = EDITOR.lock().ok().and_then(|g| g.clone()) {
+    return v;
+  }
+  let Some(t) = shell_tail(&["-lic", r#"printf '\n%s\n%s\n' "$VISUAL" "$(command -v code 2>/dev/null)""#], 2) else {
+    return (String::new(), String::new());
+  };
+  let code = if t[1].starts_with('/') { t[1].clone() } else { String::new() };
+  let v = (t[0].clone(), code);
+  if let Ok(mut g) = EDITOR.lock() {
+    *g = Some(v.clone());
+  }
+  v
 }
 
 /// Программа по имени из PATH login-оболочки; имя — позиционным аргументом, без подстановки в скрипт.
+/// Ответ оболочки кэшируется на сеанс, как и $VISUAL: login-оболочка не запускается на каждое «открыть в редакторе».
 fn resolve_in_shell(name: &str) -> Option<String> {
-  let t = shell_tail(&["-lic", r#"command -v -- "$1""#, "_", name], 1);
-  t[0].starts_with('/').then(|| t[0].clone())
+  static RESOLVED: Mutex<Option<HashMap<String, Option<String>>>> = Mutex::new(None);
+  if let Some(v) = RESOLVED.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(name).cloned())) {
+    return v;
+  }
+  let t = shell_tail(&["-lic", r#"command -v -- "$1""#, "_", name], 1)?;
+  let v = t[0].starts_with('/').then(|| t[0].clone());
+  if let Ok(mut g) = RESOLVED.lock() {
+    g.get_or_insert_with(HashMap::new).insert(name.to_string(), v.clone());
+  }
+  v
 }
+
+/// Сколько после выхода оболочки ждать, пока поток чтения дочитает вывод: потомок (демон из rc)
+/// мог унаследовать stdout и держать его открытым сколько угодно.
+const DRAIN_GRACE: Duration = Duration::from_millis(500);
 
 fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<Vec<u8>> {
   use std::os::unix::process::CommandExt;
   let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0).spawn().ok()?;
   let mut stdout = child.stdout.take()?;
-  let reader = std::thread::spawn(move || {
-    let mut buf = Vec::new();
-    let _ = stdout.read_to_end(&mut buf);
-    buf
+  let (tx, rx) = std::sync::mpsc::channel::<()>();
+  let got = std::sync::Arc::new(Mutex::new(Vec::new()));
+  let sink = got.clone();
+  std::thread::spawn(move || {
+    let mut chunk = [0u8; 4096];
+    while let Ok(n @ 1..) = stdout.read(&mut chunk) {
+      sink.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(&chunk[..n]);
+    }
+    let _ = tx.send(());
   });
   let deadline = Instant::now() + timeout;
   loop {
@@ -588,28 +621,37 @@ fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<Vec<u8>> {
       }
     }
   }
-  reader.join().ok()
+  // Не join: EOF может не прийти никогда (см. DRAIN_GRACE). Тогда берём прочитанное к этому
+  // моменту (вывод самой оболочки уже в пайпе), а поток чтения остаётся ждать демона.
+  let _ = rx.recv_timeout(DRAIN_GRACE);
+  Some(std::mem::take(&mut *got.lock().unwrap_or_else(|e| e.into_inner())))
 }
 
-/// Расширения, которые «открыть» = запустить код: приложения и бандлы, сценарии оболочки и
-/// Terminal, AppleScript и Automator, установщики и образы дисков, ссылки (`.webloc`/`.fileloc`
-/// могут вести на приложение), профили конфигурации. Такие пути ↵ показывает в Finder.
-const LAUNCH_EXT: &[&str] = &[
-  "app", "appex", "action", "bundle", "framework", "kext", "plugin", "prefpane", "qlgenerator", "saver", "service",
-  "xpc", "osax", "mdimporter", "command", "tool", "terminal", "sh", "bash", "zsh", "csh", "tcsh", "ksh", "fish",
-  "scpt", "scptd", "applescript", "workflow", "wflow", "shortcut", "pkg", "mpkg", "dmg", "iso", "sparseimage",
-  "sparsebundle", "jar", "jnlp", "webloc", "inetloc", "fileloc", "url", "mobileconfig", "configprofile",
+/// Расширения, которые «открыть» программой по умолчанию безопасно: документы, картинки, звук,
+/// видео, таблицы и простые текстовые форматы. Всё прочее (приложения и бандлы, сценарии любых
+/// языков — `.py`, `.pl`, `.rb`, `.command`…, установщики, образы дисков, ссылки, профили, файлы
+/// без расширения) ↵ показывает в Finder: список запрещённого всегда неполон.
+const OPEN_EXT: &[&str] = &[
+  // Текст и документы
+  "txt", "text", "md", "markdown", "rtf", "pdf", "csv", "tsv", "log", "json", "yaml", "yml", "toml", "xml",
+  "doc", "docx", "odt", "pages", "xls", "xlsx", "ods", "numbers", "ppt", "pptx", "odp", "key", "epub",
+  // Картинки
+  "png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "tif", "tiff", "bmp", "ico", "icns", "svg", "psd", "avif",
+  // Звук
+  "mp3", "m4a", "aac", "wav", "aif", "aiff", "flac", "ogg", "oga", "opus", "caf",
+  // Видео
+  "mp4", "m4v", "mov", "avi", "mkv", "webm", "mpg", "mpeg", "3gp",
 ];
 
-/// Запуск по `open` исполнил бы код: папка (бандл `.app` — тоже папка), исполняемый файл
-/// или расширение из `LAUNCH_EXT` (у пути или у цели ссылки).
+/// Запуск по `open` мог бы исполнить код: папка (бандл `.app` — тоже папка), исполняемый файл
+/// или расширение не из `OPEN_EXT` (у пути или у цели ссылки).
 pub fn launches_code(names: &[&Path], is_dir: bool, mode: u32) -> bool {
   if is_dir || mode & 0o111 != 0 {
     return true;
   }
   names.iter().any(|n| {
     let e = n.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    LAUNCH_EXT.contains(&e.as_str())
+    !OPEN_EXT.contains(&e.as_str())
   })
 }
 
@@ -649,35 +691,41 @@ pub fn open_command(how: &str, path: &str, line: Option<u32>, editor: Option<(Pa
   }
 }
 
-#[tauri::command(async)]
-pub fn preview_text(path: String, line: Option<u32>) -> TextPreview {
-  read_text(Path::new(&path), line, SCAN_MAX)
+// Команды — в пуле блокирующих задач: чтение файлов, декодирование картинок и login-оболочка
+// не занимают ни главный поток, ни рабочие потоки tokio.
+#[tauri::command]
+pub async fn preview_text(path: String, line: Option<u32>) -> TextPreview {
+  crate::blocking(move || read_text(Path::new(&path), line, SCAN_MAX)).await.unwrap_or_else(|message| TextPreview::Error { message })
 }
 
-#[tauri::command(async)]
-pub fn preview_dir(path: String) -> DirPreview {
-  list_preview(Path::new(&path), DIR_ENTRIES)
+#[tauri::command]
+pub async fn preview_dir(path: String) -> DirPreview {
+  crate::blocking(move || list_preview(Path::new(&path), DIR_ENTRIES)).await.unwrap_or_else(|message| DirPreview::Error { message })
 }
 
-#[tauri::command(async)]
-pub fn preview_image(path: String, max: u32) -> Result<ImagePreview, String> {
-  image_preview(Path::new(&path), max)
+#[tauri::command]
+pub async fn preview_image(path: String, max: u32) -> Result<ImagePreview, String> {
+  crate::blocking(move || image_preview(Path::new(&path), max)).await?
 }
 
-#[tauri::command(async)]
-pub fn preview_pdf(path: String, page: u32, width: u32) -> Result<PdfPreview, String> {
-  pdf_preview(Path::new(&path), page, width)
+#[tauri::command]
+pub async fn preview_pdf(path: String, page: u32, width: u32) -> Result<PdfPreview, String> {
+  crate::blocking(move || pdf_preview(Path::new(&path), page, width)).await?
 }
 
-#[tauri::command(async)]
-pub fn preview_open(path: String, how: String, line: Option<u32>) -> Result<(), String> {
+#[tauri::command]
+pub async fn preview_open(path: String, how: String, line: Option<u32>) -> Result<(), String> {
+  crate::blocking(move || open_path(path, how, line)).await?
+}
+
+fn open_path(path: String, how: String, line: Option<u32>) -> Result<(), String> {
   if !Path::new(&path).exists() {
     return Err("Файл не найден".to_string());
   }
   let (how, path) = safe_open(&path, &how)?;
   let editor = if how == "editor" {
     let (v, c) = editor_env();
-    pick_editor(v, resolve_in_shell, c)
+    pick_editor(&v, resolve_in_shell, &c)
   } else {
     None
   };
@@ -847,6 +895,22 @@ mod tests {
     }
     // Ссылка x.png на x.command: решает и цель.
     assert!(launches_code(&[p("/w/x.png"), p("/w/x.command")], false, 0o644));
+    // Сценарии любых языков и файлы без расширения — не «открыть», а показать в Finder.
+    for n in ["/w/x.py", "/w/x.pl", "/w/x.rb", "/w/x.js", "/w/x.php", "/w/x.lua", "/w/x.applescript", "/w/Makefile", "/w/x.html"] {
+      assert!(launches_code(&[Path::new(n)], false, 0o644), "{n}");
+    }
+    for n in ["/w/a.PNG", "/w/a.jpeg", "/w/a.mp4", "/w/a.mp3", "/w/a.docx", "/w/a.csv", "/w/a.md"] {
+      assert!(!launches_code(&[Path::new(n)], false, 0o644), "{n}");
+    }
+  }
+
+  /// Оболочка вышла, а её потомок держит stdout: ответ — через короткое окно, не через вечное ожидание EOF.
+  #[test]
+  fn run_with_timeout_does_not_wait_for_daemon_holding_stdout() {
+    let start = Instant::now();
+    let out = run_with_timeout(Command::new("/bin/sh").args(["-c", "echo hi; (sleep 5 &)"]), Duration::from_secs(5));
+    assert!(start.elapsed() < Duration::from_secs(3), "{:?}", start.elapsed());
+    assert_eq!(out.as_deref(), Some(&b"hi\n"[..]));
   }
 
   #[test]

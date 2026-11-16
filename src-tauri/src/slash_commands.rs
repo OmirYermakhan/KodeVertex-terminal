@@ -66,12 +66,12 @@ fn clip(s: &str) -> String {
   out
 }
 
-fn read_head(path: &Path) -> String {
+/// Начало файла; FIFO и устройства не читаются (открытие без блокировки, тип — у дескриптора).
+fn read_head(path: &Path) -> Option<String> {
+  let (f, _) = crate::attach::open_regular(path).ok()?;
   let mut buf = Vec::new();
-  if let Ok(f) = fs::File::open(path) {
-    let _ = f.take(MAX_READ).read_to_end(&mut buf);
-  }
-  String::from_utf8_lossy(&buf).into_owned()
+  let _ = f.take(MAX_READ).read_to_end(&mut buf);
+  Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
 fn sorted_entries(dir: &Path) -> Vec<PathBuf> {
@@ -98,11 +98,13 @@ fn walk(dir: &Path, prefix: &str, depth: usize, source: &'static str, budget: &m
         walk(&path, &format!("{prefix}{file}:"), depth + 1, source, budget, out);
       }
     } else if let Some(stem) = file.strip_suffix(".md") {
-      if stem.is_empty() || stem.contains(char::is_whitespace) {
+      // FIFO `x.md` и прочие не обычные файлы — не команды (открытие FIFO ждало бы писателя вечно).
+      if stem.is_empty() || stem.contains(char::is_whitespace) || !meta.is_file() {
         continue;
       }
+      let Some(head) = read_head(&path) else { continue };
       *budget -= 1;
-      out.push(SlashCommand { name: format!("{prefix}{stem}"), description: describe(&read_head(&path)), source });
+      out.push(SlashCommand { name: format!("{prefix}{stem}"), description: describe(&head), source });
     }
   }
 }
@@ -121,9 +123,9 @@ pub fn list_slash_commands(cwd: &Path, home: Option<&Path>) -> Vec<SlashCommand>
   out
 }
 
-#[tauri::command(async)]
-pub fn claude_slash_commands(cwd: String) -> Vec<SlashCommand> {
-  list_slash_commands(Path::new(&cwd), dirs::home_dir().as_deref())
+#[tauri::command]
+pub async fn claude_slash_commands(cwd: String) -> Vec<SlashCommand> {
+  crate::blocking(move || list_slash_commands(Path::new(&cwd), dirs::home_dir().as_deref())).await.unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -212,5 +214,19 @@ mod tests {
     let v = list_slash_commands(proj.path(), None);
     let names: Vec<&str> = v.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, vec!["a:b:ok"]);
+  }
+
+  #[test]
+  fn fifo_command_is_skipped_without_blocking() {
+    let proj = tempdir().unwrap();
+    put(proj.path(), ".claude/commands/ok.md", "Хорошая");
+    let fifo = proj.path().join(".claude/commands/pipe.md");
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let root = proj.path().to_path_buf();
+    std::thread::spawn(move || tx.send(list_slash_commands(&root, None)).unwrap());
+    let v = rx.recv_timeout(std::time::Duration::from_secs(2)).expect("список команд заблокировался на FIFO");
+    let names: Vec<&str> = v.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["ok"]);
   }
 }

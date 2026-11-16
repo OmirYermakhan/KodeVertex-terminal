@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
@@ -21,6 +21,38 @@ const DRAIN_GRACE: Duration = Duration::from_millis(150);
 /// Как часто читатель проверяет флаг остановки.
 #[cfg(unix)]
 const READ_POLL: Duration = Duration::from_millis(100);
+/// Вывод копится и уходит во фронт пачкой: не чаще раза в FLUSH_EVERY (или сразу по FLUSH_MAX байт),
+/// а не отдельным сообщением на каждый read().
+#[cfg(unix)]
+const FLUSH_EVERY: Duration = Duration::from_millis(4);
+const FLUSH_MAX: usize = 64 * 1024;
+
+/// Пауза чтения (обратное давление от фронта): пока закрыта, читатель не берёт вывод из PTY —
+/// буфер ядра заполняется, и программа в терминале блокируется на записи.
+#[derive(Default)]
+struct Gate {
+  paused: Mutex<bool>,
+  cv: Condvar,
+}
+
+impl Gate {
+  fn set(&self, paused: bool) {
+    *lock(&self.paused) = paused;
+    self.cv.notify_all();
+  }
+
+  /// Ждёт снятия паузы; false — пора останавливаться (флаг stop).
+  fn wait_open(&self, stop: &AtomicBool) -> bool {
+    let mut p = lock(&self.paused);
+    while *p {
+      if stop.load(Ordering::SeqCst) {
+        return false;
+      }
+      p = self.cv.wait_timeout(p, Duration::from_millis(100)).map(|(g, _)| g).unwrap_or_else(|e| e.into_inner().0);
+    }
+    !stop.load(Ordering::SeqCst)
+  }
+}
 
 pub struct SpawnOpts {
   pub cwd: Option<PathBuf>,
@@ -44,6 +76,8 @@ struct Session {
   /// Оболочка завершилась и подобрана `wait`: её pid мог достаться другому процессу.
   #[cfg_attr(not(unix), allow(dead_code))]
   exited: Arc<AtomicBool>,
+  /// Пауза чтения (`pty_pause` / `pty_resume`).
+  gate: Arc<Gate>,
 }
 
 type Sessions = Arc<Mutex<HashMap<String, Session>>>;
@@ -130,6 +164,7 @@ impl PtyManager {
     let id = uuid::Uuid::new_v4().to_string();
     let stop_reading = Arc::new(AtomicBool::new(false));
     let exited = Arc::new(AtomicBool::new(false));
+    let gate = Arc::new(Gate::default());
     let (input, input_rx) = mpsc::channel::<Vec<u8>>();
     let (read_done, read_done_rx) = mpsc::channel::<()>();
 
@@ -142,6 +177,7 @@ impl PtyManager {
         pid: child.process_id(),
         stop_reading: stop_reading.clone(),
         exited: exited.clone(),
+        gate: gate.clone(),
       },
     );
 
@@ -156,8 +192,9 @@ impl PtyManager {
     })?;
 
     let stop = stop_reading.clone();
+    let read_gate = gate.clone();
     spawn_thread(format!("pty-read-{id}"), move || {
-      reader.run(&stop, on_data);
+      reader.run(&stop, &read_gate, on_data);
       let _ = read_done.send(());
     })?;
 
@@ -166,6 +203,8 @@ impl PtyManager {
     spawn_thread(format!("pty-wait-{id}"), move || {
       let code = child.wait().ok().map(|s| s.exit_code());
       exited.store(true, Ordering::SeqCst);
+      // Пауза больше не нужна: хвост вывода дочитываем, иначе он пропал бы.
+      gate.set(false);
       // Даём читателю дочитать хвост вывода, затем останавливаем его в любом случае:
       // слейв может держать отвязанный потомок, и тогда EOF не придёт никогда.
       let _ = read_done_rx.recv_timeout(DRAIN_GRACE);
@@ -228,6 +267,28 @@ impl PtyManager {
     Ok(())
   }
 
+  /// Пауза чтения вывода сессии (обратное давление). Неизвестная сессия — не ошибка.
+  pub fn pause(&self, id: &str) {
+    if let Some(s) = lock(&self.sessions).get(id) {
+      s.gate.set(true);
+    }
+  }
+
+  /// Снять паузу чтения. Неизвестная сессия — не ошибка.
+  pub fn resume(&self, id: &str) {
+    if let Some(s) = lock(&self.sessions).get(id) {
+      s.gate.set(false);
+    }
+  }
+
+  /// Закрыть все сессии (перезагрузка страницы: прежние терминалы фронту уже не принадлежат).
+  pub fn kill_all(&self) {
+    let ids: Vec<String> = lock(&self.sessions).keys().cloned().collect();
+    for id in ids {
+      let _ = self.kill(&id);
+    }
+  }
+
   /// PID оболочки живой сессии.
   #[allow(dead_code)] // нужен тестам; командам пока не требуется
   pub fn pid(&self, id: &str) -> Option<u32> {
@@ -265,29 +326,70 @@ impl PtyReader {
     Ok(Self { inner: master.try_clone_reader().map_err(|e| e.to_string())? })
   }
 
+  /// Читает, пока не EOF / ошибка / stop. Вывод копится в `pending` и отдаётся пачкой: через
+  /// FLUSH_EVERY после первого непереданного байта, по FLUSH_MAX байт, перед паузой и в конце.
   #[cfg(unix)]
-  fn run(mut self, stop: &AtomicBool, on_data: impl Fn(Vec<u8>)) {
+  fn run(mut self, stop: &AtomicBool, gate: &Gate, on_data: impl Fn(Vec<u8>)) {
     let mut buf = vec![0u8; READ_BUF];
+    let mut pending: Vec<u8> = Vec::new();
+    let mut since: Option<std::time::Instant> = None;
+    let flush = |pending: &mut Vec<u8>, since: &mut Option<std::time::Instant>| {
+      if !pending.is_empty() {
+        on_data(std::mem::take(pending));
+      }
+      *since = None;
+    };
     while !stop.load(Ordering::SeqCst) {
-      match wait_readable(&self.file, READ_POLL) {
-        Ok(false) => continue,
+      if *lock(&gate.paused) {
+        // Перед паузой отдаём накопленное: фронт видит всё, что уже прочитано.
+        flush(&mut pending, &mut since);
+        if !gate.wait_open(stop) {
+          break;
+        }
+      }
+      let wait = match since {
+        Some(t) => FLUSH_EVERY.saturating_sub(t.elapsed()),
+        None => READ_POLL,
+      };
+      if since.is_some() && wait.is_zero() {
+        flush(&mut pending, &mut since);
+        continue;
+      }
+      match wait_readable(&self.file, wait) {
+        Ok(false) => {
+          // Тишина: накопленное — во фронт.
+          if since.is_some() {
+            flush(&mut pending, &mut since);
+          }
+          continue;
+        }
         Ok(true) => {}
         Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
         Err(_) => break,
       }
       match self.file.read(&mut buf) {
         Ok(0) => break,
-        Ok(n) => on_data(buf[..n].to_vec()),
+        Ok(n) => {
+          pending.extend_from_slice(&buf[..n]);
+          since.get_or_insert_with(std::time::Instant::now);
+          if pending.len() >= FLUSH_MAX {
+            flush(&mut pending, &mut since);
+          }
+        }
         Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
         Err(_) => break,
       }
     }
+    flush(&mut pending, &mut since);
   }
 
   #[cfg(not(unix))]
-  fn run(mut self, stop: &AtomicBool, on_data: impl Fn(Vec<u8>)) {
+  fn run(mut self, stop: &AtomicBool, gate: &Gate, on_data: impl Fn(Vec<u8>)) {
     let mut buf = vec![0u8; READ_BUF];
     while !stop.load(Ordering::SeqCst) {
+      if !gate.wait_open(stop) {
+        break;
+      }
       match self.inner.read(&mut buf) {
         Ok(0) => break,
         Ok(n) => on_data(buf[..n].to_vec()),
@@ -360,6 +462,21 @@ pub fn pty_resize(manager: State<'_, PtyManager>, id: String, cols: u16, rows: u
 #[tauri::command(async)]
 pub fn pty_kill(manager: State<'_, PtyManager>, id: String) -> Result<(), String> {
   manager.kill(&id)
+}
+
+/// Обратное давление: фронт не успевает отрисовывать — читатель перестаёт брать вывод из PTY,
+/// программа блокируется на записи. Неизвестная сессия — не ошибка.
+#[tauri::command]
+pub fn pty_pause(manager: State<'_, PtyManager>, id: String) -> Result<(), String> {
+  manager.pause(&id);
+  Ok(())
+}
+
+/// Снять паузу `pty_pause`. Неизвестная сессия — не ошибка.
+#[tauri::command]
+pub fn pty_resume(manager: State<'_, PtyManager>, id: String) -> Result<(), String> {
+  manager.resume(&id);
+  Ok(())
 }
 
 #[cfg(test)]
@@ -877,6 +994,72 @@ pub(crate) mod tests {
     assert!(is_zsh("/opt/homebrew/bin/zsh"));
     assert!(!is_zsh("/bin/bash"));
     assert!(!is_zsh("/usr/local/bin/fish"));
+  }
+
+  /// Пауза: вывод не читается, пока её не снимут; после снятия приходит целиком.
+  #[test]
+  fn pty_pause_holds_output_until_resume() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, _rx, _mk) = start(&m, opts(home.path(), &[]));
+    m.pause(&id);
+    let from = out.len();
+    m.write(&id, b"echo \"PA\"\"USED\"\n").unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(!out.text()[from..].contains("PAUSED"), "вывод прочитан во время паузы: {:?}", out.text());
+    m.resume(&id);
+    assert!(out.wait_for(b"PAUSED", from), "после снятия паузы вывода нет: {:?}", out.text());
+    // Неизвестная сессия — не ошибка.
+    m.pause("нет");
+    m.resume("нет");
+    m.kill(&id).unwrap();
+  }
+
+  /// Большой вывод уходит пачками (≤ FLUSH_MAX), а не сообщением на каждый read().
+  #[test]
+  fn pty_output_is_batched() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let out = Output::default();
+    let sink = out.sink();
+    let chunks = Arc::new(Mutex::new(Vec::<usize>::new()));
+    let c = chunks.clone();
+    let (tx, _rx) = mpsc::channel();
+    let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Spawned { id, .. } = m
+      .spawn(
+        opts(home.path(), &[]),
+        move |bytes| {
+          lock(&c).push(bytes.len());
+          sink(bytes);
+        },
+        move |code| {
+          let _ = tx.send(code);
+        },
+      )
+      .unwrap();
+    drop(_g);
+    assert!(out.wait_for(OSC7, 0));
+    let before = lock(&chunks).len();
+    let from = out.len();
+    m.write(&id, b"head -c 2000000 /dev/zero | tr '\\0' x; echo; echo \"DO\"\"NE\"\n").unwrap();
+    assert!(out.wait_for(b"DONE", from), "нет вывода: {:?}", &out.text()[from..from + 200.min(out.len() - from)]);
+    let sizes: Vec<usize> = lock(&chunks)[before..].to_vec();
+    assert!(sizes.iter().all(|&n| n <= FLUSH_MAX + READ_BUF), "{sizes:?}");
+    // 2 МБ по 16 КБ на read() дали бы 120+ сообщений; пачками — заметно меньше.
+    assert!(sizes.len() < 100, "сообщений: {}", sizes.len());
+    m.kill(&id).unwrap();
+  }
+
+  #[test]
+  fn pty_kill_all_closes_every_session() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (_a, _oa, rxa, _) = start(&m, opts(home.path(), &[]));
+    let (_b, _ob, rxb, _) = start(&m, opts(home.path(), &[]));
+    m.kill_all();
+    assert!(rxa.recv_timeout(EXIT_TIMEOUT).is_ok());
+    assert!(rxb.recv_timeout(EXIT_TIMEOUT).is_ok());
   }
 
   #[test]

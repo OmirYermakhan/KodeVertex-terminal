@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
@@ -19,7 +19,7 @@ const STDERR_TAIL: usize = 4096;
 const KILL_GRACE: Duration = Duration::from_secs(2);
 /// Сколько после выхода процесса ждать, пока читатели дочитают вывод.
 const DRAIN_GRACE: Duration = Duration::from_millis(500);
-/// Как часто проверяем, не завершился ли процесс.
+/// Как часто при выходе из приложения проверяем, все ли процессы завершились.
 const WAIT_POLL: Duration = Duration::from_millis(20);
 
 const NOT_FOUND: &str = "Claude Code не найден. Установите: npm i -g @anthropic-ai/claude-code";
@@ -28,11 +28,20 @@ const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Сколько при выходе из приложения ждать, пока процессы `claude` завершатся по SIGTERM.
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(1000);
 
+/// Состояние процесса под замком: сигнал шлётся только пока процесс не подобран (`reaped`) —
+/// иначе его pid (и id группы) мог бы уже достаться другому процессу.
+#[derive(Default)]
+struct Proc {
+  /// Процесс подобран `wait`.
+  reaped: bool,
+  /// Попросили остановиться (SIGTERM отправлен).
+  stopping: bool,
+}
+
 struct Session {
-  child: Arc<Mutex<Child>>,
+  pid: u32,
+  proc_: Arc<Mutex<Proc>>,
   stdin: Arc<Mutex<ChildStdin>>,
-  /// Когда попросили остановиться (SIGTERM отправлен); по истечении `KILL_GRACE` — SIGKILL.
-  stop_at: Arc<Mutex<Option<Instant>>>,
 }
 
 #[derive(Default, Clone)]
@@ -77,6 +86,9 @@ pub struct Launch {
   pub effort: Option<String>,
   /// `default` | `acceptEdits` | `bypassPermissions` (см. `permission_mode`).
   pub permission_mode: Option<String>,
+  /// PATH login-оболочки пользователя: у приложения из Dock PATH системный, и `#!/usr/bin/env node`
+  /// у claude из npm не нашёл бы node. None — PATH приложения как есть.
+  pub path_env: Option<String>,
   /// Правка отправленного сообщения: продолжить сессию `resume` с сообщения `uuid` (включительно),
   /// всё после него отбрасывается (`--resume-session-at`, только вместе с `--resume`).
   pub resume_at: Option<String>,
@@ -181,6 +193,9 @@ impl ClaudeManager {
     if !cwd.is_dir() {
       return Err(format!("Каталог {} не существует", cwd.display()));
     }
+    if let Some(path) = launch.path_env.as_deref().filter(|p| !p.is_empty()) {
+      cmd.env("PATH", path);
+    }
     cmd.current_dir(cwd);
     // Своя группа процессов: сигналы остановки и прерывания доходят и до инструментов claude.
     cmd.process_group(0);
@@ -192,12 +207,9 @@ impl ClaudeManager {
     let mut stderr = child.stderr.take().ok_or("нет stderr")?;
 
     let id = uuid::Uuid::new_v4().to_string();
-    let child = Arc::new(Mutex::new(child));
-    let stop_at = Arc::new(Mutex::new(None::<Instant>));
-    lock(&self.sessions).insert(
-      id.clone(),
-      Session { child: child.clone(), stdin: Arc::new(Mutex::new(stdin)), stop_at: stop_at.clone() },
-    );
+    let pid = child.id();
+    let proc_ = Arc::new(Mutex::new(Proc::default()));
+    lock(&self.sessions).insert(id.clone(), Session { pid, proc_: proc_.clone(), stdin: Arc::new(Mutex::new(stdin)) });
 
     let (out_done, out_done_rx) = mpsc::channel::<()>();
     let (err_done, err_done_rx) = mpsc::channel::<Vec<u8>>();
@@ -241,27 +253,19 @@ impl ClaudeManager {
     let sessions = self.sessions.clone();
     let wait_id = id.clone();
     spawn_thread(format!("claude-wait-{id}"), move || {
-      let code = loop {
-        {
-          let mut c = lock(&child);
-          match c.try_wait() {
-            Ok(Some(status)) => {
-              // Остановленная сессия: потомки (инструменты) не должны пережить claude.
-              if lock(&stop_at).is_some() {
-                kill_group(c.id(), libc::SIGKILL);
-              }
-              break status.code();
-            }
-            Ok(None) => {
-              let overdue = lock(&stop_at).is_some_and(|t| t.elapsed() >= KILL_GRACE);
-              if overdue {
-                kill_group(c.id(), libc::SIGKILL);
-              }
-            }
-            Err(_) => break None,
-          }
+      let mut child = child;
+      // Блокирующее ожидание выхода без опроса; WNOWAIT — процесс ещё не подобран, pid занят.
+      wait_exited(pid);
+      let code = {
+        let mut st = lock(&proc_);
+        // Остановленная сессия: потомки (инструменты) не должны пережить claude. Лидер группы
+        // ещё не подобран — id группы не переиспользован.
+        if st.stopping {
+          kill_group(pid, libc::SIGKILL);
         }
-        std::thread::sleep(WAIT_POLL);
+        let code = child.wait().ok().and_then(|s| s.code());
+        st.reaped = true;
+        code
       };
       // Сессию убираем до события, чтобы после on_exit send уже давал Err.
       lock(&sessions).remove(&wait_id);
@@ -317,47 +321,81 @@ impl ClaudeManager {
 
   /// SIGINT группе процесса `claude` (прерывает текущий ход и запущенные им команды).
   pub fn interrupt(&self, id: &str) -> Result<(), String> {
-    let child = lock(&self.sessions).get(id).map(|s| s.child.clone()).ok_or_else(|| no_session(id))?;
-    let c = lock(&child);
-    // Под замком `child`: пока `try_wait` не подобрал процесс, его pid не переиспользован.
-    signal(&c, libc::SIGINT)
+    let (pid, proc_) = lock(&self.sessions).get(id).map(|s| (s.pid, s.proc_.clone())).ok_or_else(|| no_session(id))?;
+    let st = lock(&proc_);
+    if st.reaped {
+      return Err(no_session(id));
+    }
+    // Под замком состояния: пока процесс не подобран, его pid не переиспользован.
+    signal(pid, libc::SIGINT)
   }
 
-  /// Просит процесс завершиться (SIGTERM), через `KILL_GRACE` — SIGKILL.
+  /// Просит процесс завершиться (SIGTERM), через `KILL_GRACE` — SIGKILL (отдельный поток-таймер).
   /// Неизвестная или уже завершённая сессия — не ошибка.
   pub fn stop(&self, id: &str) -> Result<(), String> {
-    let Some((child, stop_at)) = lock(&self.sessions).get(id).map(|s| (s.child.clone(), s.stop_at.clone())) else {
+    let Some((pid, proc_)) = lock(&self.sessions).get(id).map(|s| (s.pid, s.proc_.clone())) else {
       return Ok(());
     };
-    let c = lock(&child);
-    *lock(&stop_at) = Some(Instant::now());
-    signal(&c, libc::SIGTERM).or(Ok(()))
+    stop_proc(pid, &proc_);
+    Ok(())
   }
 
-  /// Выход из приложения: всем сессиям SIGTERM, через `SHUTDOWN_GRACE` оставшимся — SIGKILL (вместе с потомками).
+  /// Остановить все сессии (выход из приложения, перезагрузка страницы): SIGTERM, через
+  /// `SHUTDOWN_GRACE` оставшимся — SIGKILL вместе с потомками. Только сессии, бывшие на момент
+  /// вызова: запущенные после (новой страницей) не трогаются.
   pub fn stop_all(&self) {
-    let ids: Vec<String> = lock(&self.sessions).keys().cloned().collect();
-    for id in &ids {
-      let _ = self.stop(id);
+    let procs: Vec<(u32, Arc<Mutex<Proc>>)> = lock(&self.sessions).values().map(|s| (s.pid, s.proc_.clone())).collect();
+    for (pid, p) in &procs {
+      stop_proc(*pid, p);
     }
-    // Поток ожидания убирает сессию из таблицы, когда процесс завершился.
     let deadline = Instant::now() + SHUTDOWN_GRACE;
-    while !lock(&self.sessions).is_empty() && Instant::now() < deadline {
+    while procs.iter().any(|(_, p)| !lock(p).reaped) && Instant::now() < deadline {
       std::thread::sleep(WAIT_POLL);
     }
-    let left: Vec<_> = lock(&self.sessions).values().map(|s| s.child.clone()).collect();
-    for child in left {
-      let mut c = lock(&child);
-      // Под замком `child`: процесс ещё не подобран потоком ожидания, id группы не переиспользован.
-      kill_group(c.id(), libc::SIGKILL);
-      let _ = c.try_wait();
+    for (pid, p) in &procs {
+      let st = lock(p);
+      // Под замком: процесс ещё не подобран потоком ожидания, id группы не переиспользован.
+      if !st.reaped {
+        kill_group(*pid, libc::SIGKILL);
+      }
+    }
+  }
+}
+
+/// SIGTERM группе процесса и таймер на SIGKILL через `KILL_GRACE` (если к тому времени не завершился).
+fn stop_proc(pid: u32, proc_: &Arc<Mutex<Proc>>) {
+  let mut st = lock(proc_);
+  if st.reaped {
+    return;
+  }
+  if !st.stopping {
+    st.stopping = true;
+    let p = proc_.clone();
+    let _ = spawn_thread(format!("claude-kill-{pid}"), move || {
+      std::thread::sleep(KILL_GRACE);
+      if !lock(&p).reaped {
+        kill_group(pid, libc::SIGKILL);
+      }
+    });
+  }
+  let _ = signal(pid, libc::SIGTERM);
+}
+
+/// Ждёт завершения процесса, не подбирая его (WNOWAIT): pid остаётся занятым, пока `wait` не
+/// вызван явно. Ошибка (процесса нет) — сразу возврат.
+fn wait_exited(pid: u32) {
+  loop {
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let r = unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) };
+    if r == 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+      return;
     }
   }
 }
 
 /// Сигнал группе процесса `claude` (группу он возглавляет: `process_group(0)`).
-fn signal(child: &Child, sig: libc::c_int) -> Result<(), String> {
-  if unsafe { libc::killpg(child.id() as libc::pid_t, sig) } == 0 {
+fn signal(pid: u32, sig: libc::c_int) -> Result<(), String> {
+  if unsafe { libc::killpg(pid as libc::pid_t, sig) } == 0 {
     Ok(())
   } else {
     Err(std::io::Error::last_os_error().to_string())
@@ -372,24 +410,35 @@ fn spawn_thread(name: String, f: impl FnOnce() + Send + 'static) -> Result<(), S
   std::thread::Builder::new().name(name).spawn(f).map(|_| ()).map_err(|e| e.to_string())
 }
 
-static CLAUDE_PATH: OnceLock<PathBuf> = OnceLock::new();
+/// Найденный `claude` и PATH login-оболочки (его получает процесс `claude`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Resolved {
+  pub program: PathBuf,
+  pub path_env: Option<String>,
+}
 
-/// Ищет `claude` в PATH login-оболочки (приложение из Dock не видит PATH пользователя).
-/// Успешный результат кэшируется.
-pub fn resolve_claude() -> Result<PathBuf, String> {
+static CLAUDE_PATH: OnceLock<Resolved> = OnceLock::new();
+
+/// Метка строки с PATH в выводе оболочки (rc-файлы могут печатать что угодно).
+const PATH_MARK: &str = "__KODEVERTEX_PATH__=";
+
+/// Ищет `claude` в PATH login-оболочки (приложение из Dock не видит PATH пользователя) и
+/// запоминает сам PATH. Успешный результат кэшируется.
+pub fn resolve_claude() -> Result<Resolved, String> {
   if let Some(p) = CLAUDE_PATH.get() {
     return Ok(p.clone());
   }
   let sh = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/zsh".into());
-  let path = find_in_login_shell(Path::new(&sh), RESOLVE_TIMEOUT)?;
-  Ok(CLAUDE_PATH.get_or_init(|| path).clone())
+  let r = find_in_login_shell(Path::new(&sh), RESOLVE_TIMEOUT)?;
+  Ok(CLAUDE_PATH.get_or_init(|| r).clone())
 }
 
-/// `command -v claude` в login-оболочке `sh` (POSIX: работает и не в zsh). Алиас снимаем:
-/// нужен путь к файлу. Оболочка, не ответившая за `timeout`, убивается вместе с потомками.
-fn find_in_login_shell(sh: &Path, timeout: Duration) -> Result<PathBuf, String> {
+/// `command -v claude` и `$PATH` в login-оболочке `sh` (POSIX: работает и не в zsh). Алиас
+/// снимаем: нужен путь к файлу. Оболочка, не ответившая за `timeout`, убивается вместе с потомками.
+fn find_in_login_shell(sh: &Path, timeout: Duration) -> Result<Resolved, String> {
+  let script = format!("unalias claude 2>/dev/null; command -v claude; printf '\\n%s%s\\n' '{PATH_MARK}' \"$PATH\"");
   let mut child = Command::new(sh)
-    .args(["-lic", "unalias claude 2>/dev/null; command -v claude"])
+    .args(["-lic", &script])
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
     .stderr(Stdio::null())
@@ -423,13 +472,15 @@ fn find_in_login_shell(sh: &Path, timeout: Duration) -> Result<PathBuf, String> 
   let out = rx.recv_timeout(DRAIN_GRACE).unwrap_or_default();
   let stdout = String::from_utf8_lossy(&out);
   // rc-файлы могут печатать лишнее: берём последнюю строку, которая — существующий абсолютный путь.
-  stdout
+  let program = stdout
     .lines()
     .rev()
     .map(str::trim)
     .find(|l| l.starts_with('/') && Path::new(l).is_file())
     .map(PathBuf::from)
-    .ok_or_else(|| NOT_FOUND.to_string())
+    .ok_or_else(|| NOT_FOUND.to_string())?;
+  let path_env = stdout.lines().rev().find_map(|l| l.strip_prefix(PATH_MARK)).map(str::to_string).filter(|p| !p.is_empty());
+  Ok(Resolved { program, path_env })
 }
 
 #[derive(Serialize, Clone)]
@@ -439,6 +490,7 @@ pub struct ClaudeExit {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // параметры команды — поля JSON от фронта
 pub async fn claude_start(
   manager: State<'_, ClaudeManager>,
   cwd: String,
@@ -453,11 +505,12 @@ pub async fn claude_start(
   on_line: Channel<String>,
   on_exit: Channel<ClaudeExit>,
 ) -> Result<String, String> {
-  let program = tauri::async_runtime::spawn_blocking(resolve_claude).await.map_err(|e| e.to_string())??;
+  let Resolved { program, path_env } = tauri::async_runtime::spawn_blocking(resolve_claude).await.map_err(|e| e.to_string())??;
   manager.start(
     &program,
     Path::new(&cwd),
     Launch {
+      path_env,
       resume,
       model,
       effort,
@@ -631,6 +684,24 @@ mod tests {
     assert!(m.send(&id, "x").is_err());
   }
 
+  /// SIGTERM игнорируется — через KILL_GRACE таймер добивает SIGKILL; ожидание выхода без опроса.
+  #[test]
+  fn stop_escalates_to_sigkill_after_grace() {
+    let (_d, p) = script("trap '' TERM\necho '{\"ready\":1}'\nwhile :; do sleep 0.05; done");
+    let m = ClaudeManager::default();
+    let (id, lrx, erx) = start(&m, &p).unwrap();
+    take(&lrx, 1);
+    let t = Instant::now();
+    m.stop(&id).unwrap();
+    // Повторный stop не заводит второй таймер и не ошибка.
+    m.stop(&id).unwrap();
+    let (code, _) = erx.recv_timeout(WAIT).expect("on_exit");
+    assert_eq!(code, None, "убит сигналом");
+    assert!(t.elapsed() >= KILL_GRACE - Duration::from_millis(100), "{:?}", t.elapsed());
+    assert!(t.elapsed() < KILL_GRACE + Duration::from_secs(2), "{:?}", t.elapsed());
+    assert!(m.interrupt(&id).is_err());
+  }
+
   #[test]
   fn missing_program_is_error() {
     let m = ClaudeManager::default();
@@ -706,7 +777,7 @@ mod tests {
     let l = Launch { resume: Some("s-1".into()), resume_at: Some(String::new()), fork: false, ..Launch::default() };
     assert_eq!(launch_args(&l)[2..], ["--resume", "s-1"]);
     // Модель, усилие и режим при перезапуске сохраняются.
-    let l = Launch { resume: Some("s-1".into()), resume_at: Some("u-9".into()), fork: true, model: Some("fable".into()), effort: Some("high".into()), permission_mode: Some("default".into()), prompt_suggestions: false, diagrams_hint: false };
+    let l = Launch { resume: Some("s-1".into()), resume_at: Some("u-9".into()), fork: true, model: Some("fable".into()), effort: Some("high".into()), permission_mode: Some("default".into()), prompt_suggestions: false, diagrams_hint: false, path_env: None };
     assert_eq!(launch_args(&l), ["--permission-mode", "default", "--model", "fable", "--effort", "high", "--resume", "s-1", "--resume-session-at", "u-9", "--fork-session"]);
   }
 
@@ -907,7 +978,10 @@ mod tests {
     // Login-оболочка — sh: подменяем её скриптом, который выставляет PATH и исполняет переданную команду.
     let (_s, sh) = script(&format!("export PATH='{}':\"$PATH\"\necho мусор из rc\nalias claude=echo 2>/dev/null\nexec /bin/sh -c \"$2\"", bin.display()));
     let found = find_in_login_shell(&sh, Duration::from_secs(5)).unwrap();
-    assert_eq!(found, bin.join("claude"));
+    assert_eq!(found.program, bin.join("claude"));
+    // PATH оболочки пользователя тоже получен: с ним claude найдёт node из `#!/usr/bin/env node`.
+    let path = found.path_env.unwrap();
+    assert!(path.starts_with(&format!("{}:", bin.display())), "{path}");
   }
 
   #[test]

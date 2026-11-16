@@ -26,9 +26,10 @@ pub fn list_families() -> Vec<FontFamily> {
 static CACHE: OnceLock<Vec<FontFamily>> = OnceLock::new();
 
 /// Скан системных шрифтов дорогой: делаем один раз и вне главного потока.
-#[tauri::command(async)]
-pub fn fonts_list() -> Vec<FontFamily> {
-  CACHE.get_or_init(list_families).clone()
+/// Первый вызов сканирует шрифты системы — в пуле блокирующих задач.
+#[tauri::command]
+pub async fn fonts_list() -> Vec<FontFamily> {
+  crate::blocking(|| CACHE.get_or_init(list_families).clone()).await.unwrap_or_default()
 }
 
 #[cfg(test)]
