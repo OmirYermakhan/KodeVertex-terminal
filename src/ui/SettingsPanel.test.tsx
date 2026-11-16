@@ -40,7 +40,7 @@ describe('SettingsPanel', () => {
     const select = screen.getByLabelText('Разрешения') as HTMLSelectElement
     expect(opts(select)).toEqual(['Спрашивать всё', 'Правки без вопросов', 'Ничего не спрашивать'])
     expect(select.value).toBe('acceptEdits')
-    expect(screen.getByText(/Действует со следующего запуска/)).toBeTruthy()
+    expect(screen.getByText(/Применяется сразу/)).toBeTruthy()
     fireEvent.change(select, { target: { value: 'bypassPermissions' } })
     expect(update).toHaveBeenCalledWith({ claudePermissionMode: 'bypassPermissions' })
     useSettings.setState({ settings: { ...DEFAULTS, claudePermissionMode: 'bypassPermissions' } })

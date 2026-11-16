@@ -236,7 +236,7 @@ export default function SettingsPanel(p: { open: boolean; onClose: () => void })
               </select>
             </label>
             <small className="st-hint">
-              {PERMISSION_MODE_HINT[settings.claudePermissionMode]} Действует со следующего запуска сессии Claude.
+              {PERMISSION_MODE_HINT[settings.claudePermissionMode]} Применяется сразу, в том числе к открытым сессиям Claude.
             </small>
             <label className="st-row">
               <span>{PROMPT_SUGGESTIONS_LABEL}</span>

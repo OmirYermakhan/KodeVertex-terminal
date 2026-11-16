@@ -383,6 +383,31 @@ export async function chooseModel(paneId: string, paneCwd: string | undefined, c
   }
 }
 
+/**
+ * Режим разрешений из настроек — сразу во все живые сессии (`set_permission_mode`), без перезапуска.
+ * Сессии, уже работающие в этом режиме, не трогаются. CLI отказал (например, процесс запущен старой
+ * версией приложения без `--allow-dangerously-skip-permissions`) — ошибка в ленте; режим панели прежний.
+ */
+export async function applyPermissionMode(mode: ClaudePermissionMode): Promise<void> {
+  await Promise.all(
+    [...procs].map(async ([paneId, proc]) => {
+      const id = await proc.ready.catch(() => null)
+      if (id === null || procs.get(paneId) !== proc || get(paneId).permissionMode === mode) return
+      try {
+        await control(id, { subtype: 'set_permission_mode', mode })
+        if (procs.get(paneId) === proc) patch(paneId, (p) => ({ ...p, permissionMode: mode }))
+      } catch (e) {
+        if (procs.get(paneId) === proc) addError(paneId, `Режим разрешений не сменился: ${errText(e)}. Он применится при следующем запуске Claude.`)
+      }
+    }),
+  )
+}
+
+useSettings.subscribe((s, prev) => {
+  const mode = s.settings.claudePermissionMode
+  if (mode !== prev.settings.claudePermissionMode) void applyPermissionMode(mode)
+})
+
 /** Пауза очереди (с подсказкой, если в ней что-то есть). */
 const pause = (p: PaneClaude) => ({ paused: true, pauseHint: p.queue.length > 0 })
 

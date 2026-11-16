@@ -165,6 +165,9 @@ impl ClaudeManager {
       // Запросы разрешений (вопросы AskUserQuestion) — управляющими запросами в stdout.
       "--permission-prompt-tool",
       "stdio",
+      // Режим из настроек меняется на лету (`set_permission_mode`), в том числе на bypassPermissions —
+      // CLI разрешает это только процессу с этим флагом. Сам флаг режим не включает.
+      "--allow-dangerously-skip-permissions",
     ]);
     cmd.args(launch_args(&launch));
     // Служебные переменные Claude Code из окружения приложения процессу не нужны.
@@ -667,7 +670,7 @@ mod tests {
     let a = v["args"].as_str().unwrap();
     assert_eq!(
       a,
-      "-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompt-tool stdio --permission-mode default --model fable --effort high --resume abc-123 --prompt-suggestions true"
+      "-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompt-tool stdio --allow-dangerously-skip-permissions --permission-mode default --model fable --effort high --resume abc-123 --prompt-suggestions true"
     );
   }
 

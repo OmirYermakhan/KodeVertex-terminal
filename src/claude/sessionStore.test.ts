@@ -887,3 +887,82 @@ describe('события для панели проекта', () => {
     }
   })
 })
+
+describe('смена режима разрешений в настройках', () => {
+  let onLine: { onmessage(m: string): void } | null
+  let fail: string | null
+  const modes = () =>
+    calls('claude_control')
+      // Процессы других панелей из прошлых тестов тоже живы — только эта панель.
+      .filter((c) => (c[1] as { id: string }).id === 'proc-pm')
+      .map((c) => (c[1] as { request: { subtype: string; mode?: string } }).request)
+      .filter((r) => r.subtype === 'set_permission_mode')
+      .map((r) => r.mode)
+  const state = () => useClaudeSessions.getState().sessions.pm
+  let prev: ReturnType<typeof useSettings.getState>['settings']
+
+  beforeEach(() => {
+    stopClaude('pm')
+    invoke.mockReset()
+    onLine = null
+    fail = null
+    prev = useSettings.getState().settings
+    invoke.mockImplementation((cmd: string, a: Record<string, unknown>) => {
+      if (cmd === 'claude_start') {
+        onLine = a.onLine as typeof onLine
+        return Promise.resolve('proc-pm')
+      }
+      if (cmd === 'claude_control') {
+        const response = fail
+          ? { subtype: 'error', request_id: a.requestId, error: fail }
+          : { subtype: 'success', request_id: a.requestId, response: {} }
+        setTimeout(() => onLine?.onmessage(JSON.stringify({ type: 'control_response', response })))
+      }
+      return Promise.resolve()
+    })
+  })
+
+  const setMode = (m: 'default' | 'acceptEdits' | 'bypassPermissions') =>
+    useSettings.setState({ settings: { ...useSettings.getState().settings, claudePermissionMode: m } })
+
+  it('живая сессия переключается сразу, без перезапуска; статус-бар видит новый режим', async () => {
+    try {
+      enterClaude('pm', '/w')
+      await flush()
+      expect(state().permissionMode).toBe('acceptEdits')
+      setMode('bypassPermissions')
+      await flush()
+      await flush()
+      expect(modes()).toEqual(['bypassPermissions'])
+      expect(state().permissionMode).toBe('bypassPermissions')
+      expect(calls('claude_start')).toHaveLength(1)
+    } finally {
+      useSettings.setState({ settings: prev })
+    }
+  })
+
+  it('CLI отказал — ошибка в ленте, режим панели прежний', async () => {
+    try {
+      enterClaude('pm', '/w')
+      await flush()
+      fail = 'bypass_not_launched'
+      setMode('bypassPermissions')
+      await flush()
+      await flush()
+      expect(state().permissionMode).toBe('acceptEdits')
+      expect(JSON.stringify(items('pm'))).toContain('Режим разрешений не сменился')
+    } finally {
+      useSettings.setState({ settings: prev })
+    }
+  })
+
+  it('без живого процесса запросов нет', async () => {
+    try {
+      setMode('default')
+      await flush()
+      expect(modes()).toEqual([])
+    } finally {
+      useSettings.setState({ settings: prev })
+    }
+  })
+})
