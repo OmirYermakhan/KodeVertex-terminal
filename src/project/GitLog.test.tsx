@@ -208,6 +208,32 @@ describe('GitLog', () => {
     expect(document.querySelector('.local')).toBeNull()
   })
 
+  it('git pull на чистом дереве: список изменений тот же, новый tick — лог перечитывается', async () => {
+    act(() => useProject.setState({ changes: [] }))
+    render(<GitLog now={NOW} />)
+    await waitFor(() => expect(cms()).toHaveLength(5))
+    commits = [C('ffff002', 'Из pull', at(2026, 10, 14, 15, 30)), ...MOCK]
+    act(() => useProject.setState((s) => ({ tick: s.tick + 1, changes: s.changes })))
+    await waitFor(() => expect(cms()).toHaveLength(6))
+    expect(cms()[0].querySelector('.msg')?.textContent).toBe('Из pull')
+  })
+
+  it('выбранная строка прокручивается в окно', async () => {
+    const spy = vi.fn()
+    const orig = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = spy
+    try {
+      render(<GitLog now={NOW} />)
+      await waitFor(() => expect(cms()).toHaveLength(5))
+      const host = screen.getByTestId('git-log')
+      fireEvent.keyDown(host, { key: 'ArrowDown' })
+      fireEvent.keyDown(host, { key: 'ArrowDown' })
+      expect(spy.mock.contexts.at(-1)).toBe(cms()[0])
+    } finally {
+      HTMLElement.prototype.scrollIntoView = orig
+    }
+  })
+
   it('та же вершина, но метки сменились — метки обновляются', async () => {
     render(<GitLog now={NOW} />)
     await waitFor(() => expect(cms()).toHaveLength(5))

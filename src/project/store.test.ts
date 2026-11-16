@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 
-const { useProject, statusOf, dirHasChanges } = await import('./store')
+const { useProject, statusOf, dirHasChanges, SAVED_ROOTS_MAX } = await import('./store')
 import type { Change } from './api'
 
 const reset = () =>
@@ -174,6 +174,17 @@ describe('setRoot', () => {
     answers['/a']('/a')
     await Promise.resolve()
     expect(useProject.getState().root).toBe('/b')
+  })
+  it('запомненных корней не больше SAVED_ROOTS_MAX: забываются давние', async () => {
+    invoke.mockImplementation((cmd: string, a: { cwd?: string }) => Promise.resolve(cmd === 'project_root' ? a.cwd : st()))
+    const s = () => useProject.getState()
+    for (let i = 0; i < SAVED_ROOTS_MAX + 5; i++) {
+      s().setRoot(`/r${i}`)
+      await vi.waitFor(() => expect(s().root).toBe(`/r${i}`))
+    }
+    expect(s().saved.size).toBe(SAVED_ROOTS_MAX)
+    expect(s().saved.has('/r0')).toBe(false)
+    expect(s().saved.has(`/r${SAVED_ROOTS_MAX + 3}`)).toBe(true)
   })
   it('у каждого корня свои вкладки, строка, «Claude менял», дерево и выбор — при возврате восстанавливаются', async () => {
     invoke.mockImplementation((cmd: string, a: { cwd?: string }) => Promise.resolve(cmd === 'project_root' ? a.cwd : st()))

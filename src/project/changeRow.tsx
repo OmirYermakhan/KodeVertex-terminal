@@ -1,3 +1,4 @@
+import type { RefObject } from 'react'
 import type { Change } from './api'
 import { fileIcon } from './fileIcon'
 import { STATUS } from './store'
@@ -61,11 +62,23 @@ export function commitSummary(short: string, files: Change[]): string {
 }
 
 /** Строка файла в «Изменениях» и в файлах коммита (макет 07 `.ch`): значок, имя цветом статуса, каталог, счётчик. */
-export function ChangeRow({ c, sel, onClick }: { c: Change; sel: boolean; onClick: () => void }) {
+export function ChangeRow({
+  c,
+  sel,
+  onClick,
+  rowRef,
+}: {
+  c: Change
+  sel: boolean
+  onClick: () => void
+  /** Выбранной строке — ref для прокрутки к ней (без поиска по DOM на каждую клавишу). */
+  rowRef?: RefObject<HTMLDivElement | null>
+}) {
   const dir = shortDir(c.path)
   const title = c.oldPath ? `${c.oldPath} → ${c.path}` : c.path
   return (
     <div
+      ref={rowRef}
       className={['ch', STATUS[c.status], sel && 'sel'].filter(Boolean).join(' ')}
       role="option"
       aria-selected={sel}

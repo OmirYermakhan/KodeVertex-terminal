@@ -7,9 +7,21 @@ import { DEFAULTS } from './settings/settings'
 import { useSettings } from './settings/store'
 import { useUi } from './ui/uiStore'
 import { useProject } from './project/store'
+import { useClaudeSessions } from './claude/sessionStore'
+import { initialClaude } from './claude/reducer'
 
 // xterm needs a real canvas/layout; the pane itself is checked manually in the app.
-vi.mock('./terminal/TerminalPane', () => ({ TerminalPane: () => null }))
+const paneRenders = vi.hoisted(() => ({ n: 0 }))
+// Значок Dock и фокус окна (уведомления) — вне Tauri любые методы окна молча успешны.
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => new Proxy({}, { get: () => () => Promise.resolve(() => {}) }),
+}))
+vi.mock('./terminal/TerminalPane', () => ({
+  TerminalPane: () => {
+    paneRenders.n++
+    return null
+  },
+}))
 
 const update = vi.fn()
 const paneCount = () => {
@@ -136,5 +148,39 @@ describe('App', () => {
     } finally {
       useProject.setState({ setRoot: prev })
     }
+  })
+
+  it('⌘↓ в окне инструмента не перехватывается (там — «открыть файл»), вне его — блок ленты', () => {
+    render(<App />)
+    const tw = document.createElement('div')
+    tw.className = 'tw'
+    const row = document.createElement('div')
+    tw.appendChild(row)
+    document.body.appendChild(tw)
+    try {
+      expect(fireEvent.keyDown(row, { key: 'ArrowDown', code: 'ArrowDown', metaKey: true })).toBe(true)
+      expect(fireEvent.keyDown(document.body, { key: 'ArrowDown', code: 'ArrowDown', metaKey: true })).toBe(false)
+    } finally {
+      tw.remove()
+    }
+  })
+
+  it('поток ответа Claude не перерисовывает панели (только видимые поля строки состояния)', () => {
+    useSettings.setState({ loaded: true })
+    render(<App />)
+    const s = useTabs.getState()
+    const pane = s.tabs.find((t) => t.id === s.active)!.focused
+    const base = { procId: null, cwd: '/w', model: null, effort: null, permissionMode: null, queue: [], paused: false, pauseHint: false }
+    act(() => useClaudeSessions.setState({ sessions: { [pane]: { ...base, state: { ...initialClaude(), contextMax: 1000 } } } }))
+    const before = paneRenders.n
+    for (let i = 0; i < 5; i++)
+      act(() =>
+        useClaudeSessions.setState((st) => {
+          const p = st.sessions[pane]
+          return { sessions: { [pane]: { ...p, state: { ...p.state, items: [...p.state.items, { type: 'user' as const, text: `т${i}` }] } } } }
+        }),
+      )
+    expect(paneRenders.n).toBe(before)
+    act(() => useClaudeSessions.setState({ sessions: {} }))
   })
 })

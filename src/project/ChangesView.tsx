@@ -19,6 +19,8 @@ export function useTakeFocus(ref: React.RefObject<HTMLElement | null>) {
  */
 export default function ChangesView() {
   const host = useRef<HTMLDivElement>(null)
+  /** Выбранная строка (ref ставится только ей). */
+  const selRow = useRef<HTMLDivElement | null>(null)
   useTakeFocus(host)
   const changes = useProject((s) => s.changes)
   const notGit = useProject((s) => s.notGit)
@@ -52,8 +54,7 @@ export default function ChangesView() {
   // Выбранная строка — в видимой области.
   useEffect(() => {
     if (sel === null) return
-    const el = [...(host.current?.querySelectorAll<HTMLElement>('.ch') ?? [])].find((x) => x.dataset.path === sel)
-    el?.scrollIntoView?.({ block: 'nearest' })
+    selRow.current?.scrollIntoView?.({ block: 'nearest' })
   }, [sel])
 
   const openDiff = (c: Change) =>
@@ -131,6 +132,7 @@ export default function ChangesView() {
                       key={c.path}
                       c={c}
                       sel={c.path === sel}
+                      rowRef={c.path === sel ? selRow : undefined}
                       onClick={() => {
                         setSel(c.path)
                         openDiff(c)

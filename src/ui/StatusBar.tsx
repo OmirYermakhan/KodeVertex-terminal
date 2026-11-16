@@ -5,6 +5,14 @@ import { tokensLabel } from '../claude/AgentsPanel'
 import { formatCost } from '../format'
 import { languageName } from '../project/langName'
 
+/**
+ * Что строка состояния берёт из сессии Claude. Не весь ClaudeState: окно выбирает только эти поля
+ * (сравнение по полям), иначе каждый шаг ответа перерисовывал бы окно и все панели.
+ */
+export type ClaudeStatus = Pick<ClaudeState, 'model' | 'contextUsed' | 'contextMax' | 'costUsd' | 'currentAgentId'> & {
+  agents: readonly { id: string; name: string }[]
+}
+
 /** Доля контекста, после которой полоска желтеет. */
 export const CONTEXT_WARN = 0.8
 
@@ -25,7 +33,7 @@ export default function StatusBar(p: {
   cwd?: string
   git: GitInfo | null
   now?: Date
-  claude?: ClaudeState | null
+  claude?: ClaudeStatus | null
   /** Значков в строке ввода панели в фокусе (макет 06: «вложения N»). */
   attachments?: number
   /** Режим разрешений, с которым запущен процесс Claude этой панели. */

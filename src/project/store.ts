@@ -12,6 +12,8 @@ export const WIDTH_MAX = 600
 const WIDTH_DEFAULT = 290
 const WIDTH_KEY = 'kv.projectWidth'
 export const REFRESH_THROTTLE_MS = 500
+/** Запомненных состояний других корней не больше (каждый cd вне git — новый корень): старые забываются. */
+export const SAVED_ROOTS_MAX = 20
 
 const clampWidth = (px: number) => Math.min(WIDTH_MAX, Math.max(WIDTH_MIN, Math.round(px)))
 
@@ -194,9 +196,17 @@ export const useProject = create<ProjectState>((set, get) => {
           set((s) => {
             // Уходящий корень запоминаем, свой — достаём (или начинаем с чистого).
             const saved = new Map(s.saved)
-            if (s.root) saved.set(s.root, viewOf(s))
+            if (s.root) {
+              // Порядок Map — давность: уходящий корень — в конец, лишние — с начала.
+              saved.delete(s.root)
+              saved.set(s.root, viewOf(s))
+            }
             const view = saved.get(root) ?? freshView()
             saved.delete(root)
+            for (const k of saved.keys()) {
+              if (saved.size <= SAVED_ROOTS_MAX) break
+              saved.delete(k)
+            }
             return { root, changes: null, moreUntracked: 0, notGit: false, gitError: null, commitStat: null, ...view, saved }
           })
           run()

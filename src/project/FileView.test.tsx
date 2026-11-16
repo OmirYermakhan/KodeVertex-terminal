@@ -185,6 +185,14 @@ describe('FileView', () => {
     await waitFor(() => expect(lns()).toHaveLength(15))
   })
 
+  it('вне git (changes всегда пуст): новый ответ обновления (tick) перечитывает файл', async () => {
+    useProject.setState({ notGit: true, changes: [] })
+    await mount()
+    files[REL] = text([...SRC, '// правка'])
+    await act(async () => useProject.setState((s) => ({ tick: s.tick + 1, changes: s.changes })))
+    await waitFor(() => expect(lns()).toHaveLength(15))
+  })
+
   it('20 000 строк: в DOM только видимое окно, подсветка кусками', async () => {
     files[REL] = text(Array.from({ length: 20000 }, (_, i) => `val x${i} = ${i}`), true)
     await mount()

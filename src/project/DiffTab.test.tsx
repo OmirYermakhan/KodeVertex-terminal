@@ -105,11 +105,24 @@ describe('DiffTab', () => {
   it('длинный — «… ещё N строк · Показать всё»', async () => {
     text = NEW_FILE(DIFF_TAB_SHOWN + 80)
     render(<DiffTab rel="x.kt" rev={HASH} />)
-    await waitFor(() => expect(dls()).toHaveLength(DIFF_TAB_SHOWN + 1))
-    const more = dls()[DIFF_TAB_SHOWN]
-    expect(more.textContent).toBe('… ещё 80 строк · Показать всё')
+    const more = await screen.findByRole('button', { name: '… ещё 80 строк · Показать всё' })
+    // В DOM — только видимое окно строк, не вся тысяча.
+    expect(dls().length).toBeLessThan(200)
     fireEvent.click(more)
-    expect(dls()).toHaveLength(DIFF_TAB_SHOWN + 80)
+    expect(screen.queryByRole('button', { name: /Показать всё/ })).toBeNull()
+    expect(dls().length).toBeLessThan(200)
+    // Прокрутка в конец — последние строки на месте.
+    const code = document.querySelector('.dvw .code') as HTMLElement
+    code.scrollTop = (DIFF_TAB_SHOWN + 80) * 21
+    fireEvent.scroll(code)
+    expect(dls().at(-1)?.textContent).toBe(`${DIFF_TAB_SHOWN + 80}+line ${DIFF_TAB_SHOWN + 80}`)
+  })
+
+  it('локальные перечитываются и при том же списке изменений (tick: ↻, правка в изменённом файле)', async () => {
+    render(<DiffTab rel={REL} rev={null} />)
+    await waitFor(() => expect(diff).toHaveBeenCalledTimes(1))
+    act(() => useProject.setState((s) => ({ tick: s.tick + 1 })))
+    await waitFor(() => expect(diff).toHaveBeenCalledTimes(2))
   })
 
   it('урезанный — последняя строка «Изменения урезаны: больше 4 МБ»', async () => {

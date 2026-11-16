@@ -161,13 +161,12 @@ function Tree({ root }: { root: string }) {
     for (const rel of new Set(['', ...expandedRef.current])) load(rel)
   }, [load])
 
-  // Изменился набор путей и статусов — перечитать все раскрытые папки и применить одним обновлением
-  // (файлы могли появиться и исчезнуть). Та же картина в новой ссылке — ничего не делаем.
-  // Вне git изменений нет — перечитываем на каждый ответ обновления (tick), иначе новые файлы не видны.
-  const notGit = useProject((s) => s.notGit)
-  const tick = useProject((s) => (s.notGit ? s.tick : 0))
+  // Каждый ответ обновления (tick) — перечитать все раскрытые папки и применить одним обновлением
+  // (файлы могли появиться и исчезнуть). Не только когда сменился список изменений: вне git он
+  // всегда пуст, а `git checkout`/`pull` на чистом дереве меняют файлы при том же пустом списке.
+  const tick = useProject((s) => s.tick)
   const pathsKey = useMemo(() => (changes ?? []).map((c) => `${c.status}\0${c.path}`).join('\n'), [changes])
-  const changesKey = notGit ? `\0tick${tick}` : pathsKey
+  const changesKey = `${tick}\0${pathsKey}`
   const lastKey = useRef(changesKey)
   useEffect(() => {
     if (changesKey === lastKey.current) return

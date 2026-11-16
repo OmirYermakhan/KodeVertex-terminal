@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
 }))
 
-const { applySession, restoredPane, resetPersistForTests, serializeCapped, setPaneFeed, snapshot, saveNow, finalSave, restoreSession, SESSION_VERSION } = await import('./session')
+const { applySession, restoredPane, resetPersistForTests, serializeCapped, setPaneFeed, snapshot, saveNow, finalSave, restoreSession, utf8Length, SESSION_VERSION } = await import('./session')
 const { useTabs } = await import('../layout/tabsStore')
 const { askClaude, useClaudeSessions, stopClaude, RESTORED_NOTE } = await import('../claude/sessionStore')
 const { initialClaude } = await import('../claude/reducer')
@@ -351,5 +351,85 @@ describe('размер файла сессии и скрытые элемент�
     expect(out).toHaveLength(items.length)
     expect(out[0]).toEqual({ type: 'gone' })
     expect(out.at(-1)).toEqual(items.at(-1))
+  })
+})
+
+describe('аудит: размер в байтах, maxWait, чужая версия, мусор в файле', () => {
+  it('предел считается в байтах UTF-8: кириллица весит вдвое', () => {
+    const html = 'ж'.repeat(1000)
+    const s = {
+      version: SESSION_VERSION,
+      tabs: [tab('t', ['a'])],
+      active: 't',
+      panes: { a: { feed: [block('a1', 1, { html }), block('a2', 2, { html })], claudeFrom: 0, claudeMode: false } },
+    }
+    const chars = JSON.stringify(s).length
+    expect(utf8Length(JSON.stringify(s))).toBeGreaterThan(chars + 1900)
+    // По символам влезает, по байтам — нет: старый блок выбрасывается.
+    const out = serializeCapped(s, chars + 100)
+    expect(utf8Length(out)).toBeLessThanOrEqual(chars + 100)
+    expect(JSON.parse(out).panes.a.feed.map((x: ShellBlock) => x.id)).toEqual(['a2'])
+  })
+
+  it('utf8Length совпадает с TextEncoder', () => {
+    for (const t of ['abc', 'привет', '😀x', '\ud800', 'aࠀb']) expect(utf8Length(t)).toBe(new TextEncoder().encode(t).length)
+  })
+
+  it('непрерывные изменения не откладывают запись дольше SAVE_MAX_WAIT_MS', async () => {
+    vi.useFakeTimers()
+    try {
+      invoke.mockImplementation(() => Promise.resolve(undefined))
+      useTabs.setState({ tabs: [tab('t', ['a'])], active: 't', respawns: [] })
+      await restoreSession()
+      for (let i = 0; i < 60; i++) {
+        useTabs.getState().setCwd('a', `/d${i}`)
+        await vi.advanceTimersByTimeAsync(100)
+      }
+      expect(calls('session_save').length).toBeGreaterThanOrEqual(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('файл другой версии не перезаписывается ни автосохранением, ни при выходе', async () => {
+    vi.useFakeTimers()
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      invoke.mockImplementation((cmd: string) => Promise.resolve(cmd === 'session_load' ? { version: 99, tabs: [], panes: {} } : undefined))
+      await restoreSession()
+      useTabs.getState().newTab('/z')
+      await vi.advanceTimersByTimeAsync(6000)
+      await finalSave()
+      expect(calls('session_save')).toHaveLength(0)
+      expect(err).toHaveBeenCalled()
+    } finally {
+      err.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  it('мусор в очереди, closed и каталогах вкладки отбрасывается', () => {
+    applySession({
+      version: SESSION_VERSION,
+      tabs: [{ ...tab('t', ['a']), cwd: { a: 42 } }],
+      active: 't',
+      panes: {
+        a: {
+          feed: [],
+          claudeFrom: 0,
+          claudeMode: true,
+          claude: {
+            cwd: 7, model: null, effort: null, closed: 'да',
+            queue: [null, 'строка', { text: 5 }, { id: 1, text: 'ок', cwd: 3, tokens: [{ id: 'x' }, { id: 'y', kind: 'file', label: 'a.ts' }] }],
+            state: { ...initialClaude(), items: [] },
+          },
+        },
+      },
+    })
+    expect(useTabs.getState().tabs[0].cwd).toEqual({})
+    const p = useClaudeSessions.getState().sessions.a
+    expect(p.cwd).toBeNull()
+    expect(p.closed).toBe(false)
+    expect(p.queue).toEqual([{ id: -4, text: 'ок', tokens: [{ id: 'y', kind: 'file', label: 'a.ts' }] }])
   })
 })
