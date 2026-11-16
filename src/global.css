@@ -493,6 +493,11 @@ body.tw-resizing, body.tw-resizing * { cursor: col-resize !important; user-selec
 .blk.err { border-left: 2px solid var(--del); padding-left: 11px; }
 .blk .exit { color: var(--del); }
 .blk .out { white-space: pre-wrap; overflow-wrap: anywhere; font-variant-ligatures: var(--liga); }
+/* Длинная лента без виртуализации: вывод вне экрана не раскладывается и не рисуется (текст в DOM — ⌘F его находит). */
+.blk .out { content-visibility: auto; contain-intrinsic-block-size: auto 200px; }
+.blk .cmd.none { color: var(--muted); font-style: italic; }
+/* Оболочка занята — «Повторить» прячется классом ленты, а не сменой колбэка (memo блоков цел). */
+.feed.no-repeat .bh-act .rep { display: none; }
 .blk-more { font: inherit; font-size: 11px; color: var(--accText); background: transparent; border: 1px solid var(--rule); border-radius: 6px; padding: 2px 10px; margin-top: 6px; cursor: pointer; }
 .blk-more:hover { border-color: var(--acc); }
 /* Живой xterm: в running-блоке — по содержимому (высоту задаёт TerminalPane); при alt screen — поверх панели. */

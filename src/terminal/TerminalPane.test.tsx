@@ -951,8 +951,54 @@ describe('TerminalPane', () => {
     await flush()
     spawns[0].opts.onData(new Uint8Array([104]))
     spawns[0].opts.onExit(0)
-    expect(terms[0].write).toHaveBeenCalledWith(new Uint8Array([104]))
+    expect(terms[0].write).toHaveBeenCalledWith(new Uint8Array([104]), expect.any(Function))
     expect(p.onExit).toHaveBeenCalledTimes(1)
+  })
+
+  it('обратное давление: выше WRITE_HIGH неразобранного — pty.pause, ниже WRITE_LOW — pty.resume', async () => {
+    const { WRITE_HIGH, WRITE_LOW } = await import('./TerminalPane')
+    render(<TerminalPane {...props()} />)
+    const h = spawns[0].handle as typeof spawns[0]['handle'] & { pause: ReturnType<typeof vi.fn>; resume: ReturnType<typeof vi.fn> }
+    h.pause = vi.fn()
+    h.resume = vi.fn()
+    spawns[0].resolve()
+    await flush()
+    const chunk = new Uint8Array(WRITE_HIGH / 2 + 1)
+    for (let i = 0; i < 3; i++) spawns[0].opts.onData(chunk)
+    expect(h.pause).toHaveBeenCalledTimes(1)
+    const done = terms[0].write.mock.calls.map((c) => c[1] as () => void)
+    done[0]()
+    done[1]()
+    expect(h.resume).not.toHaveBeenCalled()
+    expect(chunk.length).toBeGreaterThan(WRITE_LOW)
+    done[2]()
+    expect(h.resume).toHaveBeenCalledTimes(1)
+  })
+
+  it('ссылки OSC 8 — во внешний браузер, только http(s)', async () => {
+    const { openUrl } = await import('@tauri-apps/plugin-opener')
+    const open = vi.mocked(openUrl)
+    open.mockReset()
+    open.mockResolvedValue(undefined)
+    render(<TerminalPane {...props()} />)
+    const lh = terms[0].options.linkHandler as { activate(e: MouseEvent, uri: string): void }
+    lh.activate(new MouseEvent('click'), 'https://example.com/a')
+    lh.activate(new MouseEvent('click'), 'file:///etc/passwd')
+    lh.activate(new MouseEvent('click'), 'javascript:alert(1)')
+    expect(open.mock.calls).toEqual([['https://example.com/a']])
+  })
+
+  it('смена настройки не про шрифт и тему не перемеряет xterm', async () => {
+    render(<TerminalPane {...props()} />)
+    const term = terms[0]
+    const fit = addons[0].fit
+    fit.mockClear()
+    term.fontHistory.length = 0
+    act(() => useSettings.setState({ settings: { ...DEFAULTS, pathCompletions: !DEFAULTS.pathCompletions } }))
+    expect(fit).not.toHaveBeenCalled()
+    expect(term.fontHistory).toEqual([])
+    act(() => useSettings.setState({ settings: { ...DEFAULTS, codeSize: DEFAULTS.codeSize + 1 } }))
+    expect(fit).toHaveBeenCalled()
   })
 
   it('syncs the size that changed while pty_spawn was in flight', async () => {
@@ -1129,9 +1175,11 @@ describe('TerminalPane', () => {
       fireEvent.click(document.querySelector<HTMLButtonElement>('.blk .bh-act button:not(.ask)')!)
       expect(write).toHaveBeenLastCalledWith('\x1b[200~make\x1b[201~\r')
       expect(getHistory()).toEqual(['make'])
-      // Оболочка ещё не ответила — кнопки нет, ⌘R не повторяет и не открывает чтение.
-      expect(document.querySelector('.blk .bh-act button:not(.ask)')).toBeNull()
+      // Оболочка ещё не ответила — кнопка спрятана (класс ленты), щелчок и ⌘R не повторяют и не открывают чтение.
+      expect(document.querySelector('.feed')).toHaveClass('no-repeat')
       write.mockClear()
+      fireEvent.click(document.querySelector<HTMLButtonElement>('.blk .bh-act button.rep')!)
+      expect(write).not.toHaveBeenCalled()
       act(() => runPaneCommand('p', 'blockPrev'))
       act(() => runPaneCommand('p', 'blockRead'))
       expect(write).not.toHaveBeenCalled()
@@ -1307,6 +1355,8 @@ describe('TerminalPane', () => {
         term.buffer.active.cursorY = 2
         parsed()
       })
+      // Высота — по кадру (не на каждый кусок вывода).
+      await act(() => flush(40))
       const slot = document.querySelector<HTMLElement>('[data-testid="live-block"]')!
       const cell = DEFAULTS.codeSize * terminalLineHeight(DEFAULTS)
       expect(slot.style.height).toBe(`${Math.ceil(3 * cell)}px`)
@@ -1388,6 +1438,79 @@ describe('TerminalPane', () => {
       expect(blocks()).toHaveLength(2)
       expect(blocks()[1].querySelector('.cmd')!.textContent).toBe('ls )')
       expect(blocks()[1].querySelector('.out')).not.toBeNull()
+      expect(textarea()).not.toHaveAttribute('aria-disabled')
+    })
+
+    it('вывод оболочки после приглашения (direnv, «[1] + done») — отдельный блок перед командой, а не стирается', async () => {
+      const { term } = await mounted()
+      const blocks = () => Array.from(document.querySelectorAll('.blk:not(.feed-park .blk)'))
+      osc133(term, 'C;' + b64('ls'))
+      term.lines = ['out1']
+      osc133(term, 'D;0')
+      // Конец команды: xterm чист к следующему приглашению (вывод блока не повторится).
+      expect(term.reset).toHaveBeenCalledTimes(2)
+      osc133(term, 'A')
+      term.lines = ['direnv: loading .envrc']
+      term.buffer.active.cursorY = 1
+      type('make')
+      keyIn('Enter')
+      // Эхо ZLE — со строки курсора на момент отправки.
+      term.lines = ['direnv: loading .envrc', 'make']
+      serializeAsHTML.mockClear()
+      osc133(term, 'I')
+      expect(serializeAsHTML).toHaveBeenCalledWith({ includeGlobalBackground: false, range: { startLine: 0, endLine: 0, startCol: 0 } })
+      expect(blocks()).toHaveLength(2)
+      expect(blocks()[1].querySelector('.cmd')!.textContent).toBe('вывод оболочки')
+      expect(blocks()[1].querySelector('.bh-act .rep')).toBeNull()
+      // Строка без вывода до эха — блока нет.
+      term.lines = []
+      osc133(term, 'C;' + b64('make'))
+      osc133(term, 'D;0')
+      osc133(term, 'A')
+      term.buffer.active.cursorY = 0
+      type('ls')
+      keyIn('Enter')
+      term.lines = ['ls']
+      osc133(term, 'I')
+      expect(blocks()).toHaveLength(3)
+    })
+
+    it('маркер оболочки при застрявшем alt screen (TUI убит, не вышел из него) — оверлей снимается, ввод снова активен', async () => {
+      const { term } = await mounted()
+      term.reset.mockImplementation(() => {
+        term.buffer.active.type = 'normal'
+      })
+      osc133(term, 'C;' + b64('htop'))
+      bufferChange(term, 'alternate')
+      term.buffer.active.type = 'alternate'
+      expect(document.querySelector('[data-testid="live-overlay"]')).not.toBeNull()
+      osc133(term, 'D;137')
+      expect(document.querySelector('[data-testid="live-overlay"]')).toBeNull()
+      expect(textarea()).not.toHaveAttribute('aria-disabled')
+      // Без команды (приглашение пришло, а xterm в alt) — то же по 133;A.
+      bufferChange(term, 'alternate')
+      term.buffer.active.type = 'alternate'
+      osc133(term, 'A')
+      expect(term.buffer.active.type).toBe('normal')
+      expect(document.querySelector('[data-testid="live-overlay"]')).toBeNull()
+      expect(textarea()).not.toHaveAttribute('aria-disabled')
+    })
+
+    it('`exec zsh`: интеграция потеряна — блок закрыт, xterm поверх панели с вводом; маркер нашей оболочки возвращает блоки', async () => {
+      const { term } = await mounted()
+      const { RAW_NOTE } = await import('./TerminalPane')
+      osc133(term, 'C;' + b64('exec zsh'))
+      expect(document.querySelector('.blk.run')).toBeNull()
+      expect(document.querySelector('.blk .cmd')!.textContent).toBe('exec zsh')
+      expect(document.querySelector('[data-testid="live-overlay"]')).not.toBeNull()
+      expect(term.write).toHaveBeenCalledWith(RAW_NOTE)
+      expect(textarea()).toHaveAttribute('aria-disabled', 'true')
+      // Выход из alt screen в новой оболочке оверлей не снимает.
+      bufferChange(term, 'normal')
+      expect(document.querySelector('[data-testid="live-overlay"]')).not.toBeNull()
+      // exec не удался — наша оболочка снова шлёт маркеры.
+      osc133(term, 'A')
+      expect(document.querySelector('[data-testid="live-overlay"]')).toBeNull()
       expect(textarea()).not.toHaveAttribute('aria-disabled')
     })
 
@@ -1755,6 +1878,8 @@ describe('⌘F — поиск в ленте', () => {
     act(() => runPaneCommand('p', 'find'))
     expect(document.activeElement).toBe(findInput())
     fireEvent.change(findInput()!, { target: { value: 'OUT' } })
+    // Поиск — после паузы в наборе.
+    await act(() => flush(120))
     expect(count()).toBe('1 из 2')
     findKey('Enter')
     expect(count()).toBe('2 из 2')
@@ -1784,10 +1909,12 @@ describe('⌘F — поиск в ленте', () => {
     const { term } = await withBlocks(1)
     act(() => runPaneCommand('p', 'find'))
     fireEvent.change(findInput()!, { target: { value: 'out2' } })
+    // ↵ сразу после набора — поиск без ожидания паузы.
+    fireEvent.keyDown(findInput()!, { key: 'Enter' })
     expect(count()).toBe('1 из 1')
     act(() => void oscHandlerOf(term)('C;' + btoa('make')))
     act(() => void oscHandlerOf(term)('D;0'))
-    await act(() => flush(60))
+    await act(() => flush(150))
     expect(count()).toBe('1 из 2')
     // Конец команды не уводит фокус из строки поиска.
     expect(document.activeElement).toBe(findInput())
@@ -1799,5 +1926,36 @@ describe('⌘F — поиск в ленте', () => {
     act(() => change({ type: 'alternate' }))
     act(() => runPaneCommand('p', 'find'))
     expect(findInput()).toBeNull()
+  })
+
+  it('изменения живого xterm в ленте поиск не пересчитывают', async () => {
+    const { term } = await withBlocks(1)
+    act(() => runPaneCommand('p', 'find'))
+    fireEvent.change(findInput()!, { target: { value: 'out' } })
+    await act(() => flush(120))
+    expect(count()).toBe('1 из 2')
+    act(() => void oscHandlerOf(term)('C;' + btoa('top')))
+    // Живой блок: xterm в нём, его строки меняются — в поиск они не входят и пересчёт не будят.
+    const live = document.querySelector('.blk.run .live-host')!
+    const row = document.createElement('div')
+    live.appendChild(row)
+    await act(() => flush(150))
+    const spy = vi.spyOn(document, 'createTreeWalker')
+    row.textContent = 'out out out'
+    await act(() => flush(150))
+    expect(spy).not.toHaveBeenCalled()
+    spy.mockRestore()
+  })
+})
+
+describe('replacesShell', () => {
+  it('exec с командой заменяет оболочку; только перенаправления, цепочки и не-exec — нет', async () => {
+    const { replacesShell } = await import('./TerminalPane')
+    for (const c of ['exec zsh', '  exec bash -l', 'exec -l zsh', 'exec -a foo zsh', 'builtin exec zsh', 'exec 2>/dev/null zsh', 'exec > log fish']) {
+      expect(replacesShell(c), c).toBe(true)
+    }
+    for (const c of ['exec', 'exec >log 2>&1', 'exec 3< file', 'exec > log', 'executor run', 'echo exec zsh', 'exec zsh; ls', 'cd x && exec zsh']) {
+      expect(replacesShell(c), c).toBe(false)
+    }
   })
 })

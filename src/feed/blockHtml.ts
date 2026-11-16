@@ -39,3 +39,29 @@ export function blockText(html: string): string {
   while (rows.length && rows[rows.length - 1] === '') rows.pop()
   return rows.join('\n')
 }
+
+/** Свойства, которые SerializeAddon пишет в style ячейки (_diffStyle), и их значения. */
+const STYLE_PROP = '(?:color|background-color|font-weight|text-decoration|visibility|font-style|opacity)'
+const STYLE_VALUE = '(?:#[0-9a-fA-F]{3,8}|rgba?\\([\\d., %]+\\)|[a-z-]+(?: [a-z-]+)*|[\\d.]+)'
+/**
+ * Токены HTML блока: теги строк и ячеек аддона, текст без `<` и `&` (аддон экранирует их)
+ * и сущности. Разбор — линейным проходом (sticky), без возвратов по мегабайтам вывода.
+ */
+const TOKEN = new RegExp(
+  `<div>|</div>|<span>|</span>|<span style='(?:${STYLE_PROP}: ${STYLE_VALUE}; ?)+'>|[^<&]+|&(?:amp|lt|gt|quot|#\\d{1,7});`,
+  'y',
+)
+
+/**
+ * HTML блока — ровно той формы, что отдаёт SerializeAddon (после cleanSerializedHtml)? Блоки
+ * восстанавливаются из session.json на диске: подправленный файл не должен попасть в DOM
+ * тегами и атрибутами (<img onerror>, <a href>…). Иное — показывается текстом.
+ */
+export function isSerializedHtml(html: string): boolean {
+  TOKEN.lastIndex = 0
+  while (TOKEN.lastIndex < html.length) {
+    const at = TOKEN.lastIndex
+    if (!TOKEN.test(html) || TOKEN.lastIndex === at) return false
+  }
+  return true
+}

@@ -99,18 +99,18 @@ function remeasureFont(term: Terminal): void {
 const NO_CLAUDE_ITEMS: readonly FeedClaudeItem[] = []
 const NO_QUEUE: readonly QueuedMessage[] = []
 
-/** Число строк вывода: индекс последней непустой строки активного буфера + 1. */
-function contentLines(term: Terminal): number {
+/** Число строк вывода: индекс последней непустой строки активного буфера (до below) + 1. */
+function contentLines(term: Terminal, below = Infinity): number {
   const buf = term.buffer.active
-  for (let i = buf.length - 1; i >= 0; i--) {
+  for (let i = Math.min(buf.length, below) - 1; i >= 0; i--) {
     if (buf.getLine(i)?.translateToString(true).trim()) return i + 1
   }
   return 0
 }
 
 /** Конец команды: вывод из буфера xterm → HTML блока (только из SerializeAddon). */
-function freeze(term: Terminal, ser: SerializeAddon): { html: string; lines: number } {
-  const lines = contentLines(term)
+function freeze(term: Terminal, ser: SerializeAddon, below = Infinity): { html: string; lines: number } {
+  const lines = contentLines(term, below)
   if (lines === 0) return { html: '', lines: 0 }
   const raw = ser.serializeAsHTML({ includeGlobalBackground: false, range: { startLine: 0, endLine: lines - 1, startCol: 0 } })
   return { html: cleanSerializedHtml(raw), lines }
@@ -134,9 +134,47 @@ function cellHeight(term: Terminal): number {
   return s.codeSize * terminalLineHeight(s)
 }
 
-function liveContentHeight(term: Terminal): number {
-  return Math.ceil(usedRows(term) * cellHeight(term))
+/** Абсолютная строка курсора в активном буфере. */
+function cursorRow(term: Terminal): number {
+  const buf = term.buffer.active
+  return buf.baseY + buf.cursorY
 }
+
+/** Пока буфер xterm разбирает больше стольких байт — чтение PTY приостанавливается… */
+export const WRITE_HIGH = 1 << 20
+/** …и продолжается, когда разобрано до стольких. */
+export const WRITE_LOW = 256 << 10
+
+/**
+ * Команда заменяет оболочку (`exec zsh`, `exec bash -l`): новая оболочка без нашей интеграции
+ * (метка сессии не наследуется — ZDOTDIR в окружение не кладём), маркеров больше не будет.
+ * `exec` без команды (только перенаправления: `exec >log 2>&1`) оболочку не заменяет.
+ */
+export function replacesShell(command: string): boolean {
+  const m = /^\s*(?:builtin\s+)?exec\b(.*)$/s.exec(command)
+  if (!m) return false
+  // Цепочки и подоболочки (`exec x; y`, `a && exec b`) не разбираем: только простая команда.
+  if (/[;&|\n()]/.test(m[1])) return false
+  const words = m[1].trim().split(/\s+/).filter(Boolean)
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]
+    // Перенаправление: `>f`, `2>&1`, `<f`, `> f` (имя файла — следующим словом).
+    if (/^\d*[<>]/.test(w)) {
+      if (/^\d*(?:[<>]|>>|<<|>&|<&|>\|)$/.test(w)) i++
+      continue
+    }
+    if (w === '-a') {
+      i++
+      continue
+    }
+    if (/^-[cl]+$/.test(w) || w === '--') continue
+    return true
+  }
+  return false
+}
+
+/** Строка в xterm, когда интеграция оболочки потеряна (`exec`): дальше — обычный терминал. */
+export const RAW_NOTE = '\r\n\x1b[2m[оболочка заменена командой exec — блоки недоступны, терминал работает как обычный]\x1b[0m\r\n'
 
 export function TerminalPane(p: TerminalPaneProps) {
   // Один xterm на панель; его host переносится между «парковкой», running-блоком и оверлеем.
@@ -199,6 +237,15 @@ export function TerminalPane(p: TerminalPaneProps) {
   const altRef = useRef(alt)
   /** Команда заходила в alt screen (vim, less…) — не «долгая команда» для уведомления. */
   const altUsedRef = useRef(false)
+  /**
+   * Интеграция оболочки потеряна (`exec zsh`): маркеров больше не будет — панель как при alt screen,
+   * xterm поверх ленты с вводом в него. Возвращается маркером нашей оболочки (exec не удался).
+   */
+  const rawRef = useRef(false)
+  /** Строка курсора xterm в момент отправки команды: с неё ZLE рисует эхо, выше — вывод оболочки до него. */
+  const echoRowRef = useRef<number | null>(null)
+  /** Высота строки живого xterm, px (0 — перемерить: смена размера или шрифта). */
+  const cellRef = useRef(0)
   useEffect(() => {
     altRef.current = alt
   })
@@ -284,6 +331,13 @@ export function TerminalPane(p: TerminalPaneProps) {
       allowProposedApi: true,
       macOptionIsMeta: true,
       scrollback: 10000,
+      // Ссылки OSC 8: без обработчика xterm открыл бы их confirm() и window.open в самом WebView.
+      // Открываем, как и найденные WebLinksAddon, во внешнем браузере — только http(s).
+      linkHandler: {
+        activate: (_e, uri) => {
+          if (/^https?:\/\//i.test(uri)) openUrl(uri).catch((err) => console.error('openUrl failed:', err))
+        },
+      },
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
@@ -310,6 +364,53 @@ export function TerminalPane(p: TerminalPaneProps) {
 
     let handle: PtyHandle | null = null
     let disposed = false
+    // Обратное давление: сколько байт отдано xterm и ещё не разобрано. Без него `yes` или `cat`
+    // большого файла копят в xterm десятки мегабайт (xterm 6 бросает исключение, вывод и маркер 133;D
+    // теряются — блок навсегда «идёт»). Выше WRITE_HIGH чтение PTY приостанавливается.
+    let pty: PtyHandle | null = null
+    let unparsed = 0
+    let paused = false
+    const feedTerm = (b: Uint8Array) => {
+      unparsed += b.length
+      if (!paused && unparsed > WRITE_HIGH && pty) {
+        paused = true
+        pty.pause?.()
+      }
+      term.write(b, () => {
+        unparsed -= b.length
+        if (paused && unparsed < WRITE_LOW && !disposed) {
+          paused = false
+          pty?.resume?.()
+        }
+      })
+    }
+
+    // Высота живого блока: высота строки — из кэша (перемер — только после смены размера и шрифта),
+    // состояние — не чаще кадра и только при изменении.
+    let livePxNow = -1
+    let liveFrame = 0
+    const liveHeight = () => {
+      if (!cellRef.current) {
+        const screen = term.element?.querySelector<HTMLElement>('.xterm-screen')
+        // Кэшируем только замер по DOM; запасной расчёт по настройкам — каждый раз.
+        if (screen && term.rows > 0 && screen.clientHeight > 0) cellRef.current = screen.clientHeight / term.rows
+        else return Math.ceil(usedRows(term) * cellHeight(term))
+      }
+      return Math.ceil(usedRows(term) * cellRef.current)
+    }
+    const syncLive = () => {
+      liveFrame = 0
+      if (!runningRef.current || disposed) return
+      const px = liveHeight()
+      if (px === livePxNow) return
+      livePxNow = px
+      setLivePx(px)
+    }
+    const scheduleLive = () => {
+      if (!liveFrame) liveFrame = requestAnimationFrame(syncLive)
+    }
+    /** Полноэкранного режима больше нет: alt screen вышел, а потерянная интеграция держит оверлей. */
+    const altOff = () => setAlt(rawRef.current || term.buffer.active.type === 'alternate')
     // Оболочка уже завершилась сама: сессии на стороне Rust больше нет, kill не нужен.
     let exited = false
 
@@ -331,9 +432,26 @@ export function TerminalPane(p: TerminalPaneProps) {
 
     const frozen = () => (term.buffer.active.type === 'alternate' ? { html: '', lines: 0 } : freeze(term, serializer))
     /** Вывод вне пары C…D (ошибка разбора и т. п.) — отдельным блоком. */
-    const flushStray = (command: string) => {
-      const { html, lines } = frozen()
+    const flushStray = (command: string, below = Infinity) => {
+      const { html, lines } = term.buffer.active.type === 'alternate' ? { html: '', lines: 0 } : freeze(term, serializer, below)
       if (lines > 0) setItems((it) => applyShell(it, { t: 'stray', command, cwd: cwdRef.current ?? '', at: Date.now(), html, lines }))
+      return lines > 0
+    }
+    /**
+     * Маркер нашей оболочки пришёл, а xterm ещё в alt screen (полноэкранную программу убили, она
+     * не вышла из него): иначе оверлей закрыл бы панель, а ввод остался выключенным. reset — как и
+     * эхо строки, синхронно, до остального куска данных (оболочка ещё не рисовала приглашение).
+     */
+    const leaveStaleAlt = () => {
+      if (term.buffer.active.type !== 'alternate') return
+      term.reset()
+      altOff()
+    }
+    /** Маркер нашей оболочки: интеграция на месте (exec не удался) — обычный режим блоков. */
+    const integrationBack = () => {
+      if (!rawRef.current) return
+      rawRef.current = false
+      altOff()
     }
     const endBlock = (exitCode: number | null) => {
       const at = Date.now()
@@ -346,6 +464,11 @@ export function TerminalPane(p: TerminalPaneProps) {
         notifyCommandEnd(callbacks.current.paneId, cur.command, Math.max(0, at - cur.startedAt), exitCode, altUsedRef.current)
       }
       setItems((it) => applyShell(it, { t: 'end', exitCode, at, html, lines }))
+      // Вывод заморожен: xterm чист к следующему приглашению — вывод оболочки до эха строки (direnv,
+      // «[1] + done») станет отдельным блоком, а не повтором этого. Оболочка ещё в precmd, ZLE не рисовал.
+      // reset выводит и из alt screen, если программа не вышла из него сама.
+      term.reset()
+      altOff()
       // Команда могла поменять файлы — панель проекта обновляется (из любой панели).
       useProject.getState().refresh()
     }
@@ -358,6 +481,10 @@ export function TerminalPane(p: TerminalPaneProps) {
       if (ev.t === 'accepted') {
         // Во время команды (vared и т. п.) — это не наша строка ввода.
         if (runningRef.current) return true
+        // Вывод оболочки до эха строки (выше строки, с которой ZLE начал эхо) — отдельным блоком.
+        const echoRow = echoRowRef.current
+        echoRowRef.current = null
+        if (echoRow !== null && echoRow > 0) flushStray('', echoRow)
         // Эхо принятой строки стираем: дальше в xterm только то, что напечатает оболочка.
         term.reset()
         acceptedRef.current = sentRef.current
@@ -373,9 +500,12 @@ export function TerminalPane(p: TerminalPaneProps) {
       if (ev.t === 'prompt' && runningRef.current) return true
       setContinuation(false)
       setAwaitingShell(false)
+      integrationBack()
       if (ev.t === 'prompt') {
-        // Строка принята, но команда не запустилась (ошибка разбора): её вывод — блоком.
-        if (acceptedRef.current !== null) flushStray(acceptedRef.current)
+        leaveStaleAlt()
+        // Строка принята, но команда не запустилась (ошибка разбора): её вывод — блоком,
+        // и xterm чист — следующее эхо не повторит его.
+        if (acceptedRef.current !== null && flushStray(acceptedRef.current)) term.reset()
         acceptedRef.current = null
         promptSeenRef.current = true
         runPendingRef.current()
@@ -389,9 +519,19 @@ export function TerminalPane(p: TerminalPaneProps) {
         // Синхронно: вывод из того же куска данных (onWriteParsed) уже должен считаться живым.
         runningRef.current = true
         altUsedRef.current = false
+        echoRowRef.current = null
         setRunning(true)
-        setLivePx(liveContentHeight(term))
+        // Синхронно: живой блок сразу нужной высоты, дальше — по кадрам.
+        livePxNow = liveHeight()
+        setLivePx(livePxNow)
         setItems((it) => applyShell(it, { t: 'start', command: ev.command, cwd: cwdRef.current ?? '', at }))
+        if (replacesShell(ev.command)) {
+          // `exec zsh`: новая оболочка без маркеров — блок не закончится никогда. Закрываем его сразу
+          // и переходим в обычный терминал (xterm поверх ленты), чтобы не запереть ввод.
+          rawRef.current = true
+          endBlock(null)
+          term.write(RAW_NOTE)
+        }
       } else {
         endBlock(ev.exitCode)
       }
@@ -401,10 +541,10 @@ export function TerminalPane(p: TerminalPaneProps) {
     // Полноэкранные программы (vim, htop, less) — xterm поверх всей панели.
     term.buffer.onBufferChange((b) => {
       if (b.type === 'alternate') altUsedRef.current = true
-      setAlt(b.type === 'alternate')
+      setAlt(rawRef.current || b.type === 'alternate')
     })
     term.onWriteParsed(() => {
-      if (runningRef.current) setLivePx(liveContentHeight(term))
+      if (runningRef.current) scheduleLive()
     })
 
     term.attachCustomKeyEventHandler((e) => {
@@ -434,7 +574,8 @@ export function TerminalPane(p: TerminalPaneProps) {
     term.onData((d) => handle?.write(d))
     term.onResize(({ cols, rows }) => handle?.resize(cols, rows))
     term.onResize(() => {
-      if (runningRef.current) setLivePx(liveContentHeight(term))
+      cellRef.current = 0
+      if (runningRef.current) scheduleLive()
     })
 
     spawnPty({
@@ -443,7 +584,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       rows: term.rows,
       // After unmount (incl. our own kill in cleanup) the session's output and exit are ignored.
       onData: (b) => {
-        if (!disposed) term.write(b)
+        if (!disposed) feedTerm(b)
       },
       onExit: () => {
         exited = true
@@ -452,6 +593,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       // До первого вывода: маркеры первого приглашения уже сверяются с меткой.
       onSpawn: (h) => {
         mark = h.mark
+        pty = h
       },
     })
       .then((h) => {
@@ -482,6 +624,7 @@ export function TerminalPane(p: TerminalPaneProps) {
 
     return () => {
       disposed = true
+      cancelAnimationFrame(liveFrame)
       clearTimeout(resizeTimer)
       ro.disconnect()
       feedRo.disconnect()
@@ -495,11 +638,14 @@ export function TerminalPane(p: TerminalPaneProps) {
     }
   }, [host, setAwaitingShell])
 
-  // Theme / font changes apply to the live terminal.
+  // Theme / font changes apply to the live terminal — только они: переключатель любой другой
+  // настройки не должен перемерять шрифт и чистить атлас.
+  const { codeFont, codeSize, lineHeight, theme } = settings
   useEffect(() => {
     const term = termRef.current
     if (!term) return
-    const opts = appearance(settings)
+    const opts = appearance(useSettings.getState().settings)
+    cellRef.current = 0
     Object.assign(term.options, opts)
     fitRef.current?.fit()
     document.fonts
@@ -509,9 +655,10 @@ export function TerminalPane(p: TerminalPaneProps) {
         // Терминал закрыт или шрифт уже сменили снова — замеры сделает следующий вызов.
         if (termRef.current !== term || term.options.fontFamily !== opts.fontFamily) return
         remeasureFont(term)
+        cellRef.current = 0
         fitRef.current?.fit()
       })
-  }, [settings])
+  }, [codeFont, codeSize, lineHeight, theme])
 
   /** Куда идёт ввод: пока команда идёт или открыт alt screen — в xterm, иначе в строку ввода. */
   const focusActive = useCallback(() => {
@@ -656,6 +803,9 @@ export function TerminalPane(p: TerminalPaneProps) {
       const h = handleRef.current
       if (!h) return false
       sentRef.current = cmd
+      // Эхо строки ZLE начнёт с текущей строки курсора: что выше — вывод оболочки после приглашения.
+      const t = termRef.current
+      echoRowRef.current = t && t.buffer.active.type === 'normal' ? cursorRow(t) : null
       // Отправка из строки — выбор блока снят: позже ⌘R не повторит давно выбранную команду.
       setSelected(null)
       setAwaitingShell(true)
@@ -762,7 +912,13 @@ export function TerminalPane(p: TerminalPaneProps) {
     },
     [onRun],
   )
-  const repeatBlockClick = useCallback((id: string) => void repeatBlock(id), [repeatBlock])
+  // Колбэк стабилен (memo блоков ленты): занята ли оболочка, repeatBlock проверяет сам.
+  const repeatBlockClick = useCallback(
+    (id: string) => {
+      if (!repeatBlock(id)) inputRef.current?.note('Повторить можно, когда оболочка свободна')
+    },
+    [repeatBlock],
+  )
   /** «Спросить Claude»: код, каталог и хвост вывода упавшего блока — в Claude-сессию панели (занята — в очередь). */
   const askBlock = useCallback((id: string | null) => {
     const it = id ? itemsRef.current.find((x) => x.id === id) : undefined
@@ -1189,7 +1345,8 @@ export function TerminalPane(p: TerminalPaneProps) {
         onScroll={onFeedScroll}
         onAttach={attachItem}
         onCopy={copyItem}
-        onRepeat={shellIdle ? repeatBlockClick : undefined}
+        onRepeat={repeatBlockClick}
+        repeatOff={!shellIdle}
         onAsk={askBlock}
         onRead={setReaderId}
         editable={editable}
