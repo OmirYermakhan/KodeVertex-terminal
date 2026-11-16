@@ -1,11 +1,10 @@
 use serde::Serialize;
-use std::collections::HashMap;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(2);
 /// Ключи фильтров в конфиге: `git status` запускает их команды.
@@ -96,97 +95,66 @@ pub(crate) fn run_cmd_capped(program: &str, args: &[&str], cwd: &Path, env: &[(&
   (status.success() || truncated).then(|| (String::from_utf8_lossy(&buf).into_owned(), truncated))
 }
 
-/// Аргументы `git`: защитные `-c`, перекрытия `extra` (тоже пары `-c k=v`), `-C <cwd>`, затем `args`.
-pub(crate) fn git_args<'a>(cwd: &'a str, extra: &'a [String], args: &[&'a str]) -> Vec<&'a str> {
+/// Аргументы `git`: защитные `-c`, `-C <cwd>`, затем `args`. Перекрытия фильтров сюда не
+/// входят — они в окружении (`git_env`): в `-c имя=значение` git режет по первому `=`, и
+/// фильтр с `=` в имени ушёл бы из-под перекрытия.
+pub(crate) fn git_args<'a>(cwd: &'a str, args: &[&'a str]) -> Vec<&'a str> {
   let mut full: Vec<&str> = GIT_SAFE_CONFIG.to_vec();
-  full.extend(extra.iter().map(String::as_str));
   full.extend(["-C", cwd]);
   full.extend_from_slice(args);
   full
 }
 
+/// Окружение git: `GIT_ENV`, `extra` и перекрытия `keys` (каждому — пустое значение) через
+/// `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`: ключ передаётся целиком,
+/// без разбора по `=`. Счётчик задаётся всегда (и 0) — унаследованный `GIT_CONFIG_COUNT`
+/// с чужими ключами не применяется.
+pub(crate) fn git_env(keys: &[String], extra: &[(&str, &str)]) -> Vec<(String, String)> {
+  let mut env: Vec<(String, String)> = GIT_ENV.iter().chain(extra).map(|(k, v)| (k.to_string(), v.to_string())).collect();
+  env.push(("GIT_CONFIG_COUNT".into(), keys.len().to_string()));
+  for (i, k) in keys.iter().enumerate() {
+    env.push((format!("GIT_CONFIG_KEY_{i}"), k.clone()));
+    env.push((format!("GIT_CONFIG_VALUE_{i}"), String::new()));
+  }
+  env
+}
+
+/// Пары окружения как ссылки — для `run_cmd`.
+pub(crate) fn env_refs(env: &[(String, String)]) -> Vec<(&str, &str)> {
+  env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
+}
+
 /// `git -C <cwd> <args>` с общим дедлайном и защитными настройками.
 fn run_git(cwd: &Path, args: &[&str], deadline: Instant) -> Option<String> {
-  run_cmd("git", &git_args(cwd.to_str()?, &[], args), Path::new("."), GIT_ENV, deadline)
+  let env = git_env(&[], &[]);
+  run_cmd("git", &git_args(cwd.to_str()?, args), Path::new("."), &env_refs(&env), deadline)
 }
 
-/// Фильтры (`filter.<имя>.clean/process`) из конфига репозитория: `git status` запускает их
-/// для изменённых файлов с атрибутом `filter=<имя>`. Отключаем каждый пустой командой —
-/// git тогда не фильтрует файл. Чтение конфига само ничего не запускает.
-pub(crate) fn filter_overrides(cwd: &Path, deadline: Instant) -> Vec<String> {
-  run_git(cwd, &["config", "--name-only", "--get-regexp", FILTER_RE], deadline)
-    .map(|names| filter_overrides_from(&names))
-    .unwrap_or_default()
+/// Фильтры (`filter.<имя>.clean/smudge/process`) из конфига: `git status`/`diff` запускают их
+/// для файлов с атрибутом `filter=<имя>`. Отдаёт ключи для перекрытия пустой командой — git
+/// тогда не фильтрует файл. Чтение конфига само ничего не запускает.
+///
+/// None — список получить не удалось (ошибка, таймаут, код не 0/1). Тогда вызывающий
+/// НЕ запускает status/diff/ls-files вовсе: без перекрытий фильтр выполнился бы.
+pub(crate) fn filter_overrides(cwd: &Path, deadline: Instant) -> Option<Vec<String>> {
+  let c = cwd.to_str()?;
+  let env = git_env(&[], &[]);
+  let args = git_args(c, &["config", "-z", "--name-only", "--get-regexp", FILTER_RE]);
+  // Код 1 — совпадений нет: это тоже ответ («фильтров нет»).
+  let (names, code) = run_cmd_code("git", &args, Path::new("."), &env_refs(&env), deadline)?;
+  matches!(code, Some(0 | 1)).then(|| filter_overrides_from(&names))
 }
 
-/// Имена ключей `filter.<имя>.<команда>` по строке → пары `-c filter.<имя>.<команда>=`.
+/// Имена ключей `filter.<имя>.<команда>` (через NUL или перевод строки) → ключи
+/// `filter.<имя>.clean/smudge/process` для перекрытия. Имя может содержать `.` и `=`.
 fn filter_overrides_from(names: &str) -> Vec<String> {
   let mut drivers: Vec<&str> = names
-    .lines()
+    .split(['\0', '\n'])
     .filter_map(|k| k.strip_prefix("filter.")?.rsplit_once('.').map(|(name, _)| name))
     .collect();
   drivers.sort_unstable();
   drivers.dedup();
-  drivers
-    .into_iter()
-    .flat_map(|d| ["clean", "smudge", "process"].map(|c| ["-c".to_string(), format!("filter.{d}.{c}=")]))
-    .flatten()
-    .collect()
-}
-
-/// Время изменения файла (None — файла нет).
-fn mtime(p: &Path) -> Option<SystemTime> {
-  std::fs::metadata(p).and_then(|m| m.modified()).ok()
-}
-
-/// Ключ кэша перекрытий фильтров: время изменения конфигов, откуда git берёт `filter.*`
-/// (репозиторий и пользователь). Системный конфиг отключён (`GIT_CONFIG_NOSYSTEM`).
-type FilterKey = [Option<SystemTime>; 3];
-
-fn filter_key(common_dir: &Path) -> FilterKey {
-  let home = dirs::home_dir();
-  let xdg = std::env::var_os("XDG_CONFIG_HOME")
-    .filter(|v| !v.is_empty())
-    .map(PathBuf::from)
-    .or_else(|| home.as_ref().map(|h| h.join(".config")));
-  [
-    mtime(&common_dir.join("config")),
-    home.and_then(|h| mtime(&h.join(".gitconfig"))),
-    xdg.and_then(|x| mtime(&x.join("git").join("config"))),
-  ]
-}
-
-/// Кэш перекрытий не старше этого: `include.path` может подтянуть файл, время которого не в ключе.
-const FILTER_CACHE_TTL: Duration = Duration::from_secs(30);
-
-type FilterCache = HashMap<PathBuf, (FilterKey, Instant, Vec<String>)>;
-
-fn filter_cache() -> &'static Mutex<FilterCache> {
-  static C: OnceLock<Mutex<FilterCache>> = OnceLock::new();
-  C.get_or_init(Default::default)
-}
-
-/// `filter_overrides` с кэшем по общему каталогу `.git` (один на все worktree): пока конфиги
-/// не менялись, `git config` не запускается на каждый опрос. Кэшируется только полученный ответ.
-fn filter_overrides_cached(cwd: &Path, common_dir: &Path, deadline: Instant) -> Vec<String> {
-  let key = filter_key(common_dir);
-  if let Some((k, at, v)) = filter_cache().lock().ok().and_then(|c| c.get(common_dir).cloned())
-    && k == key
-    && at.elapsed() < FILTER_CACHE_TTL
-  {
-    return v;
-  }
-  let Some(c) = cwd.to_str() else { return Vec::new() };
-  let args = git_args(c, &[], &["config", "--name-only", "--get-regexp", FILTER_RE]);
-  // Код 1 — совпадений нет: это тоже ответ («фильтров нет»), его можно кэшировать.
-  let Some((names, code)) = run_cmd_code("git", &args, Path::new("."), GIT_ENV, deadline) else { return Vec::new() };
-  let v = filter_overrides_from(&names);
-  if matches!(code, Some(0 | 1))
-    && let Ok(mut cache) = filter_cache().lock()
-  {
-    cache.insert(common_dir.to_path_buf(), (key, Instant::now(), v.clone()));
-  }
-  v
+  drivers.into_iter().flat_map(|d| ["clean", "smudge", "process"].map(|c| format!("filter.{d}.{c}"))).collect()
 }
 
 /// Как `run_cmd`, но отдаёт вывод и при ненулевом коде (вместе с кодом). None — не запустился или не успел.
@@ -226,33 +194,37 @@ const PREP_TIMEOUT: Duration = Duration::from_secs(2);
 /// Дедлайн проверки неотслеживаемых: она лишь дополняет ответ.
 const UNTRACKED_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// Источник перекрытий фильтров (в тестах подменяется отказом).
+pub(crate) type FilterLister = fn(&Path, Instant) -> Option<Vec<String>>;
+
 pub fn git_info_at(cwd: &Path) -> GitInfo {
+  git_info_with(cwd, filter_overrides)
+}
+
+fn git_info_with(cwd: &Path, list_filters: FilterLister) -> GitInfo {
   let prep = Instant::now() + PREP_TIMEOUT;
-  // Корень и общий каталог `.git` одним вызовом (каталог — ключ кэша фильтров).
-  let Some(out) = run_git(cwd, &["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"], prep) else {
+  let Some(root) = run_git(cwd, &["rev-parse", "--show-toplevel"], prep).filter(|s| !s.is_empty()) else {
     return GitInfo::default();
   };
-  let mut lines = out.lines();
-  let Some(root) = lines.next().map(str::to_string).filter(|s| !s.is_empty()) else {
-    return GitInfo::default();
-  };
-  let common_dir = lines.next().map(PathBuf::from).unwrap_or_else(|| Path::new(&root).join(".git"));
   let branch = run_git(cwd, &["branch", "--show-current"], prep)
     .filter(|s| !s.is_empty())
     .or_else(|| run_git(cwd, &["rev-parse", "--short", "HEAD"], prep).filter(|s| !s.is_empty()));
-  let filters = filter_overrides_cached(cwd, &common_dir, prep);
+  // Список фильтров не получен — status не запускаем вовсе (fail closed): без перекрытий
+  // `git status` выполнил бы clean-фильтр из чужого конфига.
+  let Some(filters) = list_filters(cwd, prep) else { return GitInfo { root: Some(root), branch, dirty: false } };
   let Some(c) = cwd.to_str() else { return GitInfo { root: Some(root), branch, dirty: false } };
+  let env = git_env(&filters, &[]);
+  let env = env_refs(&env);
   // Отслеживаемые изменения — без обхода неотслеживаемых (в большом репозитории он не успевал
   // за дедлайн) и без подмодулей (их конфиг с фильтрами не перекрыт). Дедлайн — свой, полный.
-  let args = git_args(c, &filters, &["status", "--porcelain", "--untracked-files=no", "--ignore-submodules=all"]);
-  let tracked = run_cmd("git", &args, Path::new("."), GIT_ENV, Instant::now() + GIT_TIMEOUT);
+  let args = git_args(c, &["status", "--porcelain", "--untracked-files=no", "--ignore-submodules=all"]);
+  let tracked = run_cmd("git", &args, Path::new("."), &env, Instant::now() + GIT_TIMEOUT);
   let mut dirty = tracked.is_some_and(|s| !s.is_empty());
   if !dirty {
     // Неотслеживаемые: хватает первого (потолок вывода в 1 байт — git сразу останавливается),
     // `--directory` не спускается в неотслеживаемые папки.
-    let args = git_args(c, &filters, &["ls-files", "--others", "--exclude-standard", "--directory", "--no-empty-directory"]);
-    dirty = run_cmd_capped("git", &args, Path::new("."), GIT_ENV, Instant::now() + UNTRACKED_TIMEOUT, 1)
-      .is_some_and(|(s, _)| !s.is_empty());
+    let args = git_args(c, &["ls-files", "--others", "--exclude-standard", "--directory", "--no-empty-directory"]);
+    dirty = run_cmd_capped("git", &args, Path::new("."), &env, Instant::now() + UNTRACKED_TIMEOUT, 1).is_some_and(|(s, _)| !s.is_empty());
   }
   GitInfo { root: Some(root), branch, dirty }
 }
@@ -264,7 +236,7 @@ pub async fn git_info(cwd: String) -> GitInfo {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
   use super::*;
 
   fn git(dir: &Path, args: &[&str]) {
@@ -351,12 +323,11 @@ mod tests {
 
   #[test]
   fn git_args_put_safe_config_first() {
-    let extra = vec!["-c".to_string(), "filter.x.clean=".to_string()];
-    let a = git_args("/r", &extra, &["status", "--porcelain"]);
+    let a = git_args("/r", &["status", "--porcelain"]);
     #[rustfmt::skip]
     let want = [
       "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.untrackedCache=false",
-      "-c", "protocol.allow=never", "-c", "filter.x.clean=", "-C", "/r", "status", "--porcelain",
+      "-c", "protocol.allow=never", "-C", "/r", "status", "--porcelain",
     ];
     assert_eq!(a, want);
     assert!(GIT_ENV.contains(&("GIT_CONFIG_NOSYSTEM", "1")));
@@ -366,12 +337,25 @@ mod tests {
   }
 
   #[test]
+  fn git_env_passes_overrides_whole() {
+    let env = git_env(&["filter.a=b.clean".to_string()], &[("X", "1")]);
+    let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+    assert_eq!(get("GIT_CONFIG_COUNT"), Some("1"));
+    assert_eq!(get("GIT_CONFIG_KEY_0"), Some("filter.a=b.clean"));
+    assert_eq!(get("GIT_CONFIG_VALUE_0"), Some(""));
+    assert_eq!(get("X"), Some("1"));
+    // Без перекрытий счётчик всё равно задан: унаследованные GIT_CONFIG_KEY_* не применяются.
+    assert_eq!(git_env(&[], &[]).iter().find(|(n, _)| n == "GIT_CONFIG_COUNT").map(|(_, v)| v.as_str()), Some("0"));
+  }
+
+  #[test]
   fn filter_overrides_cover_every_driver() {
-    let o = filter_overrides_from("filter.lfs.clean\nfilter.lfs.process\nfilter.a.b.smudge\n");
+    let o = filter_overrides_from("filter.lfs.clean\0filter.lfs.process\0filter.a.b.smudge\0filter.x=y.clean\0");
     #[rustfmt::skip]
     let want = [
-      "-c", "filter.a.b.clean=", "-c", "filter.a.b.smudge=", "-c", "filter.a.b.process=",
-      "-c", "filter.lfs.clean=", "-c", "filter.lfs.smudge=", "-c", "filter.lfs.process=",
+      "filter.a.b.clean", "filter.a.b.smudge", "filter.a.b.process",
+      "filter.lfs.clean", "filter.lfs.smudge", "filter.lfs.process",
+      "filter.x=y.clean", "filter.x=y.smudge", "filter.x=y.process",
     ];
     assert_eq!(o, want);
     assert!(filter_overrides_from("").is_empty());
@@ -420,10 +404,10 @@ mod tests {
     assert!(git_info_at(d.path()).dirty);
   }
 
-  /// Кэш перекрытий фильтров: конфиг, изменённый после первого опроса, читается заново.
+  /// Конфиг, изменённый после первого опроса, читается заново (кэша перекрытий нет).
   #[test]
   #[cfg(unix)]
-  fn filter_cache_sees_config_changed_later() {
+  fn config_changed_later_is_seen() {
     let d = repo();
     let pwned = d.path().join("pwned");
     std::fs::write(d.path().join(".gitattributes"), "*.txt filter=late\n").unwrap();
@@ -431,12 +415,56 @@ mod tests {
     git(d.path(), &["add", "."]);
     git(d.path(), &["commit", "-m", "a"]);
     assert!(!git_info_at(d.path()).dirty);
-    // Время изменения файла — в ключе кэша; ждём, чтобы оно точно сменилось.
-    std::thread::sleep(Duration::from_millis(20));
     hostile_config(d.path(), &format!("[filter \"late\"]\n\tclean = \"touch '{}'; cat\"\n", pwned.display()));
     std::fs::write(d.path().join("a.txt"), "b\n").unwrap();
     assert!(git_info_at(d.path()).dirty);
     assert!(!pwned.exists(), "фильтр из изменённого конфига выполнился");
+  }
+
+  /// Репозиторий с изменённым файлом под `filter=<name>` и clean-фильтром, создающим метку.
+  #[cfg(unix)]
+  pub(crate) fn filtered_repo(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let d = repo();
+    let pwned = d.path().join("pwned");
+    std::fs::write(d.path().join(".gitattributes"), format!("*.txt filter={name}\n")).unwrap();
+    std::fs::write(d.path().join("a.txt"), "a\n").unwrap();
+    git(d.path(), &["add", "."]);
+    git(d.path(), &["commit", "-m", "a"]);
+    hostile_config(d.path(), &format!("[filter \"{name}\"]\n\tclean = \"touch '{}'; cat\"\n", pwned.display()));
+    std::fs::write(d.path().join("a.txt"), "b\n").unwrap();
+    (d, pwned)
+  }
+
+  /// `=` в имени фильтра: `-c filter.a=b.clean=` git разобрал бы как ключ `filter.a`,
+  /// перекрытие через окружение задаёт ключ целиком.
+  #[test]
+  #[cfg(unix)]
+  fn filter_name_with_equals_does_not_run() {
+    let (d, pwned) = filtered_repo("a=b");
+    let i = git_info_at(d.path());
+    assert!(i.dirty);
+    assert!(!pwned.exists(), "фильтр с `=` в имени выполнился");
+  }
+
+  /// Список фильтров не получен — status/ls-files не запускаются (иначе фильтр выполнился бы).
+  #[test]
+  #[cfg(unix)]
+  fn filter_list_failure_fails_closed() {
+    let (d, pwned) = filtered_repo("evil");
+    let i = git_info_with(d.path(), |_, _| None);
+    assert!(i.root.is_some());
+    assert!(!i.dirty);
+    assert!(!pwned.exists(), "status запустился без перекрытий фильтров");
+    // Настоящий список (код 0) — работает как обычно.
+    assert!(filter_overrides(d.path(), Instant::now() + Duration::from_secs(2)).is_some_and(|v| v.len() == 3));
+  }
+
+  /// Нет ни одного фильтра (`git config` с кодом 1) — пустой список, а не отказ.
+  #[test]
+  fn no_filters_is_empty_list() {
+    let d = repo();
+    assert_eq!(filter_overrides(d.path(), Instant::now() + Duration::from_secs(2)), Some(vec![]));
+    assert_eq!(filter_overrides(Path::new("/definitely/not/here/kv"), Instant::now() + Duration::from_secs(2)), None);
   }
 
   /// Подмодуль с фильтром в своём конфиге: `git status` верхнего репозитория в него не заходит.
@@ -483,6 +511,12 @@ mod tests {
     hostile_config(d.path(), &format!("[filter \"evil\"]\n\tclean = \"touch '{}'; cat\"\n", pwned.display()));
     std::fs::write(d.path().join("a.txt"), "b\n").unwrap();
     let _ = Command::new("git").arg("-C").arg(d.path()).args(["status", "--porcelain"]).output().unwrap();
+    assert!(pwned.exists());
+
+    // Перекрытие `-c` не спасает фильтр с `=` в имени — поэтому оно в окружении.
+    let (d, pwned) = filtered_repo("a=b");
+    let c = ["-c", "filter.a=b.clean=", "-c", "filter.a=b.process="];
+    let _ = Command::new("git").args(c).arg("-C").arg(d.path()).args(["status", "--porcelain"]).output().unwrap();
     assert!(pwned.exists());
   }
 }

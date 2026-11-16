@@ -630,13 +630,14 @@ fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<Vec<u8>> {
 /// Расширения, которые «открыть» программой по умолчанию безопасно: документы, картинки, звук,
 /// видео, таблицы и простые текстовые форматы. Всё прочее (приложения и бандлы, сценарии любых
 /// языков — `.py`, `.pl`, `.rb`, `.command`…, установщики, образы дисков, ссылки, профили, файлы
-/// без расширения) ↵ показывает в Finder: список запрещённого всегда неполон.
+/// без расширения) ↵ показывает в Finder: список запрещённого всегда неполон. `svg` и `xml`
+/// здесь нет: их открывает браузер как страницу из file:// со сценариями.
 const OPEN_EXT: &[&str] = &[
   // Текст и документы
-  "txt", "text", "md", "markdown", "rtf", "pdf", "csv", "tsv", "log", "json", "yaml", "yml", "toml", "xml",
+  "txt", "text", "md", "markdown", "rtf", "pdf", "csv", "tsv", "log", "json", "yaml", "yml", "toml",
   "doc", "docx", "odt", "pages", "xls", "xlsx", "ods", "numbers", "ppt", "pptx", "odp", "key", "epub",
   // Картинки
-  "png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "tif", "tiff", "bmp", "ico", "icns", "svg", "psd", "avif",
+  "png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "tif", "tiff", "bmp", "ico", "icns", "psd", "avif",
   // Звук
   "mp3", "m4a", "aac", "wav", "aif", "aiff", "flac", "ogg", "oga", "opus", "caf",
   // Видео
@@ -895,6 +896,9 @@ mod tests {
     }
     // Ссылка x.png на x.command: решает и цель.
     assert!(launches_code(&[p("/w/x.png"), p("/w/x.command")], false, 0o644));
+    // Активное содержимое в браузере — тоже только «показать в Finder».
+    assert!(launches_code(&[p("/w/x.svg")], false, 0o644));
+    assert!(launches_code(&[p("/w/x.XML")], false, 0o644));
     // Сценарии любых языков и файлы без расширения — не «открыть», а показать в Finder.
     for n in ["/w/x.py", "/w/x.pl", "/w/x.rb", "/w/x.js", "/w/x.php", "/w/x.lua", "/w/x.applescript", "/w/Makefile", "/w/x.html"] {
       assert!(launches_code(&[Path::new(n)], false, 0o644), "{n}");

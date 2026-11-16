@@ -1,5 +1,6 @@
 mod attach;
 mod claude;
+mod claude_trust;
 mod claude_sessions;
 mod claude_settings;
 mod diag;
@@ -19,7 +20,7 @@ mod traffic_lights;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Emitter, Manager, RunEvent, Wry};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, Url, Wry};
 
 /// Блокирующая работа команды (диск, git, оболочка) — в пуле блокирующих задач: не в главном
 /// потоке и не в рабочих потоках tokio, которые нужны остальным командам.
@@ -67,10 +68,42 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
   Menu::with_items(app, &[&app_menu, &edit_menu])
 }
 
+/// Адрес — собственная страница приложения: `tauri://localhost` (macOS/Linux),
+/// `http(s)://tauri.localhost` (Windows) или, в режиме разработки, источник `devUrl`.
+fn is_app_url(url: &Url, dev: Option<&Url>) -> bool {
+  let own = match url.scheme() {
+    "tauri" => url.host_str() == Some("localhost"),
+    "http" | "https" => url.host_str() == Some("tauri.localhost"),
+    _ => false,
+  };
+  own || dev.is_some_and(|d| url.origin().is_tuple() && d.origin() == url.origin())
+}
+
+/// Страж навигации главного окна: уйти со страницы приложения нельзя (пункт «Открыть ссылку»
+/// контекстного меню WKWebView, перетащенная ссылка и т. п.). Иначе `PageLoadEvent::Started`
+/// убил бы все терминалы и claude, а в окне с доступом к командам оказалась бы чужая страница.
+/// http(s) открываем в браузере, остальное (file:, data:, about:) просто отменяем.
+fn nav_guard() -> tauri::plugin::TauriPlugin<Wry> {
+  tauri::plugin::Builder::<Wry>::new("nav-guard")
+    .on_navigation(|webview, url| {
+      let dev = if tauri::is_dev() { webview.app_handle().config().build.dev_url.clone() } else { None };
+      if is_app_url(url, dev.as_ref()) {
+        return true;
+      }
+      if matches!(url.scheme(), "http" | "https") {
+        let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
+      }
+      log::warn!("навигация главного окна отменена: {url}");
+      false
+    })
+    .build()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_opener::init())
+    .plugin(nav_guard())
     .plugin(tauri_plugin_notification::init())
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
@@ -93,6 +126,8 @@ pub fn run() {
       claude::claude_stop,
       claude::claude_control,
       claude::claude_respond,
+      claude_trust::claude_trust_check,
+      claude_trust::claude_trust_add,
       claude_settings::claude_save_defaults,
       claude_sessions::claude_sessions,
       claude_sessions::claude_session_history,
@@ -207,6 +242,27 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn only_app_origin_is_navigable() {
+    let u = |s: &str| Url::parse(s).unwrap();
+    assert!(is_app_url(&u("tauri://localhost/"), None));
+    assert!(is_app_url(&u("tauri://localhost/index.html#x"), None));
+    assert!(is_app_url(&u("http://tauri.localhost/"), None));
+    assert!(is_app_url(&u("https://tauri.localhost/a"), None));
+    assert!(!is_app_url(&u("https://evil.example/"), None));
+    assert!(!is_app_url(&u("tauri://evil/"), None));
+    assert!(!is_app_url(&u("http://localhost:5173/"), None));
+    assert!(!is_app_url(&u("file:///etc/passwd"), None));
+    assert!(!is_app_url(&u("about:blank"), None));
+    assert!(!is_app_url(&u("data:text/html,x"), None));
+    // devUrl — только его источник (схема, хост, порт).
+    let dev = u("http://localhost:5173");
+    assert!(is_app_url(&u("http://localhost:5173/src/main.tsx"), Some(&dev)));
+    assert!(!is_app_url(&u("http://localhost:5174/"), Some(&dev)));
+    assert!(!is_app_url(&u("https://localhost:5173/"), Some(&dev)));
+    assert!(!is_app_url(&u("about:blank"), Some(&u("about:blank"))));
+  }
 
   #[test]
   fn settings_event_name_is_stable() {

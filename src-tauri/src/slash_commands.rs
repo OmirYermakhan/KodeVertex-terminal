@@ -54,8 +54,36 @@ pub fn describe(text: &str) -> String {
     .unwrap_or_default()
 }
 
+/// Невидимые символы форматирования (Unicode Cf): bidi-переключатели, нулевой ширины, теги
+/// U+E0000–E007F, BOM. Ими имя команды из чужого репозитория выглядело бы не тем, что оно есть.
+fn is_format(c: char) -> bool {
+  matches!(
+    c as u32,
+    0x00AD
+      | 0x0600..=0x0605
+      | 0x061C
+      | 0x06DD
+      | 0x070F
+      | 0x0890..=0x0891
+      | 0x08E2
+      | 0x180E
+      | 0x200B..=0x200F
+      | 0x202A..=0x202E
+      | 0x2060..=0x2064
+      | 0x2066..=0x206F
+      | 0xFEFF
+      | 0xFFF9..=0xFFFB
+      | 0x110BD
+      | 0x110CD
+      | 0x13430..=0x1343F
+      | 0x1BCA0..=0x1BCA3
+      | 0x1D173..=0x1D17A
+      | 0xE0000..=0xE007F
+  )
+}
+
 fn clip(s: &str) -> String {
-  let clean: String = s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+  let clean: String = s.chars().filter(|&c| !is_format(c)).map(|c| if c.is_control() { ' ' } else { c }).collect();
   let clean = clean.trim();
   if clean.chars().count() <= DESC_CHARS {
     return clean.to_string();
@@ -89,7 +117,7 @@ fn walk(dir: &Path, prefix: &str, depth: usize, source: &'static str, budget: &m
       return;
     }
     let Some(file) = path.file_name().and_then(|n| n.to_str()) else { continue };
-    if file.starts_with('.') || file.chars().any(char::is_control) || file.contains(':') {
+    if file.starts_with('.') || file.chars().any(|c| c.is_control() || is_format(c)) || file.contains(':') {
       continue;
     }
     let Ok(meta) = fs::metadata(&path) else { continue };
@@ -204,6 +232,19 @@ mod tests {
     let big = tempdir().unwrap();
     put(big.path(), ".claude/commands/big.md", &format!("{}\nпоздно", "\n".repeat(9000)));
     assert_eq!(list_slash_commands(big.path(), None)[0].description, "");
+  }
+
+  #[test]
+  fn invisible_format_chars_are_rejected() {
+    let proj = tempdir().unwrap();
+    put(proj.path(), ".claude/commands/ok.md", "Опи\u{200B}сание \u{202E}тут\u{E0041}\u{FEFF}");
+    for bad in ["re\u{202E}view.md", "a\u{200B}b.md", "t\u{E0061}g.md", "\u{FEFF}bom.md", "x\u{2066}y.md"] {
+      put(proj.path(), &format!(".claude/commands/{bad}"), "x");
+    }
+    put(proj.path(), ".claude/commands/d\u{2060}ir/inner.md", "x");
+    let v = list_slash_commands(proj.path(), None);
+    let got: Vec<(&str, &str)> = v.iter().map(|c| (c.name.as_str(), c.description.as_str())).collect();
+    assert_eq!(got, vec![("ok", "Описание тут")]);
   }
 
   #[test]

@@ -419,8 +419,21 @@ pub struct Resolved {
 
 static CLAUDE_PATH: OnceLock<Resolved> = OnceLock::new();
 
-/// Метка строки с PATH в выводе оболочки (rc-файлы могут печатать что угодно).
-const PATH_MARK: &str = "__KODEVERTEX_PATH__=";
+/// Метки строк с путём к claude и PATH в выводе оболочки (rc-файлы могут печатать что угодно).
+/// К каждой добавляется случайный для запуска суффикс: rc-файл не угадает метку заранее.
+const PATH_MARK: &str = "__KODEVERTEX_PATH_";
+const CLAUDE_MARK: &str = "__KODEVERTEX_CLAUDE_";
+
+/// Суффикс меток одного запуска оболочки.
+fn mark_nonce() -> String {
+  let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+  format!("{:x}{:x}__=", std::process::id(), nanos)
+}
+
+/// Значение последней строки с меткой `mark` (печатается после rc-файлов).
+fn marked<'a>(out: &'a str, mark: &str) -> Option<&'a str> {
+  out.lines().rev().find_map(|l| l.strip_prefix(mark))
+}
 
 /// Ищет `claude` в PATH login-оболочки (приложение из Dock не видит PATH пользователя) и
 /// запоминает сам PATH. Успешный результат кэшируется.
@@ -436,7 +449,11 @@ pub fn resolve_claude() -> Result<Resolved, String> {
 /// `command -v claude` и `$PATH` в login-оболочке `sh` (POSIX: работает и не в zsh). Алиас
 /// снимаем: нужен путь к файлу. Оболочка, не ответившая за `timeout`, убивается вместе с потомками.
 fn find_in_login_shell(sh: &Path, timeout: Duration) -> Result<Resolved, String> {
-  let script = format!("unalias claude 2>/dev/null; command -v claude; printf '\\n%s%s\\n' '{PATH_MARK}' \"$PATH\"");
+  let nonce = mark_nonce();
+  let (claude_mark, path_mark) = (format!("{CLAUDE_MARK}{nonce}"), format!("{PATH_MARK}{nonce}"));
+  let script = format!(
+    "unalias claude 2>/dev/null; __kv_p=$(command -v claude); printf '\\n%s%s\\n%s%s\\n' '{claude_mark}' \"$__kv_p\" '{path_mark}' \"$PATH\""
+  );
   let mut child = Command::new(sh)
     .args(["-lic", &script])
     .stdin(Stdio::null())
@@ -471,15 +488,12 @@ fn find_in_login_shell(sh: &Path, timeout: Duration) -> Result<Resolved, String>
   // Потомок оболочки мог унаследовать stdout — не ждём его дольше короткого окна.
   let out = rx.recv_timeout(DRAIN_GRACE).unwrap_or_default();
   let stdout = String::from_utf8_lossy(&out);
-  // rc-файлы могут печатать лишнее: берём последнюю строку, которая — существующий абсолютный путь.
-  let program = stdout
-    .lines()
-    .rev()
-    .map(str::trim)
-    .find(|l| l.starts_with('/') && Path::new(l).is_file())
+  // rc-файлы могут печатать лишнее: путь берём только из строки с меткой этого запуска.
+  let program = marked(&stdout, &claude_mark)
+    .filter(|l| l.starts_with('/') && Path::new(l).is_file())
     .map(PathBuf::from)
     .ok_or_else(|| NOT_FOUND.to_string())?;
-  let path_env = stdout.lines().rev().find_map(|l| l.strip_prefix(PATH_MARK)).map(str::to_string).filter(|p| !p.is_empty());
+  let path_env = marked(&stdout, &path_mark).map(str::to_string).filter(|p| !p.is_empty());
   Ok(Resolved { program, path_env })
 }
 
@@ -492,6 +506,7 @@ pub struct ClaudeExit {
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // параметры команды — поля JSON от фронта
 pub async fn claude_start(
+  app: tauri::AppHandle,
   manager: State<'_, ClaudeManager>,
   cwd: String,
   resume: Option<String>,
@@ -505,6 +520,11 @@ pub async fn claude_start(
   on_line: Channel<String>,
   on_exit: Channel<ClaudeExit>,
 ) -> Result<String, String> {
+  // Недоверенная папка — `Err("UNTRUSTED_DIR")` до запуска: `-p` пропускает диалог доверия CLI,
+  // и хуки из `.claude/settings.json` чужого репозитория выполнились бы без согласия.
+  // Возобновление и ответвление (`resume`/`fork`) идут этим же путём.
+  let dir = PathBuf::from(&cwd);
+  crate::blocking(move || crate::claude_trust::ensure(&app, &dir)).await??;
   let Resolved { program, path_env } = tauri::async_runtime::spawn_blocking(resolve_claude).await.map_err(|e| e.to_string())??;
   manager.start(
     &program,
@@ -976,7 +996,11 @@ mod tests {
     let (_d, claude) = script("true");
     std::fs::copy(&claude, bin.join("claude")).unwrap();
     // Login-оболочка — sh: подменяем её скриптом, который выставляет PATH и исполняет переданную команду.
-    let (_s, sh) = script(&format!("export PATH='{}':\"$PATH\"\necho мусор из rc\nalias claude=echo 2>/dev/null\nexec /bin/sh -c \"$2\"", bin.display()));
+    // rc-файл печатает «чужой» путь к существующему файлу — он не должен быть принят за claude.
+    let (_s, sh) = script(&format!(
+      "export PATH='{}':\"$PATH\"\necho мусор из rc\necho /bin/sh\necho __KODEVERTEX_CLAUDE_x__=/bin/sh\nalias claude=echo 2>/dev/null\nexec /bin/sh -c \"$2\"",
+      bin.display()
+    ));
     let found = find_in_login_shell(&sh, Duration::from_secs(5)).unwrap();
     assert_eq!(found.program, bin.join("claude"));
     // PATH оболочки пользователя тоже получен: с ним claude найдёт node из `#!/usr/bin/env node`.

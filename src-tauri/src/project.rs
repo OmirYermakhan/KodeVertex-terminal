@@ -1,7 +1,7 @@
 //! Панель проекта: список папки и чтение файла строго внутри корня проекта.
 //! Только просмотр — ничего не меняем. Пути от фронта относительные к корню.
 
-use crate::git::{git_args, run_cmd, run_cmd_capped, GIT_ENV};
+use crate::git::{env_refs, git_args, git_env, run_cmd, run_cmd_capped};
 use crate::preview::{io_message, looks_binary};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -72,8 +72,8 @@ fn has_parent(p: &Path) -> bool {
 pub fn project_root_at(cwd: &Path) -> String {
   let deadline = Instant::now() + GIT_TIMEOUT;
   let top = cwd.to_str().and_then(|c| {
-    let args = git_args(c, &[], &["rev-parse", "--show-toplevel"]);
-    run_cmd("git", &args, Path::new("."), GIT_ENV, deadline)
+    let args = git_args(c, &["rev-parse", "--show-toplevel"]);
+    run_cmd("git", &args, Path::new("."), &env_refs(&git_env(&[], &[])), deadline)
   });
   match top.filter(|s| !s.is_empty()) {
     Some(t) => t,
@@ -199,39 +199,43 @@ pub struct Commit {
   pub head: bool,
 }
 
-/// Запуск git только для чтения: общий путь из `git.rs` (защитные `-c`, перекрытие фильтров,
-/// GIT_ENV, stdin null) и один дедлайн на всю команду.
+/// Запуск git только для чтения: общий путь из `git.rs` (защитные `-c`, перекрытие фильтров
+/// через окружение, GIT_ENV, stdin null) и один дедлайн на всю команду.
 struct Git<'a> {
   cwd: &'a str,
-  extra: Vec<String>,
+  env: Vec<(String, String)>,
   deadline: Instant,
 }
 
 impl<'a> Git<'a> {
   fn new(root: &'a Path) -> Result<Self, String> {
+    Self::with(root, crate::git::filter_overrides)
+  }
+
+  fn with(root: &'a Path, list_filters: crate::git::FilterLister) -> Result<Self, String> {
     let cwd = root.to_str().ok_or_else(|| "not-git".to_string())?;
     let deadline = Instant::now() + GIT_TIMEOUT;
-    let extra = crate::git::filter_overrides(root, deadline);
-    let g = Git { cwd, extra, deadline };
-    // Не репозиторий (или нет доступа) — единый ответ для фронта.
+    // Пути — буквально (без `:(top)` и масок); `--` ставит вызывающий.
+    let literal = [("GIT_LITERAL_PATHSPECS", "1")];
+    let mut g = Git { cwd, env: git_env(&[], &literal), deadline };
+    // Не репозиторий (или нет доступа) — единый ответ для фронта. rev-parse фильтры не запускает.
     if g.run(&["rev-parse", "--is-inside-work-tree"]).as_deref() != Some("true") {
       return Err("not-git".to_string());
     }
+    // Список фильтров не получен — дальше не идём (fail closed): status/diff без перекрытий
+    // выполнили бы clean-фильтр из чужого конфига.
+    let filters = list_filters(root, deadline).ok_or_else(|| "Не удалось прочитать конфиг git".to_string())?;
+    g.env = git_env(&filters, &literal);
     Ok(g)
   }
 
-  fn env() -> Vec<(&'static str, &'static str)> {
-    // Пути — буквально (без `:(top)` и масок); `--` ставит вызывающий.
-    GIT_ENV.iter().copied().chain([("GIT_LITERAL_PATHSPECS", "1")]).collect()
-  }
-
   fn run(&self, args: &[&str]) -> Option<String> {
-    run_cmd("git", &git_args(self.cwd, &self.extra, args), Path::new("."), &Self::env(), self.deadline)
+    run_cmd("git", &git_args(self.cwd, args), Path::new("."), &env_refs(&self.env), self.deadline)
   }
 
   /// Вывод без обрезки пробелов и с потолком `max` байт; true — вывод урезан.
   fn run_raw(&self, args: &[&str], max: usize) -> Option<(String, bool)> {
-    run_cmd_capped("git", &git_args(self.cwd, &self.extra, args), Path::new("."), &Self::env(), self.deadline, max)
+    run_cmd_capped("git", &git_args(self.cwd, args), Path::new("."), &env_refs(&self.env), self.deadline, max)
   }
 
   fn has_head(&self) -> bool {
@@ -1002,5 +1006,30 @@ mod tests {
     let small = new_repo();
     touch(small.path(), "u", "");
     assert_eq!(git_status_at(small.path()).unwrap().more_untracked, 0);
+  }
+
+  /// Фильтр с `=` в имени из чужого конфига не выполняется ни status, ни diff.
+  #[test]
+  #[cfg(unix)]
+  fn filter_name_with_equals_does_not_run_in_panel() {
+    let (d, pwned) = crate::git::tests::filtered_repo("a=b");
+    let s = git_status_at(d.path()).unwrap();
+    assert_eq!(find(&s.changes, "a.txt").status, "M");
+    let diff = git_diff_at(d.path(), "a.txt", None).unwrap();
+    assert!(diff.contains("+b"), "{diff}");
+    assert!(!pwned.exists(), "фильтр с `=` в имени выполнился");
+  }
+
+  /// Список фильтров не получен — ни одна команда панели не запускает git дальше.
+  #[test]
+  #[cfg(unix)]
+  fn filter_list_failure_fails_closed_in_panel() {
+    let (d, pwned) = crate::git::tests::filtered_repo("evil");
+    let r = Git::with(d.path(), |_, _| None);
+    assert_eq!(r.err().as_deref(), Some("Не удалось прочитать конфиг git"));
+    // Не репозиторий — по-прежнему not-git, а не ошибка конфига.
+    let plain = tempfile::tempdir().unwrap();
+    assert_eq!(Git::with(plain.path(), |_, _| None).err().as_deref(), Some("not-git"));
+    assert!(!pwned.exists());
   }
 }
