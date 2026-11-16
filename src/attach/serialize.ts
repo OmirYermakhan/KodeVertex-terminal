@@ -2,6 +2,7 @@
 // превратит в блоки image/document. Значки заменяются на месте, по порядку текста:
 // картинка → [Изображение N], pdf → [Документ N], файл/папка → @путь, блок → [Блок N] +
 // <terminal_block>, сообщение → [Сообщение N] + <quoted_message>.
+import { isMedia } from './classify'
 import { isToken } from './doc'
 import type { Attachment, Doc } from './types'
 
@@ -36,6 +37,9 @@ export function relativize(path: string, cwd: string | null | undefined): string
 export function atMention(path: string): string {
   return /[\s"]/.test(path) ? `@"${path.replace(/"/g, '\\"')}"` : `@${path}`
 }
+
+/** Путь как есть; с пробелами — в кавычках. */
+export const quotePath = (path: string) => (/[\s"]/.test(path) ? `"${path.replace(/"/g, '\\"')}"` : path)
 
 const utf8 = new TextEncoder()
 
@@ -120,6 +124,9 @@ export function serialize(doc: Doc, cwd: string | null | undefined): Serialized 
         } else text += `[${t.label}]`
         break
       case 'file':
+        // Видео/аудио Claude целиком не примет — как в Warp, просто абсолютный путь к файлу.
+        text += t.path && isMedia(t.path) ? quotePath(t.path) : pathRef(t, cwd)
+        break
       case 'folder':
         text += pathRef(t, cwd)
         break

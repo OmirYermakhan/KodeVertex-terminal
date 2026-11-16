@@ -734,7 +734,7 @@ describe('InputBar: значки вложений', () => {
     expect([...s.ed.querySelectorAll('.tk')].map((e) => [e.className, e.textContent])).toEqual([
       ['tk', 'a.png'],
       ['tk', 'dir/'],
-      ['tk err', 'c.mov'],
+      ['tk', 'c.mov'],
     ])
   })
 

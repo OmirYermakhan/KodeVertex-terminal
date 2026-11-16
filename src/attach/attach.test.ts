@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { backspace, countTokens, docOf, forwardDelete, insertText, insertTokens, moveCaret, readable, sanitizeText, segments, splice, tokenPos } from './doc'
-import { classify, effective, overBudget, pathAttachment, REASON_FILE_BIG, REASON_IMAGE_BIG, REASON_MEDIA, REASON_MESSAGE_BIG, REASON_MISSING, REASON_PDF_BIG, sendBlocked } from './classify'
+import { classify, effective, overBudget, pathAttachment, REASON_FILE_BIG, REASON_IMAGE_BIG, REASON_MESSAGE_BIG, REASON_MISSING, REASON_PDF_BIG, sendBlocked } from './classify'
 import { BLOCK_MAX_LINES, MAX_IMAGES, atMention, relativize, serialize, tailOutput } from './serialize'
 import { TOKEN_CHAR as T, type Attachment, type Doc } from './types'
 
@@ -107,7 +107,7 @@ describe('тип вложения', () => {
     expect(classify(info('Form.tsx')).kind).toBe('file')
     expect(classify(info('archive.zip')).kind).toBe('file')
     expect(classify(info('Makefile')).kind).toBe('file')
-    for (const n of ['clip.mov', 'song.mp3', 'v.MP4', 'a.wav']) expect(classify(info(n))).toEqual({ kind: 'unsupported', reason: REASON_MEDIA })
+    for (const n of ['clip.mov', 'song.mp3', 'v.MP4', 'a.wav']) expect(classify(info(n))).toEqual({ kind: 'file' })
   })
   it('лимиты: картинка > 5 МБ после уменьшения, pdf > 20 МБ, нет файла', () => {
     expect(classify(info('big.png', { size: 50e6, preparedSize: 2e6 })).kind).toBe('image')
@@ -158,6 +158,19 @@ describe('отправка: сериализация', () => {
         '<terminal_block n="1" cmd="npm test" exit="1" cwd="/w">\nFAIL "x"\n</terminal_block>\n\n' +
         '<quoted_message n="1" author="Главный">\nФорма <готова>\n</quoted_message>',
     )
+  })
+
+  it('видео и аудио — абсолютным путём без @, с пробелами в кавычках', () => {
+    const d: Doc = {
+      text: `глянь ${T} и ${T}`,
+      tokens: [
+        { id: '1', kind: 'file', label: 'demo.mp4', path: '/w/demo.mp4' },
+        { id: '2', kind: 'file', label: 'my song.mp3', path: '/Users/a/my song.mp3' },
+      ],
+    }
+    const s = serialize(d, '/w')
+    expect(s.files).toEqual([])
+    expect(s.text).toBe('глянь /w/demo.mp4 и "/Users/a/my song.mp3"')
   })
 
   it('номера растут по каждому типу; больше 20 картинок — путём', () => {

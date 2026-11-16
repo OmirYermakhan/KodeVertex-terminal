@@ -1,4 +1,4 @@
-// Тип вложения по пути: картинка, PDF, папка, видео/аудио (не уходит), остальное — файл.
+// Тип вложения по пути: картинка, PDF, папка, остальное — файл (видео/аудио тоже: уходит путём).
 import { attachmentId, type AttachKind, type Attachment } from './types'
 import { MAX_IMAGES } from './serialize'
 
@@ -15,7 +15,6 @@ export const IMAGE_SOURCE_MAX = 60 * 1024 * 1024
 /** Картинки и PDF одного сообщения в base64 — не больше (как attach::MESSAGE_MAX в Rust). */
 export const MESSAGE_MAX_B64 = 28 * 1024 * 1024
 
-export const REASON_MEDIA = 'Видео и аудио Claude не принимает'
 export const REASON_IMAGE_BIG = 'Картинка больше 5 МБ даже после уменьшения'
 export const REASON_PDF_BIG = 'PDF больше 20 МБ'
 export const REASON_FILE_BIG = 'Слишком большой файл'
@@ -36,6 +35,9 @@ export interface PathInfo {
   thumb?: string | null
 }
 
+/** Видео или аудио: в сообщение уходит не содержимое, а путь к файлу. */
+export const isMedia = (name: string) => MEDIA_EXT.includes(extOf(name))
+
 export function extOf(name: string): string {
   const dot = name.lastIndexOf('.')
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
@@ -47,7 +49,6 @@ export function classify(info: Pick<PathInfo, 'name' | 'isDir' | 'size' | 'exist
   if (!info.exists) return { kind: 'unsupported', reason: REASON_MISSING }
   if (info.isDir) return { kind: 'folder' }
   const ext = extOf(info.name)
-  if (MEDIA_EXT.includes(ext)) return { kind: 'unsupported', reason: REASON_MEDIA }
   if (IMAGE_EXT.includes(ext)) {
     if (info.size > IMAGE_SOURCE_MAX) return { kind: 'unsupported', reason: REASON_FILE_BIG }
     const size = info.preparedSize ?? info.size
