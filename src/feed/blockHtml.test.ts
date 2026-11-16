@@ -1,7 +1,7 @@
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { Terminal } from '@xterm/xterm'
 import { describe, expect, it } from 'vitest'
-import { blockText, cleanSerializedHtml, serializedRows } from './blockHtml'
+import { blockText, cleanSerializedHtml, isSerializedHtml, serializedRows } from './blockHtml'
 
 const write = (t: Terminal, s: string) => new Promise<void>((r) => t.write(s, r))
 
@@ -40,5 +40,28 @@ describe('serializedRows', () => {
       '<div><span>a</span></div>',
       '<div><span></span><span>b</span></div>',
     ])
+  })
+})
+
+describe('isSerializedHtml', () => {
+  it('настоящий вывод аддона (цвета, жирный, подчёркивание, инверсия, & и <) — допустим', async () => {
+    const raw = await serialize('\x1b[1;31ma<b>&c\x1b[0m \x1b[4;38;2;1;2;3mx\x1b[7m y\x1b[2;3;9mz\r\n\x1b[44mq', 2)
+    const html = cleanSerializedHtml(raw)
+    expect(html).toContain("<span style='")
+    expect(isSerializedHtml(html)).toBe(true)
+    expect(isSerializedHtml('')).toBe(true)
+  })
+
+  it('чужие теги, атрибуты и подправленный style — нет', () => {
+    for (const bad of [
+      '<div><span><img src=x onerror=alert(1)></span></div>',
+      "<div><span style='color: red' onclick='x'>a</span></div>",
+      "<div><span style='background-image: url(x);'>a</span></div>",
+      '<div><a href="javascript:x">a</a></div>',
+      '<div><span>a &foo; b</span></div>',
+      '<script>alert(1)</script>',
+    ]) {
+      expect(isSerializedHtml(bad)).toBe(false)
+    }
   })
 })

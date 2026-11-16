@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyShell, ASK_TAIL_LINES, commandBytes, COLLAPSE_LINES, failurePrompt, formatDuration, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from './feed'
+import { applyShell, ASK_TAIL_LINES, capFeed, commandBytes, COLLAPSE_LINES, failurePrompt, formatDuration, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from './feed'
 import type { FeedClaudeItem } from '../claude/reducer'
 
 const b64 = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
@@ -36,6 +36,27 @@ const end = (at: number, exitCode = 0) => ({ t: 'end' as const, exitCode, at, ht
 const sh = (items: FeedItem[], i: number) => items[i] as ShellBlock
 
 describe('applyShell', () => {
+  it('id блоков не совпадают с id восстановленной ленты прошлого запуска (sh-1…sh-N)', () => {
+    const old: FeedItem[] = [1, 2, 3].map((n) => ({ ...(applyShell([], start('x', 1))[0] as ShellBlock), id: `sh-${n}`, running: false }))
+    let r = old
+    for (let i = 0; i < 3; i++) r = applyShell(applyShell(r, start('y', 2)), end(3))
+    const ids = r.map((x) => x.id)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('вытеснение: сверх числа блоков или суммы HTML уходят старейшие законченные shell-блоки', () => {
+    const blk = (id: string, html: string, running = false): ShellBlock => ({
+      kind: 'shell', id, command: id, cwd: '/', startedAt: 0, durationMs: 0, exitCode: 0, html, lines: 1, running,
+    })
+    const cl = { kind: 'claude', id: 'cl-0', item: {} } as unknown as FeedItem
+    const items: FeedItem[] = [blk('a', 'xx'), cl, blk('b', 'xx'), blk('c', 'xx'), blk('d', '', true)]
+    expect(capFeed(items, 10, 100)).toBe(items)
+    expect(capFeed(items, 3, 100).map((x) => x.id)).toEqual(['cl-0', 'b', 'c', 'd'])
+    expect(capFeed(items, 10, 3).map((x) => x.id)).toEqual(['cl-0', 'c', 'd'])
+    // Идущий блок не вытесняется никогда.
+    expect(capFeed(items, 0, 0).map((x) => x.id)).toEqual(['cl-0', 'd'])
+  })
+
   it('start добавляет running-блок', () => {
     const r = applyShell([], start('ls', 100))
     expect(r).toHaveLength(1)

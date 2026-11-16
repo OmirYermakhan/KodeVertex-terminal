@@ -1,5 +1,5 @@
-import { memo, useState, type ReactNode } from 'react'
-import { serializedRows } from './blockHtml'
+import { memo, useMemo, useState, type ReactNode } from 'react'
+import { blockText, isSerializedHtml, serializedRows } from './blockHtml'
 import { COLLAPSE_LINES, COLLAPSED_ROWS, formatDuration, type ShellBlock } from './feed'
 
 export interface ShellBlockViewProps {
@@ -11,7 +11,7 @@ export interface ShellBlockViewProps {
   onAttach?(id: string): void
   /** «⌘⇧C копировать». */
   onCopy?(id: string): void
-  /** «Повторить» в заголовке — только когда оболочка в простое (иначе не передаётся). */
+  /** «Повторить» в заголовке (занята ли оболочка — проверяет сам обработчик: колбэк стабилен, memo блоков не сбивается). */
   onRepeat?(id: string): void
   /** «Спросить Claude» в заголовке упавшего блока (код ≠ 0). */
   onAsk?(id: string): void
@@ -25,15 +25,26 @@ export const ASK_ACTION = 'Спросить Claude'
 function Output({ block }: { block: ShellBlock }) {
   const [all, setAll] = useState(false)
   const html = block.html ?? ''
-  if (!html) return null
   // Длинный блок рисуем свёрнутым: первые COLLAPSED_ROWS строк и кнопка.
   const collapsed = !all && block.lines > COLLAPSE_LINES
-  const shown = collapsed ? serializedRows(html).slice(0, COLLAPSED_ROWS).join('') : html
+  // HTML восстановленной ленты читается с диска (session.json): форма аддона проверяется один раз на HTML.
+  const safe = useMemo(() => isSerializedHtml(html), [html])
+  const shown = useMemo(
+    () => (!safe ? '' : collapsed ? serializedRows(html).slice(0, COLLAPSED_ROWS).join('') : html),
+    [html, collapsed, safe],
+  )
+  const text = useMemo(() => (safe ? '' : blockText(html)), [html, safe])
+  if (!html) return null
   return (
     <>
-      {/* HTML только из SerializeAddon (текст экранирован аддоном), см. blockHtml.ts. */}
-      <div className="out" dangerouslySetInnerHTML={{ __html: shown }} />
-      {collapsed && (
+      {safe ? (
+        // HTML только из SerializeAddon (текст экранирован аддоном), форма проверена isSerializedHtml.
+        <div className="out" dangerouslySetInnerHTML={{ __html: shown }} />
+      ) : (
+        // Не та форма (подправленный файл сессии) — только текст.
+        <div className="out">{text}</div>
+      )}
+      {safe && collapsed && (
         <button type="button" className="blk-more" onClick={() => setAll(true)}>
           Показать всё ({block.lines} строк)
         </button>
@@ -90,27 +101,37 @@ export function HoverActions({
   )
 }
 
+/** Заголовок блока без команды: вывод оболочки между командами (direnv, «[1] + done»). */
+export const SHELL_OUTPUT = 'вывод оболочки'
+
 /** Блок шёл, когда приложение закрылось (восстановлен из сохранённой сессии). */
 export const INTERRUPTED = 'прервано'
 
 export const ShellBlockView = memo(function ShellBlockView({ block, selected, live, onAttach, onCopy, onRepeat, onAsk }: ShellBlockViewProps) {
   const failed = block.exitCode !== null && block.exitCode !== 0
   const cls = ['blk', selected && 'sel', failed && 'err', block.running && 'run'].filter(Boolean).join(' ')
-  const repeat = !block.running && onRepeat
+  // Вывод оболочки вне команды (до набранной строки) — без команды: повторять нечего.
+  const repeat = !block.running && block.command !== '' && onRepeat
   const ask = !block.running && failed && onAsk
   return (
     <div className={cls} data-block-id={block.id}>
       {!block.running && <HoverActions id={block.id} onAttach={onAttach} onCopy={onCopy} />}
       <div className="bh">
         <span>
-          <span className="p">❯</span> <span className="cmd">{block.command}</span>
+          {block.command !== '' ? (
+            <>
+              <span className="p">❯</span> <span className="cmd">{block.command}</span>
+            </>
+          ) : (
+            <span className="cmd none">{SHELL_OUTPUT}</span>
+          )}
         </span>
         <span>
           {(repeat || ask) && (
             // Видны при наведении и у выбранного блока (CSS), перед длительностью.
             <span className="bh-act">
               {repeat && (
-                <button type="button" title="⌘R" onMouseDown={(e) => e.preventDefault()} onClick={() => repeat(block.id)}>
+                <button type="button" className="rep" title="⌘R" onMouseDown={(e) => e.preventDefault()} onClick={() => repeat(block.id)}>
                   {REPEAT_ACTION}
                 </button>
               )}

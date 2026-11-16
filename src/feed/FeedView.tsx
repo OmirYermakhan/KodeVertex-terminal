@@ -27,8 +27,10 @@ export interface FeedProps {
   /** Блок — значком в строку ввода («⌘L в сообщение»). */
   onAttach?(id: string): void
   onCopy?(id: string): void
-  /** Блок: «Повторить» (передаётся, только когда оболочка в простое) и «Спросить Claude». */
+  /** Блок: «Повторить» (колбэк стабилен; занята ли оболочка — проверяет сам) и «Спросить Claude». */
   onRepeat?(id: string): void
+  /** Оболочка занята: «Повторить» скрыт (CSS-класс ленты — блоки не перерисовываются). */
+  repeatOff?: boolean
   onAsk?(id: string): void
   /** Ответ — в режиме чтения. */
   onRead?(id: string): void
@@ -72,7 +74,7 @@ export function finishAppear(feed: HTMLElement | null): void {
 }
 
 export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
-  { items, selectedId, renderLive, agents = NO_AGENTS, cwd, renderClaude, onScroll, park, onAttach, onCopy, onRepeat, onAsk, onRead, editable, onEdit, editingId, claudeMode = false, thinking = null },
+  { items, selectedId, renderLive, agents = NO_AGENTS, cwd, renderClaude, onScroll, park, onAttach, onCopy, onRepeat, repeatOff = false, onAsk, onRead, editable, onEdit, editingId, claudeMode = false, thinking = null },
   ref,
 ) {
   const own = useRef<HTMLDivElement | null>(null)
@@ -98,7 +100,17 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
     onScroll?.()
     restick()
   }
-  const blocks = items.reduce((n, it) => (it.kind === 'shell' ? n + 1 : n), 0)
+  // Набор блоков: число и крайние id — при вытеснении старых (capFeed) число не меняется.
+  let first = ''
+  let last = ''
+  let count = 0
+  for (const it of items) {
+    if (it.kind !== 'shell') continue
+    if (!count) first = it.id
+    last = it.id
+    count++
+  }
+  const blocks = `${count}:${first}:${last}`
   useLayoutEffect(restick, [blocks, restick])
   const ro = useRef<ResizeObserver | null>(null)
   useLayoutEffect(() => {
@@ -130,7 +142,7 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
     finishAppear(own.current)
   }, [])
   return (
-    <div className="feed" ref={setRef} onScroll={scrolled}>
+    <div className={repeatOff ? 'feed no-repeat' : 'feed'} ref={setRef} onScroll={scrolled}>
       {items.map((it) => (
         // Сбой одной карточки (необычный ответ, вывод инструмента) не роняет ленту и окно.
         // resetKey: обновлённый элемент (стрим ответа) пробует отрисоваться снова.

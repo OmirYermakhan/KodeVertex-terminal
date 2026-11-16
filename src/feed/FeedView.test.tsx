@@ -122,6 +122,22 @@ describe('ShellBlockView', () => {
     expect(container.querySelectorAll('.out > div')).toHaveLength(COLLAPSE_LINES)
     expect(screen.queryByRole('button')).toBeNull()
   })
+
+  it('HTML не той формы, что у SerializeAddon (подправленный session.json), — только текстом', () => {
+    const { container } = render(
+      <ShellBlockView block={blk({ html: '<div><span>ok<img src=x onerror="alert(1)"></span></div><div><span>two</span></div>' })} selected={false} />,
+    )
+    expect(container.querySelector('.out img')).toBeNull()
+    expect(container.querySelector('.out')!.textContent).toBe('ok\ntwo')
+  })
+
+  it('«Повторить» скрывается классом ленты, когда оболочка занята (колбэк тот же)', () => {
+    const { container, rerender } = render(<Feed items={[blk()]} selectedId={null} renderLive={() => null} onRepeat={() => {}} />)
+    expect(container.querySelector('.feed')).not.toHaveClass('no-repeat')
+    rerender(<Feed items={[blk()]} selectedId={null} renderLive={() => null} onRepeat={() => {}} repeatOff />)
+    expect(container.querySelector('.feed')).toHaveClass('no-repeat')
+    expect(container.querySelector('.bh-act .rep')).not.toBeNull()
+  })
 })
 
 describe('LiveTerminal', () => {

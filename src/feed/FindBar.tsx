@@ -9,8 +9,16 @@ export const FIND_CASE_TITLE = 'С учётом регистра'
 export const FIND_PREV_TITLE = 'Предыдущее (⇧↵)'
 export const FIND_NEXT_TITLE = 'Следующее (↵)'
 export const FIND_CLOSE_TITLE = 'Закрыть (esc)'
-/** Пересчёт совпадений после изменения ленты — не чаще этого. */
-export const RECOUNT_MS = 30
+/** Пересчёт совпадений после изменения ленты — не чаще этого (каждый — полный проход DOM ленты). */
+export const RECOUNT_MS = 100
+/** Поиск по набранному — после паузы в наборе: не полный проход ленты на каждую букву. */
+export const TYPE_DEBOUNCE_MS = 100
+
+/** Изменения живого xterm (DOM-рендерер перерисовывает строки на каждом кадре) поиск не пересчитывают. */
+function ignored(m: MutationRecord): boolean {
+  const el = m.target.nodeType === 1 ? (m.target as Element) : m.target.parentElement
+  return !!el?.closest('.live-host, .xterm, .feed-park')
+}
 
 export interface FindBarHandle {
   /** Повторный ⌘F: фокус в поле, запрос выделен. */
@@ -43,7 +51,19 @@ export const FindBar = forwardRef<FindBarHandle, FindBarProps>(function FindBar(
   }, [])
 
   // Новый запрос или «Aa»: с первого видимого совпадения.
+  const typeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  /** Отложенный поиск по набранному (ещё не выполнен). */
+  const typed = useRef<(() => void) | null>(null)
+  useEffect(() => () => clearTimeout(typeTimer.current), [])
+  const runTyped = () => {
+    clearTimeout(typeTimer.current)
+    const f = typed.current
+    typed.current = null
+    f?.()
+  }
   const search = (q: string, cs: boolean) => {
+    clearTimeout(typeTimer.current)
+    typed.current = null
     const feed = feedRef.current
     const rs = feed ? findRanges(feed, q, cs) : []
     setRanges(rs)
@@ -63,7 +83,8 @@ export const FindBar = forwardRef<FindBarHandle, FindBarProps>(function FindBar(
       setIndex((i) => (rs.length === 0 ? -1 : Math.min(Math.max(i, 0), rs.length - 1)))
     }
     // Стрим ответа меняет ленту на каждом куске: пересчёт не чаще RECOUNT_MS.
-    const mo = new MutationObserver(() => {
+    const mo = new MutationObserver((ms) => {
+      if (ms.every(ignored)) return
       timer ??= setTimeout(recount, RECOUNT_MS)
     })
     mo.observe(feed, { childList: true, subtree: true, characterData: true })
@@ -85,6 +106,11 @@ export const FindBar = forwardRef<FindBarHandle, FindBarProps>(function FindBar(
 
   const step = useCallback(
     (d: 1 | -1) => {
+      // ↵ сразу после набора — сначала досчитать отложенный поиск (шаг — уже по нему, со следующего рендера).
+      if (typed.current) {
+        runTyped()
+        return
+      }
       const n = ranges.length
       if (n === 0) return
       scrollPending.current = true
@@ -122,8 +148,13 @@ export const FindBar = forwardRef<FindBarHandle, FindBarProps>(function FindBar(
         spellCheck={false}
         autoComplete="off"
         onChange={(e) => {
-          setQuery(e.target.value)
-          search(e.target.value, caseSensitive)
+          const q = e.target.value
+          setQuery(q)
+          // Пустой запрос — сразу (сбросить счётчик и подсветку), иначе — после паузы в наборе.
+          if (!q) return search(q, caseSensitive)
+          clearTimeout(typeTimer.current)
+          typed.current = () => search(q, caseSensitive)
+          typeTimer.current = setTimeout(runTyped, TYPE_DEBOUNCE_MS)
         }}
         onKeyDown={onKeyDown}
       />

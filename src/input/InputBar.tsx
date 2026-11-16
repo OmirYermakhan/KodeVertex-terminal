@@ -849,7 +849,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       setHs({ selected: 0 })
       return true
     }
-    const rows = historyRows()
+    // Те же строки, что показаны (hsRows): нечёткий поиск по истории — один раз на набранное, не на клавишу.
+    const rows = hsRowsRef.current
     const n = rows.length
     const i = Math.min(cur.selected, Math.max(0, n - 1))
     const plain = !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
@@ -1265,6 +1266,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const empty = doc.text === ''
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const hsRows = useMemo(() => (hs ? historyRows() : []), [hs !== null, doc.text, claudeMode])
+  const hsRowsRef = useRef(hsRows)
+  useLayoutEffect(() => {
+    hsRowsRef.current = hsRows
+  })
   // Подсказка пришла, когда строку уже начали набирать (или набирают сейчас), — не нужна.
   useEffect(() => {
     const sg = p.suggestion

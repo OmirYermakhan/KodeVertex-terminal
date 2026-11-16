@@ -69,6 +69,41 @@ export function parseOsc133(data: string): ParsedOsc133 | null {
 
 /** Монотонный счётчик id блоков: после очистки ленты (⌃L) id не повторяются. */
 let blockSeq = 0
+/**
+ * Метка запуска приложения в id блоков: восстановленная лента хранит sh-1…sh-N прошлого запуска,
+ * а счётчик снова начинается с нуля — без метки id (ключи React, [data-block-id]) совпали бы.
+ */
+const LAUNCH = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+const nextBlockId = () => `sh-${LAUNCH}-${++blockSeq}`
+
+/** Предел ленты: больше стольких shell-блоков — старейшие законченные уходят. */
+export const MAX_SHELL_BLOCKS = 1000
+/** Предел суммарного HTML замороженных блоков (символов, ~2 байта каждый): дальше — тоже вытеснение. */
+export const MAX_FEED_HTML = 16_000_000
+
+/**
+ * Вытеснение старейших законченных shell-блоков сверх пределов (числа и суммарного HTML):
+ * лента без виртуализации держит весь HTML в DOM и в памяти. Карточки Claude не трогаем.
+ */
+export function capFeed(items: FeedItem[], maxBlocks = MAX_SHELL_BLOCKS, maxHtml = MAX_FEED_HTML): FeedItem[] {
+  let count = 0
+  let size = 0
+  for (const it of items) {
+    if (it.kind !== 'shell') continue
+    count++
+    size += it.html?.length ?? 0
+  }
+  if (count <= maxBlocks && size <= maxHtml) return items
+  const drop = new Set<FeedItem>()
+  for (const it of items) {
+    if (count <= maxBlocks && size <= maxHtml) break
+    if (it.kind !== 'shell' || it.running) continue
+    drop.add(it)
+    count--
+    size -= it.html?.length ?? 0
+  }
+  return drop.size ? items.filter((it) => !drop.has(it)) : items
+}
 
 function runningIndex(items: FeedItem[]): number {
   for (let i = items.length - 1; i >= 0; i--) {
@@ -81,11 +116,11 @@ function runningIndex(items: FeedItem[]): number {
 export function applyShell(items: FeedItem[], ev: ShellEvent): FeedItem[] {
   if (ev.t === 'prompt') return items
   if (ev.t === 'stray') {
-    return [
+    return capFeed([
       ...items,
       {
         kind: 'shell',
-        id: `sh-${++blockSeq}`,
+        id: nextBlockId(),
         command: ev.command,
         cwd: ev.cwd,
         startedAt: ev.at,
@@ -95,7 +130,7 @@ export function applyShell(items: FeedItem[], ev: ShellEvent): FeedItem[] {
         lines: ev.lines,
         running: false,
       },
-    ]
+    ])
   }
   const idx = runningIndex(items)
   if (ev.t === 'end') {
@@ -110,7 +145,7 @@ export function applyShell(items: FeedItem[], ev: ShellEvent): FeedItem[] {
       html: ev.html,
       lines: ev.lines,
     }
-    return next
+    return capFeed(next)
   }
   const next = items.slice()
   if (idx >= 0) {
@@ -119,7 +154,7 @@ export function applyShell(items: FeedItem[], ev: ShellEvent): FeedItem[] {
   }
   next.push({
     kind: 'shell',
-    id: `sh-${++blockSeq}`,
+    id: nextBlockId(),
     command: ev.command,
     cwd: ev.cwd,
     startedAt: ev.at,
@@ -129,7 +164,7 @@ export function applyShell(items: FeedItem[], ev: ShellEvent): FeedItem[] {
     lines: 0,
     running: true,
   })
-  return next
+  return capFeed(next)
 }
 
 /** Управляющие символы, кроме \t и \n (включая ESC и C1): в ZLE они стали бы нажатиями клавиш. */

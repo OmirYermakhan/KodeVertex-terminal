@@ -7,6 +7,10 @@ export interface PtyHandle {
   write(s: string): void
   resize(c: number, r: number): void
   kill(): void
+  /** Приостановить чтение вывода PTY (xterm не успевает разбирать): программа упрётся в полный буфер. */
+  pause?(): void
+  /** Продолжить чтение после pause. */
+  resume?(): void
 }
 
 export interface SpawnOptions {
@@ -78,6 +82,13 @@ export async function spawnPty(o: SpawnOptions): Promise<PtyHandle> {
     },
     kill() {
       invoke('pty_kill', { id }).catch(report('pty_kill'))
+    },
+    // Сбой (например, старая сборка без этих команд) безвреден: вывод просто не придерживается.
+    pause() {
+      invoke('pty_pause', { id }).catch(report('pty_pause'))
+    },
+    resume() {
+      invoke('pty_resume', { id }).catch(report('pty_resume'))
     },
   }
   o.onSpawn?.(handle)

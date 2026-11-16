@@ -89,6 +89,18 @@ describe('spawnPty', () => {
     expect(invoke).toHaveBeenCalledWith('pty_resize', { id: 'sess-1', cols: 100, rows: 30 })
     expect(invoke).toHaveBeenCalledWith('pty_kill', { id: 'sess-1' })
   })
+
+  it('pause/resume — pty_pause/pty_resume; сбой команды не бросает', async () => {
+    const h = await spawnPty({ cols: 80, rows: 24, onData: () => {}, onExit: () => {} })
+    invoke.mockImplementation((cmd: string) => (cmd === 'pty_pause' ? Promise.reject(new Error('unknown command')) : Promise.resolve()))
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    h.pause!()
+    h.resume!()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(invoke).toHaveBeenCalledWith('pty_pause', { id: 'sess-1' })
+    expect(invoke).toHaveBeenCalledWith('pty_resume', { id: 'sess-1' })
+    err.mockRestore()
+  })
 })
 
 describe('spawnPty write ordering', () => {
