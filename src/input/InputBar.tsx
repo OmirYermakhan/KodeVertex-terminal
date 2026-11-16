@@ -42,8 +42,6 @@ export const CLAUDE_PLACEHOLDER = 'Вопрос Claude…'
 export const CLAUDE_HINT = '↵ отправить агенту · /exit выйти'
 /** Метка режима Claude слева в поле. */
 export const CLAUDE_MARK = '◆'
-export const ANSWER_PLACEHOLDER = 'Ваш ответ на вопрос…'
-export const ANSWER_HINT = '↵ ответить · esc к вопросу'
 export const EDIT_PLACEHOLDER = 'Исправленное сообщение…'
 export const EDIT_HINT = '↵ отправить исправленное · esc отменить'
 export const CONTINUATION_NOTE = 'Команда не закончена — допишите или ⌃C'
@@ -120,8 +118,6 @@ export interface InputBarProps {
   onListSessions?(): Promise<{ rows: SessionInfo[]; current: string | null }>
   /** Разговор выбран (↵): продолжить его. true — панель в режиме Claude. */
   onResume?(s: SessionInfo): boolean
-  /** «Свой ответ…» на вопрос агента: ↵ отдаёт текст сюда, esc — назад к вопросу. */
-  answer?: { onSubmit(text: string): void; onCancel(): void } | null
   /**
    * Очередь сообщений Claude: ↑ в пустой строке — последнее обратно (со значками; null — очередь пуста);
    * ↵ в пустой строке — следующее (после паузы); esc — убрать подсказку паузы (true — была).
@@ -382,7 +378,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.tokens.length])
 
-  const accepting = claudeMode && !p.answer
+  const accepting = claudeMode
   useEffect(() => {
     props.current.onAcceptsTokens?.(accepting)
   }, [accepting])
@@ -395,7 +391,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [])
 
   /** Строка принимает значки: режим Claude и не ответ на вопрос агента. */
-  const acceptsTokens = () => claudeRef.current && !props.current.answer
+  const acceptsTokens = () => claudeRef.current
 
   /** Карточка выбора разговора: открыть и прочитать список (пока читается — «Загрузка…»). */
   const openResume = useCallback(() => {
@@ -433,9 +429,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   const submit = useCallback((text: string, ask: boolean) => {
     const q = props.current
     const tokens = docRef.current.tokens
-    if (q.answer) {
-      q.answer.onSubmit(readable(docOf(text, tokens)).trim())
-    } else if (q.edit) {
+    if (q.edit) {
       const d = docOf(text, tokens)
       if (sendBlocked(d.tokens)) {
         showNote(UNSUPPORTED_NOTE)
@@ -636,7 +630,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     claudeMode: () => claudeRef.current,
     acceptsTokens: () => acceptsTokens() && !props.current.disabled,
     insertTokens: (toks, opts) => {
-      if (props.current.disabled || props.current.answer) return false
+      if (props.current.disabled) return false
       if (!claudeRef.current) {
         if (!opts?.claude) return false
         completionRef.current.close()
@@ -648,7 +642,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       return true
     },
     claudeOn: () => {
-      if (props.current.disabled || props.current.answer) return false
+      if (props.current.disabled) return false
       if (!claudeRef.current) {
         completionRef.current.close()
         hintsRef.current.close()
@@ -678,7 +672,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     },
     openHistorySearch: () => {
       const q = props.current
-      if (q.disabled || q.answer || q.edit || q.continuation || pickerRef.current || resumeRef.current) return
+      if (q.disabled || q.edit || q.continuation || pickerRef.current || resumeRef.current) return
       completionRef.current.close()
       hintsRef.current.close()
       setAt(null)
@@ -687,7 +681,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     },
     toggleClaude: () => {
       const q = props.current
-      if (q.disabled || q.answer || q.edit) return
+      if (q.disabled || q.edit) return
       completionRef.current.close()
       hintsRef.current.reset()
       setAt(null)
@@ -808,7 +802,6 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     // Поиск ⌃R открыт: набранное — его запрос, другие выборки не открываются.
     if (hsRef.current) return
     const q = props.current
-    if (q.answer) return setAt(null)
     if (q.hints && !q.disabled && !q.continuation) hintsRef.current.update(v, cursor)
     const allowed = claudeRef.current ? (q.atFiles ?? q.completions) : q.completions
     updateAt(allowed && !q.disabled ? v : null, cursor)
@@ -842,7 +835,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     const cur = hsRef.current
     if (!cur) {
       // Правка сообщения и продолжение команды (PS2): ↵ из поиска ушёл бы не туда.
-      if (!ctrlR || q.answer || q.edit || q.continuation || pickerRef.current || resumeRef.current) return false
+      if (!ctrlR || q.edit || q.continuation || pickerRef.current || resumeRef.current) return false
       completionRef.current.close()
       hintsRef.current.close()
       setAt(null)
@@ -1008,7 +1001,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       (Object.keys(mods) as (keyof typeof mods)[]).every((k) => mods[k] === (k === m))
 
     // E в пустой строке при выбранном (⌘↑) сообщении «Вы» — изменить его.
-    if (e.code === 'KeyE' && plain && v === '' && !props.current.answer && !props.current.edit && props.current.onEditSelected?.()) {
+    if (e.code === 'KeyE' && plain && v === '' && !props.current.edit && props.current.onEditSelected?.()) {
       e.preventDefault()
       return
     }
@@ -1066,25 +1059,19 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       return
     }
     // Правка сообщения: esc — отмена (строка вернётся к черновику), набранное правкой не уходит.
-    if (e.key === 'Escape' && plain && props.current.edit && !props.current.answer) {
+    if (e.key === 'Escape' && plain && props.current.edit) {
       e.preventDefault()
       props.current.edit.onCancel()
       return
     }
     // Идёт ход Claude: esc прерывает его (пустая строка — последнее сообщение на правку).
-    if (e.key === 'Escape' && plain && claudeRef.current && !props.current.answer && props.current.onEscInterrupt?.(v === '')) {
+    if (e.key === 'Escape' && plain && claudeRef.current && props.current.onEscInterrupt?.(v === '')) {
       e.preventDefault()
       return
     }
     // Пауза очереди: esc сначала убирает подсказку (режим Claude остаётся).
-    if (e.key === 'Escape' && plain && !props.current.answer && v === '' && props.current.queue?.dismissHint()) {
+    if (e.key === 'Escape' && plain && v === '' && props.current.queue?.dismissHint()) {
       e.preventDefault()
-      return
-    }
-    // Свой ответ на вопрос агента: esc — назад к вопросу (набранное остаётся).
-    if (e.key === 'Escape' && props.current.answer && plain) {
-      e.preventDefault()
-      props.current.answer.onCancel()
       return
     }
     // esc из режима Claude не выводит (выход — /exit или exit): только прерывает и отменяет.
@@ -1108,14 +1095,14 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       }
       if (only(null)) {
         if (v.trim()) submit(v, false)
-        else if (v === '' && !props.current.answer && !props.current.edit) props.current.queue?.sendNext()
+        else if (v === '' && !props.current.edit) props.current.queue?.sendNext()
       }
       return
     }
     if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && only(null)) {
       const up = e.key === 'ArrowUp'
       // ↑ в пустой строке — последнее сообщение очереди Claude обратно в строку (для правки).
-      if (up && v === '' && !props.current.answer && !props.current.edit) {
+      if (up && v === '' && !props.current.edit) {
         const r = props.current.queue?.recall() ?? null
         if (r !== null) {
           e.preventDefault()
@@ -1210,7 +1197,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   // Выбор `@` (режим Claude): файлы из подсказок путей + блоки и сообщения ленты.
   const cs = completion.state
   const atFilesList = at && cs.open && cs.ctx?.command === AT_COMMAND ? cs.items : null
-  const atOn = claudeMode && !!at && pathsOn && !p.disabled && !p.answer
+  const atOn = claudeMode && !!at && pathsOn && !p.disabled
   const rows = useMemo<AtRow[]>(
     () => (atOn && at ? atRows(at.ctx.namePart, at.ctx.dirPart, atFilesList ?? [], props.current.atFeed?.() ?? null) : []),
     [atOn, at, atFilesList],
@@ -1274,20 +1261,20 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
   }, [p.suggestion, doc])
   // Подсказка-призрак из истории: только оболочка, курсор в конце, без открытых выборок и IME.
   const ghost =
-    !claudeMode && focused && caretEnd && !composing && !p.disabled && !p.answer && !p.edit && !p.continuation &&
+    !claudeMode && focused && caretEnd && !composing && !p.disabled && !p.edit && !p.continuation &&
     !picker && !resume && !hs && !(open && pathsOn) && !(hints.state.open && p.hints) && !atShown &&
     doc.tokens.length === 0 && doc.text !== ghostHidden
       ? ghostSuggestion(getHistory(), doc.text)
       : null
   // Подсказка следующего сообщения: пустое поле режима Claude, без открытых выборок и IME.
   const suggShown =
-    p.suggestion && claudeMode && empty && doc.tokens.length === 0 && !composing && !p.disabled && !p.answer && !p.edit &&
+    p.suggestion && claudeMode && empty && doc.tokens.length === 0 && !composing && !p.disabled && !p.edit &&
     !picker && !resume && !hs
       ? p.suggestion
       : null
   /** Первая буква подсказки (по кодовым точкам, без разрыва суррогатной пары) — под курсором. */
   const suggHead = suggShown ? (Array.from(suggShown.text)[0] ?? '') : ''
-  const placeholder = p.answer ? ANSWER_PLACEHOLDER : p.edit ? EDIT_PLACEHOLDER : claudeMode ? CLAUDE_PLACEHOLDER : PLACEHOLDER
+  const placeholder = p.edit ? EDIT_PLACEHOLDER : claudeMode ? CLAUDE_PLACEHOLDER : PLACEHOLDER
   return (
     <div className="input-wrap" ref={wrapRef}>
       {atShown && (
@@ -1475,7 +1462,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           )}
           <span className="in-measure" ref={measureRef} aria-hidden="true" />
         </div>
-        <span className="in-hint">{p.answer ? ANSWER_HINT : nearTok && claudeMode ? PREVIEW_HINT : p.edit ? EDIT_HINT : claudeMode ? CLAUDE_HINT : ASK_HINT}</span>
+        <span className="in-hint">{nearTok && claudeMode ? PREVIEW_HINT : p.edit ? EDIT_HINT : claudeMode ? CLAUDE_HINT : ASK_HINT}</span>
       </div>
     </div>
   )

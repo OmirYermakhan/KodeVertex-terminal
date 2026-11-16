@@ -582,15 +582,12 @@ export function TerminalPane(p: TerminalPaneProps) {
     questionRef.current = question
   })
   const promptRef = useRef<HTMLDivElement>(null)
-  /** «Свой ответ…»: на какой вопрос строка ввода сейчас пишет ответ. */
-  const [custom, setCustom] = useState<{ requestId: string; index: number } | null>(null)
   const focusPrompt = useCallback(() => promptRef.current?.focus(), [])
   // Новый запрос забирает фокус, если панель в фокусе, в строке ничего не набрано и пользователь
   // не занят другим (настройки, панель агентов, выбор модели). Запрос закрыт — ввод в строку.
   const promptId = prompt?.requestId ?? null
   useEffect(() => {
     if (!promptId) {
-      setCustom(null)
       const active = document.activeElement
       if (!active || active === document.body || (paneRef.current?.contains(active) && !inputRef.current?.hasFocus())) {
         if (!active?.closest?.('.agents, .queue, .find')) focusActive()
@@ -632,31 +629,7 @@ export function TerminalPane(p: TerminalPaneProps) {
     const q = questionRef.current
     if (q) void submitQuestion(p.paneId, q.requestId)
   }, [p.paneId])
-  const onCustomQ = useCallback((index: number) => {
-    const q = questionRef.current
-    if (!q) return
-    setCustom({ requestId: q.requestId, index })
-    inputRef.current?.focus()
-  }, [])
   const onLeaveQ = useCallback(() => inputRef.current?.focus(), [])
-  const answerMode = useMemo(
-    () =>
-      custom
-        ? {
-            onSubmit: (text: string) => {
-              setCustom(null)
-              if (text) void answerQuestion(p.paneId, custom.requestId, custom.index, text)
-              // Следующий шаг (или следующий вопрос) — снова в блоке вопроса.
-              setTimeout(() => promptRef.current?.focus())
-            },
-            onCancel: () => {
-              setCustom(null)
-              promptRef.current?.focus()
-            },
-          }
-        : null,
-    [custom, p.paneId],
-  )
 
   // host перенесён в слот (блок/оверлей): размер, перерисовка, фокус.
   const onAttach = useCallback(() => {
@@ -1252,7 +1225,6 @@ export function TerminalPane(p: TerminalPaneProps) {
             onAnswer={onAnswerQ}
             onStep={onStepQ}
             onSubmit={onSubmitQ}
-            onCustom={onCustomQ}
             onLeave={onLeaveQ}
           />
           </ErrorBoundary>
@@ -1291,7 +1263,6 @@ export function TerminalPane(p: TerminalPaneProps) {
           ref={inputRef}
           initialClaudeMode={restored?.claudeMode}
           queue={queueInput}
-          answer={answerMode}
           edit={editMode}
           onEditLast={onEditLast}
           onEditSelected={onEditSelected}

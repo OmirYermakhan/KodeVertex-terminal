@@ -1,7 +1,7 @@
 // Вопрос агента (AskUserQuestion) над строкой ввода: варианты с описанием и меткой «рекомендуется»,
-// «Свой ответ…» (текст — в строке ввода). Несколько вопросов — вкладки «1 из 3» (←/→) и шаг
+// «Свой ответ…» (поле ввода прямо в строке; любая буква — сразу туда). Несколько вопросов — вкладки «1 из 3» (←/→) и шаг
 // «Отправить ответы». Клавиши: ↑↓/1–9 выбор, пробел — отметить (несколько ответов), ↵, esc — к вводу.
-import { forwardRef, useEffect, useState } from 'react'
+import { forwardRef, useEffect, useRef, useState } from 'react'
 import { AgentPrompt } from './AgentPrompt'
 import { agentSignature } from './cards/AssistantCard'
 import { displayLabel, isRecommended, questionKey, type QuestionCursor } from './questions'
@@ -19,8 +19,6 @@ export interface QuestionPromptProps {
   onAnswer(index: number, text: string): void
   onStep(step: number): void
   onSubmit(): void
-  /** «Свой ответ…» для вопроса index: строка ввода становится полем ответа. */
-  onCustom(index: number): void
   onLeave(): void
 }
 
@@ -42,14 +40,59 @@ export const QuestionPrompt = forwardRef<HTMLDivElement, QuestionPromptProps>(fu
   const sendStep = steps > 1 && item.step === steps - 1
   const q = item.questions[Math.min(item.step, total - 1)]
   const [cur, setCur] = useState<QuestionCursor>({ cursor: 0, checked: [] })
+  /** Набранный «свой ответ» по вопросам (не теряется при переходе между вкладками). */
+  const [own, setOwn] = useState<Record<number, string>>({})
+  const ownRef = useRef<HTMLInputElement>(null)
+  const ownRow = !sendStep && cur.cursor === q.options.length
+  const ownText = own[item.step] ?? ''
+  const setOwnText = (t: string) => setOwn((o) => ({ ...o, [item.step]: t }))
+  useEffect(() => setOwn({}), [item.requestId])
   // Новая вкладка: курсор — на прежний ответ (если был), на шаге отправки — на «Отправить ответы».
+  // Прежний ответ не из вариантов — это свой ответ: курсор на поле, текст в нём.
   useEffect(() => {
     if (sendStep) return setCur({ cursor: total, checked: [] })
-    const prev = (item.answers[item.step] ?? '').split(', ')
+    const answer = item.answers[item.step] ?? ''
+    const prev = answer.split(', ')
     const checked = q.options.map((o, i) => (prev.includes(o.label) ? i : -1)).filter((i) => i >= 0)
+    if (answer && checked.length === 0) {
+      setOwn((o) => (o[item.step] ? o : { ...o, [item.step]: answer }))
+      return setCur({ cursor: q.options.length, checked: [] })
+    }
     setCur({ cursor: checked[0] ?? 0, checked: q.multiSelect ? checked : [] })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.requestId, item.step])
+  // Курсор на «Свой ответ…» — фокус в поле (если блок вопроса в фокусе); ушёл — фокус обратно на блок.
+  useEffect(() => {
+    const input = ownRef.current
+    const box = input?.closest<HTMLElement>('.aprompt')
+    if (ownRow) {
+      if (input && box?.contains(document.activeElement)) input.focus()
+    } else if (input && document.activeElement === input) box?.focus()
+  }, [ownRow, item.step])
+
+  const submitOwn = () => {
+    const text = (ownRef.current?.value ?? ownText).trim()
+    if (text) p.onAnswer(item.step, text)
+  }
+  const onOwnKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.metaKey || e.ctrlKey || e.altKey || e.nativeEvent.isComposing) return
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      e.stopPropagation()
+      submitOwn()
+    } else if (
+      e.key === 'ArrowUp' ||
+      e.key === 'ArrowDown' ||
+      e.key === 'Escape' ||
+      ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.currentTarget.value)
+    ) {
+      // ↑↓ — к вариантам, esc — к вводу, ←/→ в пустом поле — вкладки: обработает блок вопроса.
+      return
+    } else {
+      // Остальное (цифры, пробел, ←/→) — набор текста, не клавиши блока.
+      e.stopPropagation()
+    }
+  }
 
   const firstMissing = item.questions.findIndex((_, i) => !(item.answers[i] ?? ''))
 
@@ -84,12 +127,23 @@ export const QuestionPrompt = forwardRef<HTMLDivElement, QuestionPromptProps>(fu
       return
     }
     const r = questionKey(cur, q, e.key)
-    if (!r.handled) return
+    if (!r.handled) {
+      // Буква на любой строке — начало своего ответа: курсор на поле, буква в нём.
+      if (e.key.length === 1 && e.target !== ownRef.current) {
+        handled()
+        setOwnText(ownText + e.key)
+        setCur({ ...cur, cursor: q.options.length })
+        ownRef.current?.focus()
+      }
+      return
+    }
     handled()
     setCur(r.state)
     if (r.action?.kind === 'answer') p.onAnswer(item.step, r.action.text)
-    else if (r.action?.kind === 'custom') p.onCustom(item.step)
-    else if (r.action?.kind === 'leave') p.onLeave()
+    else if (r.action?.kind === 'custom') {
+      if (ownText.trim()) submitOwn()
+      else ownRef.current?.focus()
+    } else if (r.action?.kind === 'leave') p.onLeave()
   }
 
   const pick = (i: number) => {
@@ -98,7 +152,7 @@ export const QuestionPrompt = forwardRef<HTMLDivElement, QuestionPromptProps>(fu
     const r = questionKey({ ...cur, cursor: i }, q, q.multiSelect && i < q.options.length ? ' ' : 'Enter')
     if (q.multiSelect && i < q.options.length) return setCur({ ...r.state, cursor: i })
     if (r.action?.kind === 'answer') p.onAnswer(item.step, r.action.text)
-    else if (r.action?.kind === 'custom') p.onCustom(item.step)
+    else if (r.action?.kind === 'custom') ownRef.current?.focus()
   }
   const row = (i: number, sel: boolean, children: React.ReactNode, extra = '') => (
     <div
@@ -107,6 +161,8 @@ export const QuestionPrompt = forwardRef<HTMLDivElement, QuestionPromptProps>(fu
       aria-selected={sel}
       className={'q-row' + (sel ? ' sel' : '') + extra}
       onMouseDown={(e) => {
+        // Клик в само поле — ставит каретку как обычно.
+        if (e.target === ownRef.current) return setCur({ ...cur, cursor: i })
         e.preventDefault()
         pick(i)
       }}
@@ -201,8 +257,18 @@ export const QuestionPrompt = forwardRef<HTMLDivElement, QuestionPromptProps>(fu
               cur.cursor === q.options.length,
               <>
                 <span className="q-n">{q.options.length + 1}.</span>
-                <span className="q-l q-own">{OWN_ANSWER}</span>
-                <span className="q-d" />
+                <input
+                  ref={ownRef}
+                  className="q-l q-own"
+                  value={ownText}
+                  placeholder={OWN_ANSWER}
+                  aria-label={OWN_ANSWER}
+                  spellCheck={false}
+                  onChange={(e) => setOwnText(e.target.value)}
+                  onFocus={() => !ownRow && setCur({ ...cur, cursor: q.options.length })}
+                  onKeyDown={onOwnKeyDown}
+                />
+
               </>,
             )}
           </div>

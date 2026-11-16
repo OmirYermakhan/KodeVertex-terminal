@@ -558,6 +558,10 @@ body.tw-resizing, body.tw-resizing * { cursor: col-resize !important; user-selec
 .q-box { color: var(--accText); font-family: var(--font-code); }
 .q-rec { margin-left: 8px; padding: 0 6px; border: 1px solid color-mix(in srgb, var(--add) 50%, transparent); border-radius: 4px; color: var(--add); font-family: var(--font-code); font-size: 10px; letter-spacing: 0.04em; vertical-align: 1px; }
 .q-l.q-own { color: var(--muted); font-style: italic; }
+/* «Свой ответ…» — поле прямо в строке, на ширину подписи и описания. */
+input.q-own { grid-column: 2 / -1; min-width: 0; width: 100%; margin: 0; padding: 0; border: 0; outline: none; background: transparent; font-family: inherit; line-height: inherit; }
+input.q-own:not(:placeholder-shown) { color: var(--strong); font-style: normal; }
+input.q-own::placeholder { color: var(--muted); font-style: italic; opacity: 1; }
 .q-l.q-send { color: var(--accText); font-weight: 600; }
 .q-d { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 12.5px; }
 .q-d.q-given { color: var(--text); }

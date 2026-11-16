@@ -556,21 +556,19 @@ describe('TerminalPane', () => {
         // esc — к вводу, ⌘↓ — обратно к вопросу.
         fireEvent.keyDown(prompt, { key: 'Escape' })
         expect(document.activeElement).toBe(textarea())
-        // «Свой ответ…» — ответ пишется в строке ввода.
+        // «Свой ответ…» — поле прямо в строке вопроса.
         prompt.focus()
         fireEvent.keyDown(prompt, { key: '3' })
-        fireEvent.keyDown(prompt, { key: 'Enter' })
-        expect(document.activeElement).toBe(textarea())
-        expect(textarea().getAttribute('aria-label')).toBe('Ваш ответ на вопрос…')
-        type('MySQL')
-        keyIn('Enter')
+        const own = prompt.querySelector('input.q-own') as HTMLInputElement
+        expect(document.activeElement).toBe(own)
+        fireEvent.change(own, { target: { value: 'MySQL' } })
+        fireEvent.keyDown(own, { key: 'Enter' })
         await act(async () => await flush())
         expect(calls().filter((c) => c[0] === 'claude_respond').map((c) => c[1])).toEqual([
           { id: 'c1', requestId: 'rq', response: { behavior: 'allow', updatedInput: { ...input, answers: { 'Какую базу?': 'MySQL' } } } },
         ])
         expect(document.querySelector('.aprompt')).toBeNull()
         expect(document.querySelector('.feed .qcard .q-ans')?.textContent).toBe('✓ Ответ: MySQL')
-        expect(textarea().getAttribute('aria-label')).not.toBe('Ваш ответ на вопрос…')
       })
 
       it('очередь опустела, пока фокус в ней (⌘↓), — фокус в строку ввода сразу, пока панель ещё уходит', async () => {

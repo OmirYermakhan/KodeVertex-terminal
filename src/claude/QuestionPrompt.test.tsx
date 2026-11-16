@@ -7,7 +7,7 @@ import { questionItem } from './fixtures/questionItem'
 const agent = { id: 'main', name: 'Главный', model: 'claude-opus-5-5' } as Agent
 
 function setup(item = questionItem()) {
-  const h = { onAnswer: vi.fn(), onStep: vi.fn(), onSubmit: vi.fn(), onCustom: vi.fn(), onLeave: vi.fn() }
+  const h = { onAnswer: vi.fn(), onStep: vi.fn(), onSubmit: vi.fn(), onLeave: vi.fn() }
   const r = render(<QuestionPrompt item={item} agent={agent} {...h} />)
   const box = r.container.querySelector('.aprompt') as HTMLElement
   return { ...r, h, box, key: (k: string) => fireEvent.keyDown(box, { key: k }) }
@@ -21,12 +21,13 @@ describe('QuestionPrompt', () => {
     expect([...box.querySelectorAll('.q-tab')].map((t) => t.textContent)).toEqual(['1 Цвет', '2 Опции', SEND_ANSWERS])
     expect(box.querySelector('.q-text')!.textContent).toBe('Какой цвет?')
     const rows = screen.getAllByRole('option')
-    expect(rows.map((r) => r.querySelector('.q-l')!.textContent)).toEqual([`Red${RECOMMENDED_TAG}`, 'Blue', OWN_ANSWER])
+    expect(rows.slice(0, 2).map((r) => r.querySelector('.q-l')!.textContent)).toEqual([`Red${RECOMMENDED_TAG}`, 'Blue'])
+    expect((rows[2].querySelector('input.q-own') as HTMLInputElement).placeholder).toBe(OWN_ANSWER)
     expect(rows[0].querySelector('.q-d')!.textContent).toBe('Красный')
     expect(box.querySelector('.ap-keys')!.textContent).toBe(promptKeys(true, false, false))
   })
 
-  it('клавиши: 2 ↵ — ответ на вопрос 1; →/← — вкладки; 3 ↵ — свой ответ; esc', () => {
+  it('клавиши: 2 ↵ — ответ на вопрос 1; →/← — вкладки; esc', () => {
     const { key, h } = setup()
     key('2')
     key('Enter')
@@ -35,11 +36,38 @@ describe('QuestionPrompt', () => {
     expect(h.onStep).toHaveBeenCalledWith(1)
     key('ArrowLeft')
     expect(h.onStep).toHaveBeenLastCalledWith(0)
-    key('3')
-    key('Enter')
-    expect(h.onCustom).toHaveBeenCalledWith(0)
     key('Escape')
     expect(h.onLeave).toHaveBeenCalled()
+  })
+
+  it('свой ответ: поле в строке «Свой ответ…»; буква на любой строке — туда; цифры и пробел — текст; ↵ — ответ', () => {
+    const { key, h, box } = setup()
+    box.focus()
+    const input = box.querySelector('input.q-own') as HTMLInputElement
+    key('3')
+    expect(document.activeElement).toBe(input)
+    key('ArrowUp')
+    expect(document.activeElement).toBe(box)
+    key('M')
+    expect(document.activeElement).toBe(input)
+    expect(input.value).toBe('M')
+    fireEvent.change(input, { target: { value: 'MySQL 8' } })
+    fireEvent.keyDown(input, { key: '1' })
+    fireEvent.keyDown(input, { key: ' ' })
+    expect(h.onAnswer).not.toHaveBeenCalled()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(h.onAnswer).toHaveBeenCalledWith(0, 'MySQL 8')
+  })
+
+  it('свой ответ: пустое поле ↵ не отправляет; прежний свой ответ — снова в поле', () => {
+    const empty = setup()
+    const input = empty.box.querySelector('input.q-own') as HTMLInputElement
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(empty.h.onAnswer).not.toHaveBeenCalled()
+    empty.unmount()
+    const again = setup(questionItem({ answers: ['Зелёный', ''] }))
+    expect((again.box.querySelector('input.q-own') as HTMLInputElement).value).toBe('Зелёный')
+    expect(again.box.querySelector('.q-row.sel input.q-own')).not.toBeNull()
   })
 
   it('несколько ответов: пробел отмечает, ↵ — через запятую', () => {

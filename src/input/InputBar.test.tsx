@@ -567,30 +567,6 @@ describe('InputBar: /resume', () => {
   })
 })
 
-describe('InputBar: свой ответ на вопрос агента', () => {
-  beforeEach(() => {
-    invoke.mockReset()
-    invoke.mockResolvedValue([])
-    resetHistory()
-  })
-
-  it('плейсхолдер и подсказка; ↵ отдаёт текст в answer, а не в оболочку; esc — назад к вопросу', async () => {
-    const { ANSWER_PLACEHOLDER, ANSWER_HINT } = await import('./InputBar')
-    const answer = { onSubmit: vi.fn(), onCancel: vi.fn() }
-    const s = setup({ answer })
-    expect(s.container.querySelector('.ph')!.textContent).toBe(ANSWER_PLACEHOLDER)
-    expect(ANSWER_PLACEHOLDER).toBe('Ваш ответ на вопрос…')
-    expect(s.container.querySelector('.in-hint')!.textContent).toBe(ANSWER_HINT)
-    s.set('  синий ')
-    s.key('Enter')
-    expect(answer.onSubmit).toHaveBeenCalledWith('синий')
-    expect(s.p.onRun).not.toHaveBeenCalled()
-    expect(s.ta.value).toBe('')
-    s.key('Escape')
-    expect(answer.onCancel).toHaveBeenCalled()
-  })
-})
-
 describe('InputBar: очередь сообщений Claude', () => {
   beforeEach(() => {
     invoke.mockReset()
@@ -1344,12 +1320,10 @@ describe('подсказка следующего сообщения (режим
     expect(mount({ initialClaudeMode: false }).shown()).toBeNull()
   })
 
-  it('при ответе на вопрос и при правке сообщения не показывается', () => {
+  it('при правке сообщения не показывается', () => {
     const { shown, rerender } = mount()
     expect(shown()).not.toBeNull()
-    rerender({ answer: { onSubmit: vi.fn(), onCancel: vi.fn() } })
-    expect(shown()).toBeNull()
-    rerender({ answer: null, edit: { onSubmit: vi.fn(), onCancel: vi.fn() } })
+    rerender({ edit: { onSubmit: vi.fn(), onCancel: vi.fn() } })
     expect(shown()).toBeNull()
     rerender({ edit: null, suggestion: null })
     expect(shown()).toBeNull()
