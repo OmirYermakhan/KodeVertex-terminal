@@ -1,5 +1,5 @@
 // Вопрос агента (AskUserQuestion) над строкой ввода: варианты с описанием и меткой «рекомендуется»,
-// «Свой ответ…» (поле ввода прямо в строке; любая буква — сразу туда). Несколько вопросов — вкладки «1 из 3» (←/→) и шаг
+// «Свой ответ…» (поле ввода прямо в строке; любая буква после ARM_MS — сразу туда). Несколько вопросов — вкладки «1 из 3» (←/→) и шаг
 // «Отправить ответы». Клавиши: ↑↓/1–9 выбор, пробел — отметить (несколько ответов), ↵, esc — к вводу.
 import { forwardRef, useEffect, useRef, useState } from 'react'
 import { AgentPrompt } from './AgentPrompt'
@@ -50,7 +50,8 @@ export const QuestionPrompt = forwardRef<HTMLDivElement, QuestionPromptProps>(fu
   useEffect(() => setOwn({}), [item.requestId])
   // Как у разрешения: первые ARM_MS после появления вопроса ↵ и щелчок по варианту не отвечают —
   // ↵, нажатый ради строки ввода в момент, когда вопрос забрал фокус, не должен выбрать вариант.
-  // Блок не пересоздаётся на каждый вопрос — отсчёт заново по requestId. Набор своего ответа не ждёт.
+  // Блок не пересоздаётся на каждый вопрос — отсчёт заново по requestId. Своего ответа это тоже
+  // касается: буквы, набранные ради строки ввода, пока вопрос забирал фокус, — в строку, а не в ответ.
   const [armed, setArmed] = useState(false)
   useEffect(() => {
     setArmed(false)
@@ -71,16 +72,19 @@ export const QuestionPrompt = forwardRef<HTMLDivElement, QuestionPromptProps>(fu
     setCur({ cursor: checked[0] ?? 0, checked: q.multiSelect ? checked : [] })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.requestId, item.step])
-  // Курсор на «Свой ответ…» — фокус в поле (если блок вопроса в фокусе); ушёл — фокус обратно на блок.
+  // Курсор ушёл с «Свой ответ…» — фокус обратно на блок. В поле фокус переходит только по действию
+  // пользователя (↑↓/цифра на эту строку, буква, щелчок), не сам по себе (прежний свой ответ на вкладке).
   useEffect(() => {
     const input = ownRef.current
-    const box = input?.closest<HTMLElement>('.aprompt')
-    if (ownRow) {
-      if (input && box?.contains(document.activeElement)) input.focus()
-    } else if (input && document.activeElement === input) box?.focus()
+    if (!ownRow && input && document.activeElement === input) input.closest<HTMLElement>('.aprompt')?.focus()
   }, [ownRow, item.step])
+  const focusOwn = () => {
+    const input = ownRef.current
+    if (input && input.closest('.aprompt')?.contains(document.activeElement)) input.focus()
+  }
 
   const submitOwn = () => {
+    if (!armed) return
     const text = (ownRef.current?.value ?? ownText).trim()
     if (text) p.onAnswer(item.step, text)
   }
@@ -90,6 +94,10 @@ export const QuestionPrompt = forwardRef<HTMLDivElement, QuestionPromptProps>(fu
       e.preventDefault()
       e.stopPropagation()
       submitOwn()
+    } else if (!armed && e.key.length === 1) {
+      // Поле получило фокус в первые ARM_MS (щелчок) — набор ещё не ответ: буква уходит в строку ввода.
+      e.stopPropagation()
+      p.onLeave()
     } else if (
       e.key === 'ArrowUp' ||
       e.key === 'ArrowDown' ||
@@ -142,8 +150,15 @@ export const QuestionPrompt = forwardRef<HTMLDivElement, QuestionPromptProps>(fu
     }
     const r = questionKey(cur, q, e.key)
     if (!r.handled) {
-      // Буква на любой строке — начало своего ответа: курсор на поле, буква в нём.
+      // Буква на любой строке — начало своего ответа: курсор на поле, буква в нём. В первые ARM_MS
+      // это набор для строки ввода (вопрос только что забрал фокус): фокус — обратно в строку, без
+      // preventDefault — буква попадёт туда же.
       if (e.key.length === 1 && e.target !== ownRef.current) {
+        if (!armed) {
+          e.stopPropagation()
+          p.onLeave()
+          return
+        }
         handled()
         setOwnText(ownText + e.key)
         setCur({ ...cur, cursor: q.options.length })
@@ -153,6 +168,8 @@ export const QuestionPrompt = forwardRef<HTMLDivElement, QuestionPromptProps>(fu
     }
     handled()
     setCur(r.state)
+    // ↑↓ или цифра на строку «Свой ответ…» — фокус в поле.
+    if (!r.action && r.state.cursor === q.options.length) focusOwn()
     if (r.action?.kind === 'answer') p.onAnswer(item.step, r.action.text)
     else if (r.action?.kind === 'custom') {
       if (ownText.trim()) submitOwn()

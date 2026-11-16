@@ -23,7 +23,7 @@ import { notifyCommandEnd } from '../notify/notify'
 import { useProject } from '../project/store'
 import { applyShell, claudeIndex, claudeItemId, commandBytes, failurePrompt, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
-import { editClaude, dismissQueueHint, dismissSuggestion, feedCleared, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, listSessions, resumeClaude, stopClaude, useClaudeSessions, type ModelChoice } from '../claude/sessionStore'
+import { editClaude, dismissQueueHint, dismissSuggestion, feedCleared, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, listSessions, resumeClaude, stopClaude, useClaudeSessions, type ModelChoice, answerTrust, useClaudeTrust } from '../claude/sessionStore'
 import type { SessionInfo } from '../claude/resume'
 import { aliasOf } from '../claude/models'
 import { canEdit, editInfo, lastEditable, pendingPrompt, thinkingSince, type PermissionDecision } from '../claude/reducer'
@@ -31,6 +31,8 @@ import { EditChip } from '../claude/EditChip'
 import { docOf } from '../attach/doc'
 import { PermissionPrompt } from '../claude/PermissionPrompt'
 import { QuestionPrompt } from '../claude/QuestionPrompt'
+import { LinkPrompt, TrustPrompt } from '../claude/ConfirmPrompt'
+import { answerLink, askOpenLink, useLinkAsk } from '../feed/linkAsk'
 import { dropPaneFeed, restoredPane, scheduleSave, setPaneFeed } from '../persist/session'
 import { InputBar, type InputBarHandle, type InputSnapshot } from '../input/InputBar'
 import { QueuePanel, type QueuePanelHandle } from '../claude/QueuePanel'
@@ -116,6 +118,27 @@ function freeze(term: Terminal, ser: SerializeAddon, below = Infinity): { html: 
   return { html: cleanSerializedHtml(raw), lines }
 }
 
+/**
+ * Вывод после строки RAW_NOTE (её xterm мог перенести на несколько строк) — HTML блока; без строки
+ * RAW_NOTE — весь буфер.
+ */
+function freezeAfterNote(term: Terminal, ser: SerializeAddon): { html: string; lines: number } {
+  const buf = term.buffer.active
+  const text = (i: number) => buf.getLine(i)?.translateToString(true) ?? ''
+  let from = 0
+  for (let i = 0; i < buf.length; i++) {
+    if (!text(i).includes(RAW_NOTE_HEAD)) continue
+    let j = i
+    while (j < buf.length - 1 && !text(j).includes(']')) j++
+    from = j + 1
+    break
+  }
+  const end = contentLines(term)
+  if (end <= from) return { html: '', lines: 0 }
+  const raw = ser.serializeAsHTML({ includeGlobalBackground: false, range: { startLine: from, endLine: end - 1, startCol: 0 } })
+  return { html: cleanSerializedHtml(raw), lines: end - from }
+}
+
 /** Сколько строк экрана занято, пока команда идёт: по ним — высота живого блока. */
 function usedRows(term: Terminal): number {
   const buf = term.buffer.active
@@ -146,21 +169,23 @@ export const WRITE_HIGH = 1 << 20
 export const WRITE_LOW = 256 << 10
 
 /**
- * Команда заменяет оболочку (`exec zsh`, `exec bash -l`): новая оболочка без нашей интеграции
- * (метка сессии не наследуется — ZDOTDIR в окружение не кладём), маркеров больше не будет.
- * `exec` без команды (только перенаправления: `exec >log 2>&1`) оболочку не заменяет.
+ * Команда заменяет оболочку (`exec zsh`, `exec bash -l`, `FOO=1 exec zsh`): новая оболочка без нашей
+ * интеграции (метка сессии не наследуется — ZDOTDIR в окружение не кладём), маркеров больше не будет.
+ * `exec` без команды (только перенаправления: `exec >log 2>&1`, `exec {fd}>file`) оболочку не заменяет.
  */
 export function replacesShell(command: string): boolean {
-  const m = /^\s*(?:builtin\s+)?exec\b(.*)$/s.exec(command)
+  // Присваивания перед exec (`FOO=1 BAR="a b" exec zsh`) — окружение новой оболочки.
+  const m = /^\s*(?:[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)*(?:builtin\s+)?exec\b(.*)$/s.exec(command)
   if (!m) return false
   // Цепочки и подоболочки (`exec x; y`, `a && exec b`) не разбираем: только простая команда.
   if (/[;&|\n()]/.test(m[1])) return false
   const words = m[1].trim().split(/\s+/).filter(Boolean)
   for (let i = 0; i < words.length; i++) {
     const w = words[i]
-    // Перенаправление: `>f`, `2>&1`, `<f`, `> f` (имя файла — следующим словом).
-    if (/^\d*[<>]/.test(w)) {
-      if (/^\d*(?:[<>]|>>|<<|>&|<&|>\|)$/.test(w)) i++
+    // Перенаправление: `>f`, `2>&1`, `<f`, `> f` (имя файла — следующим словом), `{fd}>f` — номер
+    // дескриптора в переменную, `&>f`.
+    if (/^(?:\d*|\{[A-Za-z_]\w*\}|&)[<>]/.test(w)) {
+      if (/^(?:\d*|\{[A-Za-z_]\w*\}|&)(?:[<>]|>>|<<|>&|<&|>\||<>)$/.test(w)) i++
       continue
     }
     if (w === '-a') {
@@ -174,7 +199,8 @@ export function replacesShell(command: string): boolean {
 }
 
 /** Строка в xterm, когда интеграция оболочки потеряна (`exec`): дальше — обычный терминал. */
-export const RAW_NOTE = '\r\n\x1b[2m[оболочка заменена командой exec — блоки недоступны, терминал работает как обычный]\x1b[0m\r\n'
+const RAW_NOTE_HEAD = '[оболочка заменена командой exec'
+export const RAW_NOTE = `\r\n\x1b[2m${RAW_NOTE_HEAD} — блоки недоступны, терминал работает как обычный]\x1b[0m\r\n`
 
 export function TerminalPane(p: TerminalPaneProps) {
   // Один xterm на панель; его host переносится между «парковкой», running-блоком и оверлеем.
@@ -332,10 +358,11 @@ export function TerminalPane(p: TerminalPaneProps) {
       macOptionIsMeta: true,
       scrollback: 10000,
       // Ссылки OSC 8: без обработчика xterm открыл бы их confirm() и window.open в самом WebView.
-      // Открываем, как и найденные WebLinksAddon, во внешнем браузере — только http(s).
+      // Открываем, как и найденные WebLinksAddon, во внешнем браузере — только http(s). Текст такой
+      // ссылки задаёт программа, адреса не видно: сначала вопрос с хостом над строкой ввода.
       linkHandler: {
         activate: (_e, uri) => {
-          if (/^https?:\/\//i.test(uri)) openUrl(uri).catch((err) => console.error('openUrl failed:', err))
+          if (/^https?:\/\//i.test(uri)) askOpenLink(callbacks.current.paneId, uri)
         },
       },
     })
@@ -447,10 +474,20 @@ export function TerminalPane(p: TerminalPaneProps) {
       term.reset()
       altOff()
     }
-    /** Маркер нашей оболочки: интеграция на месте (exec не удался) — обычный режим блоков. */
-    const integrationBack = () => {
+    /** Команда, после которой интеграция потеряна (`exec …`). */
+    let rawCommand = ''
+    /**
+     * Маркер нашей оболочки: интеграция на месте (exec не удался) — обычный режим блоков. Что оболочка
+     * напечатала после exec (`zsh: command not found`), — в блок этой команды, а не под reset.
+     */
+    const integrationBack = (exitCode: number | null) => {
       if (!rawRef.current) return
       rawRef.current = false
+      if (term.buffer.active.type !== 'alternate') {
+        const { html, lines } = freezeAfterNote(term, serializer)
+        setItems((it) => applyShell(it, { t: 'late', command: rawCommand, cwd: cwdRef.current ?? '', exitCode, at: Date.now(), html, lines }))
+      }
+      term.reset()
       altOff()
     }
     const endBlock = (exitCode: number | null) => {
@@ -500,7 +537,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       if (ev.t === 'prompt' && runningRef.current) return true
       setContinuation(false)
       setAwaitingShell(false)
-      integrationBack()
+      integrationBack(ev.t === 'end' ? ev.exitCode : null)
       if (ev.t === 'prompt') {
         leaveStaleAlt()
         // Строка принята, но команда не запустилась (ошибка разбора): её вывод — блоком,
@@ -529,6 +566,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           // `exec zsh`: новая оболочка без маркеров — блок не закончится никогда. Закрываем его сразу
           // и переходим в обычный терминал (xterm поверх ленты), чтобы не запереть ввод.
           rawRef.current = true
+          rawCommand = ev.command
           endBlock(null)
           term.write(RAW_NOTE)
         }
@@ -722,8 +760,12 @@ export function TerminalPane(p: TerminalPaneProps) {
   // Вопрос агента ждёт ответа — блок над строкой ввода (как «needs your input» в Warp).
   // Ждущий запрос агента (вопрос или разрешение) — блок над строкой ввода.
   const prompt = claude ? pendingPrompt(claude.state) : null
-  const question = prompt?.type === 'question' ? prompt : null
-  const permission = prompt?.type === 'permission' ? prompt : null
+  // «? Доверять папке» и «? Открыть ссылку» — поверх (вопрос агента ждёт под ними).
+  const trustAsk = useClaudeTrust((st) => st.asks[p.paneId] ?? null)
+  const linkAsk = useLinkAsk((st) => st.asks[p.paneId] ?? null)
+  const confirmShown = (!!trustAsk || !!linkAsk) && !alt
+  const question = prompt?.type === 'question' && !confirmShown ? prompt : null
+  const permission = prompt?.type === 'permission' && !confirmShown ? prompt : null
   const questionRef = useRef(question)
   useLayoutEffect(() => {
     questionRef.current = question
@@ -732,8 +774,14 @@ export function TerminalPane(p: TerminalPaneProps) {
   const focusPrompt = useCallback(() => promptRef.current?.focus(), [])
   // Новый запрос забирает фокус, если панель в фокусе, в строке ничего не набрано и пользователь
   // не занят другим (настройки, панель агентов, выбор модели). Запрос закрыт — ввод в строку.
-  const promptId = prompt?.requestId ?? null
+  const promptId = confirmShown ? (trustAsk ? `trust:${trustAsk.cwd}` : `link:${linkAsk?.url}`) : (prompt?.requestId ?? null)
+  // Вопрос о ссылке — ответ на щелчок пользователя: фокус к нему сразу.
+  const linkFocus = confirmShown && !trustAsk
   useEffect(() => {
+    if (linkFocus) {
+      promptRef.current?.focus()
+      return
+    }
     if (!promptId) {
       const active = document.activeElement
       if (!active || active === document.body || (paneRef.current?.contains(active) && !inputRef.current?.hasFocus())) {
@@ -746,7 +794,23 @@ export function TerminalPane(p: TerminalPaneProps) {
     const active = document.activeElement
     if (active?.closest?.('.agents, .find')) return
     if (inputRef.current?.isEmpty() ?? true) promptRef.current?.focus()
-  }, [promptId, focusActive])
+  }, [promptId, linkFocus, focusActive])
+  // «Нет» (или доверие не записалось): отложенное сообщение — обратно в строку, режим Claude — как до него.
+  const onTrust = useCallback(
+    (ok: boolean) => {
+      void answerTrust(p.paneId, ok).then((r) => {
+        const input = inputRef.current
+        if (!r || !input) return
+        const snap = input.snapshot()
+        const doc = r.text !== null && !snap.doc.text ? docOf(r.text, r.tokens) : snap.doc
+        input.restore({ doc, claude: r.leave ? false : snap.claude })
+        input.focus()
+        if (r.error) input.note(r.error)
+      })
+    },
+    [p.paneId],
+  )
+  const onLink = useCallback((ok: boolean) => answerLink(p.paneId, ok), [p.paneId])
   const onDecideP = useCallback(
     (d: PermissionDecision) => {
       const pr = permissionRef.current
@@ -826,7 +890,11 @@ export function TerminalPane(p: TerminalPaneProps) {
   const onTokens = useCallback((n: number) => setAttachCount(p.paneId, n), [p.paneId])
   useEffect(() => {
     const paneId = p.paneId
-    return () => setAttachCount(paneId, 0)
+    return () => {
+      setAttachCount(paneId, 0)
+      // Панель закрыта: её вопрос о ссылке больше не ждёт.
+      answerLink(paneId, false)
+    }
   }, [p.paneId])
 
   /** Блок или ответ Claude из ленты — значком у курсора строки ввода (из оболочки — в режим Claude). */
@@ -1369,6 +1437,16 @@ export function TerminalPane(p: TerminalPaneProps) {
         {claudeOpen(claude) && !agentsHidden && (
           <ErrorBoundary name="панель агентов">
             <AgentsPanel ref={agentsRef} state={claude.state} queued={queue.length} onExit={() => inputRef.current?.focus()} />
+          </ErrorBoundary>
+        )}
+        {trustAsk && !alt && (
+          <ErrorBoundary name="доверие к папке" resetKey={trustAsk}>
+            <TrustPrompt key={trustAsk.cwd} ref={promptRef} cwd={trustAsk.cwd} onAnswer={onTrust} />
+          </ErrorBoundary>
+        )}
+        {linkAsk && !trustAsk && !alt && (
+          <ErrorBoundary name="открытие ссылки" resetKey={linkAsk}>
+            <LinkPrompt key={linkAsk.url} ref={promptRef} url={linkAsk.url} host={linkAsk.host} text={linkAsk.text} onAnswer={onLink} />
           </ErrorBoundary>
         )}
         {/* После ответа вопрос сворачивается по высоте (src/ui/motion.tsx). */}

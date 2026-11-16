@@ -71,6 +71,15 @@ describe('правый щелчок по выделению в ответе', ()
     const e2 = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
     f.querySelector('#a')!.dispatchEvent(e2)
     expect(e2.defaultPrevented).toBe(false)
+    // У ссылки системного меню нет («Открыть ссылку» открыла бы её в окне приложения), даже без выделения.
+    const a = document.createElement('a')
+    a.href = 'https://example.com'
+    a.textContent = 'ссылка'
+    f.querySelector('#b')!.append(a)
+    const e3 = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    a.dispatchEvent(e3)
+    expect(e3.defaultPrevented).toBe(true)
+    expect(popup).toHaveBeenCalledTimes(1)
     f.remove()
   })
 })

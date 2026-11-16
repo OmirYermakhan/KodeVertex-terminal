@@ -80,6 +80,142 @@ interface SessionsStore {
 
 export const useClaudeSessions = create<SessionsStore>(() => ({ sessions: {} }))
 
+/**
+ * Доверие к папке до запуска claude: в чужой папке `.claude/` (настройки, хуки, MCP-серверы) запустил
+ * бы её код. Rust не запускает claude в недоверенной папке (`UNTRUSTED_DIR`); здесь — проверка заранее
+ * и блок «? Доверять папке» над строкой ввода. Пока он ждёт, действие (сообщение, вход в режим Claude,
+ * `/resume`) отложено; «Доверять» — оно выполняется, «Нет» — сообщение возвращается в строку.
+ */
+export const UNTRUSTED_DIR = 'UNTRUSTED_DIR'
+/** Карточка ошибки: claude_start отказал (папка не в доверенных), пользователь ответил «Нет». */
+export const NOT_TRUSTED = 'Папка не в доверенных — Claude не запущен'
+
+/** Ждущий ответа запрос доверия панели (блок над строкой ввода). */
+export interface TrustAsk {
+  cwd: string
+}
+
+export const useClaudeTrust = create<{ asks: Record<string, TrustAsk> }>(() => ({ asks: {} }))
+
+/** Что вернуть в строку ввода после «Нет»: отложенное сообщение и выход из режима Claude. */
+export interface TrustDeclined {
+  text: string | null
+  tokens?: Attachment[]
+  /** Режим Claude включён ради отложенного действия, а сессии панели нет — строка выходит из режима. */
+  leave: boolean
+  /** claude_trust_add не удался. */
+  error?: string
+}
+
+interface TrustWait {
+  /** Отложенное действие: вызывается после «Доверять». */
+  retry?(): void
+  /** Ожидание внутри запуска (ответ UNTRUSTED_DIR от claude_start). */
+  settle?(ok: boolean): void
+  /** Сообщение, которое вернётся в строку после «Нет». */
+  restore?: { text: string; tokens?: Attachment[] }
+  /** Действие включало режим Claude (вход, вопрос). */
+  mode?: boolean
+}
+
+/** Папки, которым доверие подтверждено в этом запуске (или бэкенд без проверки доверия). */
+const trustedDirs = new Set<string>()
+const trustWaits = new Map<string, { cwd: string; waits: TrustWait[] }>()
+/** Поколение панели: проверка, пришедшая после закрытия панели, ничего не делает. */
+const trustGen = new Map<string, number>()
+
+function setTrustAsk(paneId: string, ask: TrustAsk | null): void {
+  useClaudeTrust.setState((st) => {
+    if (!ask && !(paneId in st.asks)) return st
+    const asks = { ...st.asks }
+    if (ask) asks[paneId] = ask
+    else delete asks[paneId]
+    return { asks }
+  })
+}
+
+function askTrust(paneId: string, cwd: string, w: TrustWait): void {
+  const cur = trustWaits.get(paneId)
+  if (cur && cur.cwd === cwd) {
+    cur.waits.push(w)
+    return
+  }
+  // Панель перешла в другую папку, пока ждал прежний запрос: прежние действия отменяются.
+  if (cur) for (const x of cur.waits) x.settle?.(false)
+  trustWaits.set(paneId, { cwd, waits: [w] })
+  setTrustAsk(paneId, { cwd })
+}
+
+/**
+ * Можно ли запускать claude в cwd прямо сейчас. Папка уже доверенная — true (синхронно). Иначе — false:
+ * проверка claude_trust_check идёт асинхронно; доверенная (или бэкенд без проверки) — w.retry(),
+ * нет — блок «? Доверять папке».
+ */
+function trustGate(paneId: string, cwd: string, w: TrustWait): boolean {
+  if (trustedDirs.has(cwd)) return true
+  const gen = trustGen.get(paneId) ?? 0
+  const alive = () => (trustGen.get(paneId) ?? 0) === gen
+  const ok = () => {
+    trustedDirs.add(cwd)
+    if (alive()) w.retry?.()
+  }
+  Promise.resolve()
+    .then(() => invoke<boolean>('claude_trust_check', { path: cwd }))
+    .then(
+      (trusted) => {
+        if (trusted !== false) ok()
+        else if (alive()) askTrust(paneId, cwd, w)
+      },
+      // Бэкенд без проверки доверия (старая сборка) — запускаем, как раньше.
+      ok,
+    )
+  return false
+}
+
+/**
+ * Ответ на «? Доверять папке». ok — claude_trust_add и отложенные действия; нет (или запись не
+ * удалась) — что вернуть в строку ввода. null — запроса уже нет (двойной ответ).
+ */
+export async function answerTrust(paneId: string, ok: boolean): Promise<TrustDeclined | null> {
+  const t = trustWaits.get(paneId)
+  if (!t) return null
+  trustWaits.delete(paneId)
+  setTrustAsk(paneId, null)
+  let error: string | undefined
+  if (ok) {
+    try {
+      await invoke('claude_trust_add', { path: t.cwd })
+      trustedDirs.add(t.cwd)
+      for (const w of t.waits) {
+        if (w.settle) w.settle(true)
+        else w.retry?.()
+      }
+      return null
+    } catch (e) {
+      error = `Папка не добавлена в доверенные: ${errText(e)}`
+    }
+  }
+  for (const w of t.waits) w.settle?.(false)
+  const back = t.waits.find((w) => w.restore)?.restore
+  const leave = t.waits.some((w) => w.mode) && !claudeOpen(useClaudeSessions.getState().sessions[paneId])
+  return { text: back?.text ?? null, ...(back?.tokens ? { tokens: back.tokens } : {}), leave, ...(error ? { error } : {}) }
+}
+
+/** Панель закрыта: её запрос доверия и отложенные действия забываются. */
+function dropTrust(paneId: string): void {
+  trustGen.set(paneId, (trustGen.get(paneId) ?? 0) + 1)
+  const t = trustWaits.get(paneId)
+  trustWaits.delete(paneId)
+  setTrustAsk(paneId, null)
+  if (t) for (const w of t.waits) w.settle?.(false)
+}
+
+/** Для тестов: доверенные папки этого запуска забыты. */
+export function resetTrustForTests(): void {
+  trustedDirs.clear()
+  for (const id of [...trustWaits.keys()]) dropTrust(id)
+}
+
 /** Сколько последних строк stderr показываем в карточке ошибки. */
 const STDERR_LINES = 12
 
@@ -214,7 +350,7 @@ function start(paneId: string): Proc {
   const diagramsHint = useSettings.getState().settings.claudeDiagrams
   patch(paneId, (p) => ({ ...p, permissionMode, rewindAt: null, state: newProcess(p.state, resume) }))
   let gotLine = false
-  const onLine = new Channel<string>((line) => {
+  const onLineMsg = (line: string) => {
     gotLine = true
     if (!alive()) return
     if (line.includes('"control_response"')) settleControl(line)
@@ -236,8 +372,8 @@ function start(paneId: string): Proc {
     }
     // Ход закончился (не прерван) — следующее сообщение из очереди.
     if (before > 0 && get(paneId).state.pending === 0 && !proc.interrupted) sendNextQueued(paneId, undefined)
-  })
-  const onExit = new Channel<ClaudeExit>((e) => {
+  }
+  const onExitMsg = (e: ClaudeExit) => {
     // Ответов на управляющие запросы этого процесса уже не будет.
     if (proc.id) rejectControls(proc.id)
     if (!alive()) return
@@ -264,9 +400,26 @@ function start(paneId: string): Proc {
     // Прерванные действия (⌃C посреди команды) тоже могли поменять файлы.
     const tools = finishedTools(prevState, get(paneId).state)
     if (tools.length > 0) emitClaudeEvent({ kind: 'tools', tools })
-  })
+  }
   const rewind = rewindAt ? { resumeAt: rewindAt, fork: true } : {}
-  proc.ready = invoke<string>('claude_start', { cwd, resume, model, effort, permissionMode, ...rewind, promptSuggestions, diagramsHint, onLine, onExit })
+  // Каналы — на каждый вызов claude_start (повтор после «Доверять» — с новыми).
+  const launch = () =>
+    invoke<string>('claude_start', {
+      cwd, resume, model, effort, permissionMode, ...rewind, promptSuggestions, diagramsHint,
+      onLine: new Channel<string>(onLineMsg),
+      onExit: new Channel<ClaudeExit>(onExitMsg),
+    })
+  proc.ready = launch()
+    .catch(async (err: unknown) => {
+      // Rust: папка не в доверенных (проверку заранее обошли или доверие отозвано) — тот же блок
+      // «? Доверять папке»; сообщение уже в ленте и уйдёт после «Доверять».
+      if (!errText(err).includes(UNTRUSTED_DIR) || cwd === null || !alive()) throw err
+      trustedDirs.delete(cwd)
+      const ok = await new Promise<boolean>((settle) => askTrust(paneId, cwd, { settle }))
+      // Строкой, как ошибки invoke: карточка ошибки показывает её как есть.
+      if (!ok || !alive()) throw NOT_TRUSTED
+      return launch()
+    })
     .then((id) => {
       if (!alive()) {
         // Панель закрыли, пока процесс запускался.
@@ -371,6 +524,9 @@ const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
  * (с `--resume`, если сессия была). В ленте — заметка, статус-бар обновляется ответом set_model.
  */
 export async function chooseModel(paneId: string, paneCwd: string | undefined, c: ModelChoice): Promise<void> {
+  // Процесса нет — смена модели его запустит: сначала доверие к папке.
+  const dir = paneCwd ?? get(paneId).cwd
+  if (dir !== null && !procs.has(paneId) && !trustGate(paneId, dir, { retry: () => void chooseModel(paneId, paneCwd, c) })) return
   ensure(paneId)
   const cwd = switchCwd(paneId, paneCwd)
   if (cwd === null) {
@@ -514,6 +670,9 @@ function switchCwd(paneId: string, paneCwd: string | undefined): string | null {
  * в ленте — строка с каталогом и подсказкой; вопросы дальше — через askClaude.
  */
 export function enterClaude(paneId: string, paneCwd: string | undefined): boolean {
+  // Папка ещё не доверенная — вход откладывается до ответа (строка уже в режиме Claude; «Нет» её выведет).
+  const dir = paneCwd ?? get(paneId).cwd
+  if (dir !== null && !trustGate(paneId, dir, { retry: () => void enterClaude(paneId, paneCwd), mode: true })) return true
   ensure(paneId)
   const cwd = switchCwd(paneId, paneCwd)
   if (cwd === null) {
@@ -559,6 +718,8 @@ export async function resumeClaude(
   s: SessionInfo,
   onReplace?: (from: number) => void,
 ): Promise<boolean> {
+  const dir = paneCwd ?? get(paneId).cwd
+  if (dir !== null && !trustGate(paneId, dir, { retry: () => void resumeClaude(paneId, paneCwd, s, onReplace) })) return false
   ensure(paneId)
   const seq = (resumeSeqs.get(paneId) ?? 0) + 1
   resumeSeqs.set(paneId, seq)
@@ -623,8 +784,15 @@ export function claudeCwdKnown(paneId: string, paneCwd: string | undefined): boo
  * с тех пор перешла в другой каталог — новая сессия там; начало новой сессии отмечается в ленте.
  */
 export async function askClaude(paneId: string, paneCwd: string | undefined, text: string, tokens?: Attachment[]): Promise<void> {
-  ensure(paneId)
   const toks = tokens && tokens.length > 0 ? tokens : undefined
+  // Ход не идёт — сообщение запустит claude (или пойдёт в процесс этой же папки): сначала доверие.
+  // Пока ждёт ответа, сообщения нет ни в ленте, ни в очереди; «Нет» вернёт его в строку.
+  const dir = paneCwd ?? get(paneId).cwd
+  if (dir !== null && !useClaudeSessions.getState().sessions[paneId]?.state.busy) {
+    const w: TrustWait = { retry: () => void askClaude(paneId, paneCwd, text, tokens), restore: { text, ...(toks ? { tokens: toks } : {}) }, mode: true }
+    if (!trustGate(paneId, dir, w)) return
+  }
+  ensure(paneId)
   // Ход идёт (в т. ч. ждёт ответа на вопрос или разрешение) — в очередь: в stdin посреди хода не пишем.
   if (get(paneId).state.busy) {
     const msg: QueuedMessage = { id: ++queueSeq, text, ...(toks ? { tokens: toks } : {}), ...(paneCwd ? { cwd: paneCwd } : {}) }
@@ -777,6 +945,10 @@ const editing = new Set<string>()
  */
 export async function editClaude(paneId: string, index: number, text: string, tokens?: Attachment[]): Promise<boolean> {
   if (editing.has(paneId) || !canEdit(get(paneId).state, index)) return false
+  // Правка перезапускает claude: папка восстановленной сессии могла ещё не пройти проверку доверия.
+  const dir = get(paneId).cwd
+  const toks0 = tokens && tokens.length > 0 ? tokens : undefined
+  if (dir !== null && !trustGate(paneId, dir, { retry: () => void editClaude(paneId, index, text, tokens), restore: { text, ...(toks0 ? { tokens: toks0 } : {}) } })) return true
   editing.add(paneId)
   try {
     const proc = procs.get(paneId)
@@ -819,6 +991,7 @@ export async function editClaude(paneId: string, index: number, text: string, to
 /** Панель закрыта: процесс остановить, состояние забыть. */
 export function stopClaude(paneId: string): void {
   dropProc(paneId)
+  dropTrust(paneId)
   useClaudeSessions.setState((st) => {
     if (!(paneId in st.sessions)) return st
     const sessions = { ...st.sessions }

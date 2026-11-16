@@ -22,7 +22,7 @@ describe('QuestionPrompt', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => vi.useRealTimers())
 
-  it(`первые ${ARM_MS} мс ↵ и щелчок по варианту не отвечают; набор своего ответа — сразу; новый вопрос — отсчёт заново`, () => {
+  it(`первые ${ARM_MS} мс ↵ и щелчок по варианту не отвечают; буквы — в строку ввода, не в свой ответ; новый вопрос — отсчёт заново`, () => {
     const one = questionItem({ questions: [questionItem().questions[0]] })
     const { key, h, box, rerender } = setup(one, false)
     expect(box.querySelector('.q-opts')).toHaveClass('p-wait')
@@ -31,14 +31,23 @@ describe('QuestionPrompt', () => {
     act(() => void vi.advanceTimersByTime(ARM_MS - 1))
     key('Enter')
     expect(h.onAnswer).not.toHaveBeenCalled()
-    // Своё — печатается и отправляется сразу: случайным ↵ его не набрать.
+    // Набор нового сообщения в момент появления вопроса — не ответ: фокус обратно в строку ввода.
+    box.focus()
     key('M')
     const input = box.querySelector('input.q-own') as HTMLInputElement
-    expect(input.value).toBe('M')
+    expect(input.value).toBe('')
+    expect(document.activeElement).not.toBe(input)
+    expect(h.onLeave).toHaveBeenCalledTimes(1)
+    // Даже если поле в фокусе (щелчок) — ни буквы, ни ↵ до ARM_MS.
+    fireEvent.change(input, { target: { value: 'да' } })
+    fireEvent.keyDown(input, { key: 'x' })
+    expect(h.onLeave).toHaveBeenCalledTimes(2)
     fireEvent.keyDown(input, { key: 'Enter' })
-    expect(h.onAnswer).toHaveBeenCalledWith(0, 'M')
-    h.onAnswer.mockClear()
+    expect(h.onAnswer).not.toHaveBeenCalled()
     act(() => void vi.advanceTimersByTime(1))
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(h.onAnswer).toHaveBeenCalledWith(0, 'да')
+    h.onAnswer.mockClear()
     expect(box.querySelector('.q-opts')).not.toHaveClass('p-wait')
     const blue = screen.getAllByRole('option')[1]
     fireEvent.mouseDown(blue)
@@ -99,6 +108,21 @@ describe('QuestionPrompt', () => {
     expect(h.onAnswer).not.toHaveBeenCalled()
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(h.onAnswer).toHaveBeenCalledWith(0, 'MySQL 8')
+  })
+
+  it('прежний свой ответ на вкладке — курсор на поле, но фокус в него сам не переходит', () => {
+    const h = { onAnswer: vi.fn(), onStep: vi.fn(), onSubmit: vi.fn(), onLeave: vi.fn() }
+    const { container, rerender } = render(<QuestionPrompt item={questionItem({ answers: ['', ''] })} agent={agent} {...h} />)
+    const box = container.querySelector('.aprompt') as HTMLElement
+    box.focus()
+    arm()
+    const input = box.querySelector('input.q-own') as HTMLInputElement
+    expect(document.activeElement).toBe(box)
+    // Возврат на вкладку с прежним своим ответом (шаг 1 → 0).
+    rerender(<QuestionPrompt item={questionItem({ step: 1, answers: ['Зелёный', ''] })} agent={agent} {...h} />)
+    rerender(<QuestionPrompt item={questionItem({ step: 0, answers: ['Зелёный', ''] })} agent={agent} {...h} />)
+    expect(container.querySelector('.q-row.sel input.q-own')).not.toBeNull()
+    expect(document.activeElement).not.toBe(input)
   })
 
   it('свой ответ: пустое поле ↵ не отправляет; прежний свой ответ — снова в поле', () => {

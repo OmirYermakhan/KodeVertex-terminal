@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react'
+import { fireEvent, render } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn(() => Promise.resolve()) }))
@@ -63,5 +63,35 @@ describe('Markdown: diff как в Android Studio', () => {
     expect(container.querySelectorAll('.md-dl.a')).toHaveLength(1)
     expect(container.querySelector('.md-dl.a .hljs-keyword')?.textContent).toBe('fun')
     expect(container.querySelector('.md-dl.d .hljs-number')?.textContent).toBe('1')
+  })
+})
+
+describe('Markdown: ссылки', () => {
+  it('подсказка — хост ссылки; системного меню у ссылки нет', () => {
+    const { container } = render(<Markdown text={'[документация](https://docs.example.com/a?b=1) и <mailto:me@x.org>'} />)
+    const [a, m] = [...container.querySelectorAll('a')]
+    expect(a.title).toBe('docs.example.com')
+    expect(m.title).toBe('me@x.org')
+    const e = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    a.dispatchEvent(e)
+    expect(e.defaultPrevented).toBe(true)
+  })
+
+  it('текст выдаёт себя за другой адрес — вопрос в панели вместо открытия; обычная ссылка — сразу в браузер', async () => {
+    const { openUrl } = await import('@tauri-apps/plugin-opener')
+    const { useLinkAsk } = await import('../feed/linkAsk')
+    vi.mocked(openUrl).mockClear()
+    const pane = document.createElement('div')
+    pane.dataset.paneId = 'pp'
+    document.body.append(pane)
+    const { container } = render(<Markdown text={'[github.com/acme](https://evil.example/x) [docs.github.com](https://docs.github.com/y) [тут](https://evil.example/z)'} />, { container: pane })
+    const [fake, sub, plain] = [...container.querySelectorAll('a')]
+    fireEvent.click(fake)
+    expect(openUrl).not.toHaveBeenCalled()
+    expect(useLinkAsk.getState().asks.pp).toEqual({ url: 'https://evil.example/x', host: 'evil.example', text: 'github.com/acme' })
+    fireEvent.click(sub)
+    fireEvent.click(plain)
+    expect(vi.mocked(openUrl).mock.calls).toEqual([['https://docs.github.com/y'], ['https://evil.example/z']])
+    pane.remove()
   })
 })

@@ -74,6 +74,11 @@ export function QuoteReply({ feedRef, onQuote }: { feedRef: RefObject<HTMLElemen
     }
     const feed = feedRef.current
     const onMenu = (e: MouseEvent) => {
+      // У ссылок своего меню WKWebView нет: «Открыть ссылку» открыло бы её в главном окне.
+      if ((e.target as Element | null)?.closest?.('a[href]')) {
+        e.preventDefault()
+        return
+      }
       const sel = quoteSelection(feedRef.current)
       if (!sel) return
       e.preventDefault()
