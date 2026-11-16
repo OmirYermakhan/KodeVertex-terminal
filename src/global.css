@@ -575,8 +575,8 @@ body.tw-resizing, body.tw-resizing * { cursor: col-resize !important; user-selec
 .dv-doc-cut { margin-top: 6px; color: var(--com); font-family: var(--font-code); font-size: calc(var(--size-code) - 1px); }
 .diff.dv-body { white-space: normal; padding: 6px 0; overflow-wrap: anywhere; }
 .dv-body .dl { display: flex; padding: 0 10px; color: var(--text); }
-.dv-body .dl.a { color: var(--add); background: color-mix(in srgb, var(--add) 12%, transparent); }
-.dv-body .dl.d { color: var(--del); background: color-mix(in srgb, var(--del) 12%, transparent); }
+.dv-body .dl.a { color: var(--text); background: color-mix(in srgb, var(--add) 12%, transparent); }
+.dv-body .dl.d { color: var(--text); background: color-mix(in srgb, var(--del) 12%, transparent); }
 .dv-body .dn { flex: none; margin-right: 8px; text-align: right; color: var(--com); user-select: none; font-variant-numeric: tabular-nums; }
 .dv-body .dn + .dn { margin-right: 10px; }
 .dv-body.nonum .dn { display: none; }
@@ -612,24 +612,35 @@ body.tw-resizing, body.tw-resizing * { cursor: col-resize !important; user-selec
 .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 22px 0 10px; color: var(--strong); font-weight: 600; letter-spacing: -0.01em; line-height: 1.35; }
 .md h1 { font-size: 1.4em; }
 .md h2 { font-size: 1.22em; padding-bottom: 6px; border-bottom: 1px solid var(--rule); }
-.md h3 { font-size: 1.08em; color: var(--accText); }
+.md h3 { font-size: 1.08em; color: var(--strong); }
 .md h4, .md h5, .md h6 { font-size: 1em; }
 .md ul, .md ol { margin: 0 0 12px; padding-left: 22px; }
 .md li { margin: 0 0 6px; }
 .md li > ul, .md li > ol { margin: 6px 0 0; }
-.md li::marker { color: var(--accText); font-family: var(--font-code); font-size: 0.9em; }
+.md li::marker { color: var(--muted); font-family: var(--font-code); font-size: 0.9em; }
 .md li > p { margin: 0; }
 .md strong { color: var(--strong); font-weight: 600; }
 .md a { color: var(--accText); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .md blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 2px solid var(--rule); color: var(--muted); }
 .md hr { border: 0; border-top: 1px solid var(--rule); margin: 12px 0; }
-.md :not(pre) > code { font-family: var(--font-code); font-size: calc(var(--size-code) - 0.5px); background: var(--bg); color: var(--accText); padding: 1px 5px; border-radius: 4px; font-variant-ligatures: var(--liga); }
+.md :not(pre) > code { font-family: var(--font-code); font-size: calc(var(--size-code) - 0.5px); background: var(--bg); color: var(--strong); border: 1px solid var(--rule); padding: 1px 5px; border-radius: 4px; font-variant-ligatures: var(--liga); }
 .md table { border-collapse: collapse; margin: 0 0 10px; font-size: 0.93em; display: block; max-width: 100%; overflow-x: auto; }
 .md th, .md td { border: 1px solid var(--rule); padding: 4px 10px; text-align: left; vertical-align: top; }
 .md th { background: var(--panel2); color: var(--strong); font-weight: 600; }
 .md-code { position: relative; margin: 0 0 10px; }
-.md pre { margin: 0; padding: 12px 14px; background: var(--bg); border-radius: 6px; font-family: var(--font-code); font-size: var(--size-code); line-height: 1.6; color: var(--strong); overflow-x: auto; font-variant-ligatures: var(--liga); }
+.md pre { margin: 0; padding: 12px 14px; background: var(--bg); border-radius: 6px; font-family: var(--font-code); font-size: var(--size-code); line-height: 1.6; color: var(--text); overflow-x: auto; font-variant-ligatures: var(--liga); }
 .md pre code { font: inherit; background: none; padding: 0; color: inherit; }
+/* Diff как в Android Studio: строка +/− во всю ширину на тонированном фоне, знак цветом, код — подсветкой. */
+.md pre.md-diff { padding: 10px 0; }
+.md pre.md-diff code { display: inline-block; min-width: 100%; box-sizing: border-box; }
+.md-dl { display: block; padding: 0 14px; }
+.md-dl.a { background: color-mix(in srgb, var(--add) 14%, transparent); }
+.md-dl.d { background: color-mix(in srgb, var(--del) 13%, transparent); }
+.md-dl.h { color: var(--com); background: color-mix(in srgb, var(--rule) 40%, transparent); }
+.md-dl.m { color: var(--com); }
+.md-dm { display: inline-block; width: 1ch; margin-right: 1.5ch; color: var(--com); user-select: none; }
+.md-dl.a .md-dm { color: var(--add); }
+.md-dl.d .md-dm { color: var(--del); }
 .md-copy { position: absolute; top: 6px; right: 6px; font-family: var(--font-text); font-size: 11px; color: var(--muted); background: var(--panel); border: 1px solid var(--rule); border-radius: 5px; padding: 1px 8px; cursor: pointer; opacity: 0; transition: opacity 0.12s; }
 .md-code:hover .md-copy, .md-copy:focus-visible { opacity: 1; }
 .md-copy:hover { color: var(--strong); border-color: var(--acc); }
@@ -643,11 +654,20 @@ body.tw-resizing, body.tw-resizing * { cursor: col-resize !important; user-selec
 .dg-bar { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
 .dg-btn { font-family: var(--font-text); font-size: 11px; color: var(--muted); background: var(--panel); border: 1px solid var(--rule); border-radius: 5px; padding: 1px 8px; cursor: pointer; transition: color 0.12s, border-color 0.12s; }
 .dg-btn:hover, .dg-btn[aria-pressed="true"] { color: var(--strong); border-color: var(--acc); }
-.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-type, .hljs-meta .hljs-keyword { color: var(--kw); }
-.hljs-string, .hljs-regexp, .hljs-symbol, .hljs-char, .hljs-template-tag, .hljs-addition { color: var(--str); }
-.hljs-title, .hljs-function, .hljs-built_in, .hljs-attr, .hljs-attribute, .hljs-property, .hljs-selector-class, .hljs-selector-id { color: var(--fn); }
-.hljs-number, .hljs-variable.constant_ { color: var(--num); }
-.hljs-comment, .hljs-quote, .hljs-meta { color: var(--com); }
+/* Подсветка кода — по схеме Android Studio (Dark): ключевые слова оранжевые, строки зелёные, объявления
+   функций синие, свойства и ключи фиолетовые, аннотации жёлтые, числа бирюзовые; типы, имена классов,
+   параметры и вызовы — обычным цветом текста. */
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-meta .hljs-keyword { color: var(--kw); }
+.hljs-string, .hljs-regexp, .hljs-char, .hljs-template-tag, .hljs-addition, .hljs-meta .hljs-string { color: var(--str); }
+.hljs-title, .hljs-title.function_, .hljs-function .hljs-title, .hljs-selector-class, .hljs-selector-id { color: var(--fn); }
+.hljs-title.class_, .hljs-title.class_.inherited__, .hljs-type, .hljs-built_in, .hljs-params, .hljs-subst, .hljs-title.function_.invoke__ { color: inherit; }
+.hljs-attr, .hljs-property, .hljs-symbol, .hljs-variable.constant_, .hljs-template-variable { color: var(--hlTag); }
+.hljs-variable.constant_ { font-style: italic; }
+.hljs-attribute { color: var(--fn); }
+.hljs-number { color: var(--num); }
+.hljs-meta, .hljs-doctag { color: var(--ann); }
+.hljs-comment, .hljs-quote { color: var(--com); }
+.hljs-comment .hljs-doctag { color: var(--com); font-weight: 600; }
 .hljs-deletion { color: var(--del); }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 600; }

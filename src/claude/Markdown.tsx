@@ -7,6 +7,7 @@ import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
 import { useSettings } from '../settings/store'
 import { Diagram } from './diagram/Diagram'
+import { rehypeDiff } from './diffBlock'
 import { useCopied } from './diagram/useCopied'
 
 // Минимальные типы hast: сам пакет типов — транзитивная зависимость.
@@ -51,7 +52,7 @@ function onLinkClick(e: MouseEvent<HTMLAnchorElement>, href: string | undefined)
   if (href && SAFE_URL.test(href)) openUrl(href).catch(() => {})
 }
 
-function CodeBlock({ children, note }: { children?: ReactNode; note?: string }) {
+function CodeBlock({ children, note, className }: { children?: ReactNode; note?: string; className?: string }) {
   const ref = useRef<HTMLPreElement>(null)
   const [copied, copyText] = useCopied()
   const copy = () => copyText((ref.current?.textContent ?? '').replace(/\n$/, ''))
@@ -60,7 +61,9 @@ function CodeBlock({ children, note }: { children?: ReactNode; note?: string }) 
       <button type="button" className="md-copy" aria-label="Копировать код" onClick={copy}>
         {copied ? 'Скопировано' : 'Копировать'}
       </button>
-      <pre ref={ref}>{children}</pre>
+      <pre ref={ref} className={className}>
+        {children}
+      </pre>
       {note && <div className="dg-note">{note}</div>}
     </div>
   )
@@ -108,9 +111,9 @@ function componentsFor(diagrams: boolean, streaming: boolean): Components {
   if (!c) {
     c = {
       ...base,
-      pre: ({ children, node }) => {
+      pre: ({ children, node, className }) => {
         const src = diagrams ? mermaidSource(node as HNode | undefined) : undefined
-        if (src === undefined) return <CodeBlock>{children}</CodeBlock>
+        if (src === undefined) return <CodeBlock className={className}>{children}</CodeBlock>
         // Пока ответ печатается, блок может быть недописан — рисуем после конца ответа.
         if (streaming) return <CodeBlock note="Схема рисуется…">{children}</CodeBlock>
         return <Diagram source={src} />
@@ -122,8 +125,9 @@ function componentsFor(diagrams: boolean, streaming: boolean): Components {
 }
 
 const REMARK = [remarkGfm]
-const REHYPE = [rehypeHighlight]
-const REHYPE_STREAMING = [rehypeHighlight, rehypeCaret]
+// Сначала diff (свои строки с подсветкой языка файла, помечены no-highlight), потом остальной код.
+const REHYPE = [rehypeDiff, rehypeHighlight]
+const REHYPE_STREAMING = [rehypeDiff, rehypeHighlight, rehypeCaret]
 
 export const Markdown = memo(function Markdown({
   text,

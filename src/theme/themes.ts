@@ -26,6 +26,8 @@ export interface ThemeTokens {
   fn: string
   num: string
   com: string
+  /** Аннотации и декораторы в коде (@Inject, @Named), как у Android Studio. */
+  ann: string
   /** Значки вложений (макет 06 .tk): файл, блок (ok/fail), сообщение, неподдерживаемое, значок в пузыре «Вы». */
   tk: string
   tkRule: string
@@ -122,6 +124,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       fn: '#7fb6f2',
       num: '#f2c46b',
       com: '#636972',
+      ann: '#d9c46a',
       tk: '#1f2a35',
       tkRule: '#314459',
       tkText: '#e3e9ec',
@@ -198,6 +201,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       fn: '#9bb4c9',
       num: '#c9a0c9',
       com: '#7a746a',
+      ann: '#c9b46a',
       tk: '#313436',
       tkRule: '#454c51',
       tkText: '#e5e3dd',
@@ -274,6 +278,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       fn: '#8fb8ff',
       num: '#79d0e0',
       com: '#66727f',
+      ann: '#d8c77a',
       tk: '#2a3547',
       tkRule: '#3d4d69',
       tkText: '#e2ebf7',
@@ -350,6 +355,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       fn: '#2f6fb3',
       num: '#b5641a',
       com: '#7d828a',
+      ann: '#9e880d',
       tk: '#d5dfe6',
       tkRule: '#b6cadc',
       tkText: '#101a24',
@@ -426,6 +432,7 @@ export const THEMES: Record<ThemeId, Theme> = {
       fn: '#56a8f5',
       num: '#2aacb8',
       com: '#7a7e85',
+      ann: '#b3ae60',
       tk: '#2a3346',
       tkRule: '#3a4865',
       tkText: '#cfdcf6',

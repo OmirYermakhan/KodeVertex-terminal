@@ -20,10 +20,28 @@ export interface Piece {
 
 type HNode = { type: string; value?: string; properties?: { className?: unknown }; children?: HNode[] }
 
+/** Языки, среди которых угадывается язык кода без имени файла (diff в ответе Claude). */
+const GUESS = ['kotlin', 'java', 'swift', 'typescript', 'javascript', 'python', 'rust', 'go', 'xml', 'json', 'css', 'bash', 'sql', 'yaml', 'cpp', 'csharp', 'ruby', 'php']
+
+/** Язык кода по содержимому; не уверен — null. */
+export function guessLanguage(code: string): string | null {
+  if (!code.trim()) return null
+  try {
+    const r = lowlight.highlightAuto(code, { subset: GUESS })
+    return r.data?.language && (r.data.relevance ?? 0) >= 5 ? r.data.language : null
+  } catch {
+    return null
+  }
+}
+
 /** Строки кода с подсветкой; язык неизвестен или ошибка — строки без классов. */
 export function highlightLines(lines: string[], name: string): Piece[][] {
-  const lang = languageOf(name)
-  if (!lang) return lines.map((l) => (l ? [{ text: l }] : []))
+  return highlightLinesIn(lines, languageOf(name))
+}
+
+/** Строки кода с подсветкой языком lang (имя hljs); null или ошибка — строки без классов. */
+export function highlightLinesIn(lines: string[], lang: string | null): Piece[][] {
+  if (!lang || !lowlight.registered(lang)) return lines.map((l) => (l ? [{ text: l }] : []))
   let tree: HNode
   try {
     tree = lowlight.highlight(lang, lines.join('\n')) as unknown as HNode
