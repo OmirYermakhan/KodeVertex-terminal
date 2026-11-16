@@ -120,3 +120,15 @@ export function stepSize(current: number, delta: 1 | -1, kind: 'text' | 'code'):
 export function terminalLineHeight(s: Settings): number {
   return Math.round(s.lineHeight * 0.8 * 100) / 100
 }
+
+/**
+ * Объект для записи: незнакомые ключи из файла (поля новых версий, ручные правки) сохраняются,
+ * известные — берутся из нормализованных настроек.
+ */
+export function withUnknownFields(raw: unknown, s: Settings): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) if (!(k in DEFAULTS)) out[k] = v
+  }
+  return { ...out, ...s }
+}

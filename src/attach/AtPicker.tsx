@@ -108,8 +108,11 @@ export const AtPicker = memo(function AtPicker({ rows, selected, query, dirPart,
   }, [selected, rows])
 
   const rowKey = row?.key
+  // Содержимое строки: ещё идущий ответ дописывается, блок дописывает вывод — просмотр обновляется.
+  // Файл — только по ключу (поиск пересобирает строки на каждый символ, файл не перечитываем).
+  const rowContent: unknown = row?.group === 'messages' ? row.text : row?.group === 'blocks' ? row.block : null
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const token = useMemo(() => (row ? rowToken(row, dir) : null), [rowKey, dir])
+  const token = useMemo(() => (row ? rowToken(row, dir) : null), [rowKey, rowContent, dir])
   const [data, setData] = useState<{ id: string; d: PreviewData } | null>(null)
   useEffect(() => {
     if (!token || !side) return

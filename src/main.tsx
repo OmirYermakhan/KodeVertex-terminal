@@ -25,11 +25,15 @@ import { ErrorBoundary } from './diag/ErrorBoundary'
 import { installGlobalErrorLog } from './diag/log'
 
 import { finalSave, restoreSession } from './persist/session'
+import { installExitHandler } from './persist/exit'
 
 installGlobalErrorLog()
 
 // Вкладки, панели и ленты прошлого запуска — до первого рендера (оболочки стартуют в своих каталогах).
 void restoreSession().then(() => {
+  // ⌘Q и закрытие окна: Rust ждёт app_exit_ready, пока дописываются сессия и настройки.
+  installExitHandler().catch(() => {})
+  // Перезагрузка страницы (без выхода): запись без ожидания — лучше, чем ничего.
   window.addEventListener('beforeunload', () => void finalSave())
   createRoot(document.getElementById('root')!).render(
     <StrictMode>

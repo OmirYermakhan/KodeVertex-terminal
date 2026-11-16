@@ -1,4 +1,5 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useSettings } from './settings/store'
 import { listen } from '@tauri-apps/api/event'
 import { useTabs } from './layout/tabsStore'
@@ -6,7 +7,7 @@ import { runAction } from './keys/actions'
 import { matchKey, type Action } from './keys/keymap'
 import PaneView from './ui/PaneView'
 import TabBar from './ui/TabBar'
-import StatusBar from './ui/StatusBar'
+import StatusBar, { type ClaudeStatus } from './ui/StatusBar'
 import SettingsPanel from './ui/SettingsPanel'
 import CommandPalette from './palette/CommandPalette'
 import { useUi } from './ui/uiStore'
@@ -31,6 +32,40 @@ const TOOL_HINT = {
 
 const REPEATABLE = new Set<Action>(['fontBigger', 'fontSmaller'])
 
+/** ⌘↑/⌘↓ по блокам ленты — не в окне инструмента: там ⌘↓ открывает файл («Изменения»). */
+const BLOCK_NAV = new Set<Action>(['blockPrev', 'blockNext'])
+
+/**
+ * Поля сессии Claude для строки состояния панели в фокусе — по отдельности (useShallow): поток
+ * ответа меняет ClaudeState на каждом шаге, а окно перерисовывается, только когда сменилось видимое.
+ */
+function useClaudeStatus(paneId: string | undefined): { claude: ClaudeStatus | undefined; permissionMode: string | null | undefined } {
+  const f = useClaudeSessions(
+    useShallow((s) => {
+      const p = paneId ? s.sessions[paneId] : undefined
+      if (!claudeOpen(p)) return null
+      const st = p.state
+      const cur = st.currentAgentId ? st.agents.find((a) => a.id === st.currentAgentId) : undefined
+      return {
+        model: st.model,
+        contextUsed: st.contextUsed,
+        contextMax: st.contextMax,
+        costUsd: st.costUsd,
+        currentAgentId: st.currentAgentId,
+        currentName: cur?.name ?? null,
+        permissionMode: p.permissionMode,
+      }
+    }),
+  )
+  const claude = useMemo((): ClaudeStatus | undefined => {
+    if (!f) return undefined
+    const { model, contextUsed, contextMax, costUsd, currentAgentId, currentName } = f
+    const agents = currentAgentId && currentName !== null ? [{ id: currentAgentId, name: currentName }] : []
+    return { model, contextUsed, contextMax, costUsd, currentAgentId, agents }
+  }, [f])
+  return { claude, permissionMode: f?.permissionMode }
+}
+
 export default function App() {
   const loaded = useSettings((s) => s.loaded)
   const tabs = useTabs((s) => s.tabs)
@@ -41,14 +76,7 @@ export default function App() {
   })
   const focusedPane = useTabs((s) => s.tabs.find((x) => x.id === s.active)?.focused)
   const git = useGitInfo(cwd)
-  const claude = useClaudeSessions((s) => {
-    const p = focusedPane ? s.sessions[focusedPane] : undefined
-    return claudeOpen(p) ? p.state : undefined
-  })
-  const permissionMode = useClaudeSessions((s) => {
-    const p = focusedPane ? s.sessions[focusedPane] : undefined
-    return claudeOpen(p) ? p.permissionMode : undefined
-  })
+  const { claude, permissionMode } = useClaudeStatus(focusedPane)
   const settingsOpen = useUi((s) => s.settingsOpen)
   const paletteOpen = useUi((s) => s.paletteOpen)
   const launcherEdit = useUi((s) => s.launcherEdit)
@@ -93,6 +121,7 @@ export default function App() {
       if (!a) return
       // Окно быстрого входа: клавиши (⌘A, ⌘←…) — его полям.
       if (useUi.getState().launcherEdit) return
+      if (BLOCK_NAV.has(a) && e.target instanceof Element && e.target.closest('.tw')) return
       e.preventDefault()
       e.stopPropagation()
       // Автоповтор только для размера шрифта: зажатый ⌘W не должен закрыть всё подряд.

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type PointerEvent } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, type PointerEvent } from 'react'
 import { childRects, layoutRects, type PaneNode, type Rect } from '../layout/paneTree'
 import { useTabs, type Tab } from '../layout/tabsStore'
 import { TerminalPane } from '../terminal/TerminalPane'
@@ -26,12 +26,75 @@ const pct = (v: number) => `${v * 100}%`
 export const CLOSE_PANE_TITLE = 'Закрыть панель (⌘W)'
 
 /**
+ * Слот одной панели: memo и стабильные обработчики — TerminalPane не перерисовывается, пока не
+ * сменились его положение, фокус или каталог (а не на каждое обновление окна).
+ */
+const PaneSlot = memo(function PaneSlot({
+  id,
+  x,
+  y,
+  w,
+  h,
+  split,
+  bar,
+  focused,
+  initialCwd,
+}: {
+  id: string
+  /** Прямоугольник панели долями вкладки — числами, чтобы memo не ломала новая ссылка. */
+  x: number
+  y: number
+  w: number
+  h: number
+  split: boolean
+  /** Полоса фокуса сверху (панелей несколько и эта — в фокусе вкладки). */
+  bar: boolean
+  focused: boolean
+  initialCwd: string | undefined
+}) {
+  const onCwd = useCallback((cwd: string) => useTabs.getState().setCwd(id, cwd), [id])
+  const onExit = useCallback(() => useTabs.getState().paneExited(id), [id])
+  const onFocus = useCallback(() => useTabs.getState().focus(id), [id])
+  return (
+    <div
+      data-testid={`pane-${id}`}
+      className={split ? 'pane-slot split' : 'pane-slot'}
+      style={{
+        position: 'absolute',
+        left: pct(x),
+        top: pct(y),
+        width: pct(w),
+        height: pct(h),
+        boxSizing: 'border-box',
+        // Полоса фокуса — только когда панелей несколько: у одиночной панели её нет (макет 04).
+        borderTop: split ? `2px solid ${bar ? 'var(--acc)' : 'transparent'}` : undefined,
+      }}
+    >
+      <TerminalPane paneId={id} focused={focused} initialCwd={initialCwd} onCwd={onCwd} onExit={onExit} onFocus={onFocus} />
+      {split && (
+        <button
+          type="button"
+          className="pane-x"
+          title={CLOSE_PANE_TITLE}
+          aria-label={CLOSE_PANE_TITLE}
+          // Фокус не уходит из панели, в которой он был.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => useTabs.getState().closePane(id)}
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  )
+})
+
+/**
  * Панели рисуются плоским списком с абсолютным позиционированием (ключ — id панели),
  * поэтому при сплитах и закрытии соседей React не перемонтирует TerminalPane и PTY живёт.
  */
-export default function PaneView({ tab, visible }: { tab: Tab; visible: boolean }) {
+function PaneView({ tab, visible }: { tab: Tab; visible: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null)
-  const { focus, setCwd, paneExited, setRatio, closePane } = useTabs.getState()
+  const { setRatio } = useTabs.getState()
   const rects = layoutRects(tab.tree)
   const stopDrag = useRef<(() => void) | null>(null)
   useEffect(() => () => stopDrag.current?.(), [])
@@ -76,43 +139,18 @@ export default function PaneView({ tab, visible }: { tab: Tab; visible: boolean 
       style={{ position: 'absolute', inset: 0, display: visible ? 'block' : 'none' }}
     >
       {Object.entries(rects).map(([id, r]) => (
-        <div
+        <PaneSlot
           key={id}
-          data-testid={`pane-${id}`}
-          className={split ? 'pane-slot split' : 'pane-slot'}
-          style={{
-            position: 'absolute',
-            left: pct(r.x),
-            top: pct(r.y),
-            width: pct(r.w),
-            height: pct(r.h),
-            boxSizing: 'border-box',
-            // Полоса фокуса — только когда панелей несколько: у одиночной панели её нет (макет 04).
-            borderTop: split ? `2px solid ${tab.focused === id ? 'var(--acc)' : 'transparent'}` : undefined,
-          }}
-        >
-          <TerminalPane
-            paneId={id}
-            focused={visible && tab.focused === id}
-            initialCwd={tab.cwd[id]}
-            onCwd={(cwd) => setCwd(id, cwd)}
-            onExit={() => paneExited(id)}
-            onFocus={() => focus(id)}
-          />
-          {split && (
-            <button
-              type="button"
-              className="pane-x"
-              title={CLOSE_PANE_TITLE}
-              aria-label={CLOSE_PANE_TITLE}
-              // Фокус не уходит из панели, в которой он был.
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => closePane(id)}
-            >
-              ✕
-            </button>
-          )}
-        </div>
+          id={id}
+          x={r.x}
+          y={r.y}
+          w={r.w}
+          h={r.h}
+          split={split}
+          bar={tab.focused === id}
+          focused={visible && tab.focused === id}
+          initialCwd={tab.cwd[id]}
+        />
       ))}
       {dividers(tab.tree).map((d) => {
         const row = d.axis === 'row'
@@ -140,3 +178,6 @@ export default function PaneView({ tab, visible }: { tab: Tab; visible: boolean 
     </div>
   )
 }
+
+/** memo: окно перерисовывается чаще, чем меняется вкладка (поток ответа Claude в строке состояния). */
+export default memo(PaneView)

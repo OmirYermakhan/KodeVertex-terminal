@@ -8,13 +8,20 @@ import { useClaudeSessions, type PaneClaude, type QueuedMessage } from '../claud
 import { cancelPrompts, initialClaude, type ClaudeState, type FeedClaudeItem } from '../claude/reducer'
 import { boundDiff } from '../claude/diff'
 import { claudeIndex, claudeItemId, type FeedItem, type ShellBlock } from '../feed/feed'
+import type { Attachment } from '../attach/types'
+import { logError } from '../diag/log'
 
 export const SESSION_VERSION = 1
-/** Предел файла: больше — выбрасываются самые старые блоки оболочки. */
+/**
+ * Предел файла в байтах UTF-8: больше — выбрасываются самые старые блоки оболочки. С запасом ниже
+ * предела Rust (24 МБ), иначе session_save молча отказывал бы.
+ */
 export const MAX_SESSION_BYTES = 20 * 1024 * 1024
 /** Замороженный вывод одного блока длиннее — не сохраняется (блок остаётся без вывода). */
 export const MAX_BLOCK_HTML = 1024 * 1024
 export const SAVE_DELAY_MS = 1000
+/** Дольше этого запись не откладывается, даже если изменения идут без пауз (поток ответа Claude). */
+export const SAVE_MAX_WAIT_MS = 5000
 
 /** Элемент ленты в файле: блок оболочки целиком, карточка Claude — ссылкой на индекс в её сессии. */
 export type SavedFeedItem = ShellBlock | { kind: 'claude'; id: string }
@@ -154,70 +161,96 @@ export function snapshot(): SavedSession {
   return { version: SESSION_VERSION, tabs, active, panes }
 }
 
+/** Длина строки в UTF-8 (Rust мерит байты, не символы UTF-16) — без выделения буфера. */
+export function utf8Length(s: string): number {
+  let n = 0
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    if (c < 0x80) n += 1
+    else if (c < 0x800) n += 2
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+      n += 4
+      i++
+    } else n += 3
+  }
+  return n
+}
+
+/** Байты элемента в массиве JSON: сам элемент и запятая. */
+const itemBytes = (v: unknown) => utf8Length(JSON.stringify(v)) + 1
+const GONE_BYTES = utf8Length(JSON.stringify({ type: 'gone' }))
+
 /**
- * JSON снимка не больше `max`: выбрасываются самые старые блоки оболочки (по всем панелям), а если
- * их не хватило — самые ранние элементы Claude становятся 'gone' (индексы не сдвигаются).
+ * JSON снимка не больше `max` байт UTF-8: выбрасываются самые старые блоки оболочки (по всем
+ * панелям), а если их не хватило — самые ранние элементы Claude становятся 'gone' (индексы не
+ * сдвигаются). Что выбросить — считается по размерам элементов, снимок сериализуется заново один раз.
  */
 export function serializeCapped(s: SavedSession, max = MAX_SESSION_BYTES): string {
-  const text = dropShell(s, max)
-  return text.length <= max ? text : dropClaude(JSON.parse(text) as SavedSession, max)
+  let text = JSON.stringify(s)
+  let size = utf8Length(text)
+  const full = size
+  // Оценка по элементам точна до запятых; на случай промаха — ещё проход с уменьшенным бюджетом.
+  for (let budget = max, pass = 0; size > max && pass < 3; pass++) {
+    text = JSON.stringify(trim(s, full - budget))
+    size = utf8Length(text)
+    budget -= size - max + 64
+  }
+  return text
 }
 
-/** Элементы Claude в 'gone' от самых ранних (по индексу, по всем панелям), порциями, пока не влезет. */
-function dropClaude(s: SavedSession, max: number): string {
-  const panes = { ...s.panes }
-  const live = (id: string) => (panes[id].claude?.state.items ?? []).flatMap((it, i) => (it.type === 'gone' ? [] : [i]))
-  const left: { pane: string; i: number }[] = []
-  for (const id of Object.keys(panes)) for (const i of live(id)) left.push({ pane: id, i })
-  left.sort((x, y) => x.i - y.i)
-  let text = JSON.stringify(s)
-  let done = 0
-  while (text.length > max && done < left.length) {
-    const n = Math.max(1, Math.ceil((left.length - done) / 10))
-    for (const { pane, i } of left.slice(done, done + n)) {
+/** Снимок без `excess` байт: сначала старые блоки оболочки, затем ранние элементы Claude. */
+function trim(s: SavedSession, excess: number): SavedSession {
+  let need = excess
+  const blocks: ShellBlock[] = []
+  for (const p of Object.values(s.panes)) for (const it of p.feed) if (it.kind === 'shell') blocks.push(it)
+  blocks.sort((x, y) => x.startedAt - y.startedAt)
+  const drop = new Set<ShellBlock>()
+  for (const b of blocks) {
+    if (need <= 0) break
+    drop.add(b)
+    need -= itemBytes(b)
+  }
+  const panes: Record<string, SavedPane> = {}
+  for (const [id, p] of Object.entries(s.panes)) panes[id] = drop.size ? { ...p, feed: p.feed.filter((it) => !(it.kind === 'shell' && drop.has(it))) } : p
+  if (need > 0) {
+    const left: { pane: string; i: number }[] = []
+    for (const [id, p] of Object.entries(panes)) (p.claude?.state.items ?? []).forEach((it, i) => it.type !== 'gone' && left.push({ pane: id, i }))
+    left.sort((x, y) => x.i - y.i)
+    const gone = new Map<string, Set<number>>()
+    for (const { pane, i } of left) {
+      if (need <= 0) break
+      need -= itemBytes(panes[pane].claude!.state.items[i]) - 1 - GONE_BYTES
+      if (!gone.has(pane)) gone.set(pane, new Set())
+      gone.get(pane)!.add(i)
+    }
+    for (const [pane, set] of gone) {
       const c = panes[pane].claude!
-      const items = c.state.items.slice()
-      items[i] = { type: 'gone' }
+      const items = c.state.items.map((it, i): FeedClaudeItem => (set.has(i) ? { type: 'gone' } : it))
       panes[pane] = { ...panes[pane], claude: { ...c, state: { ...c.state, items } } }
     }
-    done += n
-    text = JSON.stringify({ ...s, panes })
   }
-  return text
-}
-
-function dropShell(s: SavedSession, max: number): string {
-  let text = JSON.stringify(s)
-  if (text.length <= max) return text
-  const blocks: { pane: string; b: ShellBlock }[] = []
-  for (const [pane, p] of Object.entries(s.panes)) {
-    for (const it of p.feed) if (it.kind === 'shell') blocks.push({ pane, b: it })
-  }
-  blocks.sort((x, y) => x.b.startedAt - y.b.startedAt)
-  const drop = new Set<ShellBlock>()
-  const panes = { ...s.panes }
-  while (text.length > max && drop.size < blocks.length) {
-    // Порциями: по 10% оставшихся (не меньше одного), чтобы не сериализовать на каждый блок.
-    const n = Math.max(1, Math.ceil((blocks.length - drop.size) / 10))
-    for (const { b } of blocks.slice(drop.size, drop.size + n)) drop.add(b)
-    for (const [pane, p] of Object.entries(s.panes)) panes[pane] = { ...p, feed: p.feed.filter((it) => !(it.kind === 'shell' && drop.has(it))) }
-    text = JSON.stringify({ ...s, panes })
-  }
-  return text
+  return { ...s, panes }
 }
 
 let timer: ReturnType<typeof setTimeout> | undefined
+/** Срок, позже которого отложенная запись не сдвигается (первое изменение + SAVE_MAX_WAIT_MS). */
+let dueBy = 0
 let enabled = false
+/** Файл сессии другой версии: не перезаписывать ни автосохранением, ни при выходе. */
+let foreign = false
 
 export function scheduleSave(): void {
   if (!enabled) return
+  const now = Date.now()
+  if (timer === undefined) dueBy = now + SAVE_MAX_WAIT_MS
   clearTimeout(timer)
-  timer = setTimeout(saveNow, SAVE_DELAY_MS)
+  timer = setTimeout(saveNow, Math.max(0, Math.min(SAVE_DELAY_MS, dueBy - now)))
 }
 
 export function saveNow(): Promise<void> {
   clearTimeout(timer)
   timer = undefined
+  if (foreign) return Promise.resolve()
   return invoke('session_save', { text: serializeCapped(snapshot()) }).then(
     () => {},
     () => {},
@@ -245,6 +278,29 @@ function validTree(n: unknown): n is PaneNode {
 function validTab(t: unknown): t is Tab {
   if (!isRec(t) || typeof t.id !== 'string' || !validTree(t.tree) || typeof t.focused !== 'string' || !isRec(t.cwd)) return false
   return leaves(t.tree).includes(t.focused)
+}
+
+/** Вкладка из файла без мусора: каталог панели уходит в pty_spawn — только строки. */
+function cleanTab(t: Tab): Tab {
+  const cwd: Record<string, string> = {}
+  for (const [k, v] of Object.entries(t.cwd)) if (typeof v === 'string' && v !== '') cwd[k] = v
+  const { launcher, ...rest } = t
+  return { ...rest, cwd, ...(typeof launcher === 'string' ? { launcher } : {}) }
+}
+
+/** Сообщение очереди из файла: текст — строка, значки — объекты с id/kind/label, каталог — строка. */
+function restoreQueued(m: unknown, i: number): QueuedMessage | null {
+  if (!isRec(m) || typeof m.text !== 'string') return null
+  const tokens = Array.isArray(m.tokens)
+    ? m.tokens.filter((a): a is Attachment => isRec(a) && typeof a.id === 'string' && typeof a.kind === 'string' && typeof a.label === 'string')
+    : undefined
+  return {
+    // id очереди — счётчик этого запуска: восстановленным — свои (отрицательные), без совпадений.
+    id: -(i + 1),
+    text: m.text,
+    ...(tokens && tokens.length ? { tokens } : {}),
+    ...(typeof m.cwd === 'string' && m.cwd !== '' ? { cwd: m.cwd } : {}),
+  }
 }
 
 /**
@@ -311,21 +367,20 @@ function restoreClaude(c: SavedClaude): PaneClaude {
     edits: isRec(c.state.edits) ? c.state.edits : {},
   }
   state = cancelPrompts(state, undefined, 'exit')
-  // id очереди — счётчик этого запуска: восстановленным — свои (отрицательные), без совпадений.
-  const queue = (Array.isArray(c.queue) ? c.queue : []).map((m, i) => ({ ...m, id: -(i + 1) }))
+  const queue = (Array.isArray(c.queue) ? (c.queue as unknown[]) : []).flatMap((m, i) => restoreQueued(m, i) ?? [])
   return {
     state,
     procId: null,
-    cwd: c.cwd ?? null,
-    model: c.model ?? null,
-    effort: c.effort ?? null,
+    cwd: str(c.cwd),
+    model: str(c.model),
+    effort: str(c.effort),
     permissionMode: null,
     queue,
     // Очередь не уходит сама после перезапуска: ↵ на пустой строке — следующее.
     paused: queue.length > 0,
     pauseHint: false,
     rewindAt: null,
-    closed: c.closed,
+    closed: c.closed === true,
     restored: state.sessionId !== null,
   }
 }
@@ -333,7 +388,7 @@ function restoreClaude(c: SavedClaude): PaneClaude {
 /** Применяет сохранённую сессию к сторам. Неподходящая (версия, форма) — false, всё как было. */
 export function applySession(raw: unknown): boolean {
   if (!isRec(raw) || raw.version !== SESSION_VERSION || !Array.isArray(raw.tabs)) return false
-  const tabs = raw.tabs.filter(validTab)
+  const tabs = raw.tabs.filter(validTab).map(cleanTab)
   if (tabs.length === 0) return false
   const active = typeof raw.active === 'string' && tabs.some((t) => t.id === raw.active) ? raw.active : tabs[0].id
   const panes = isRec(raw.panes) ? (raw.panes as Record<string, SavedPane>) : {}
@@ -356,7 +411,11 @@ export function applySession(raw: unknown): boolean {
   return true
 }
 
-/** Загрузка при старте (до первого рендера панелей) и автосохранение изменений. */
+/**
+ * Загрузка при старте (до первого рендера панелей) и автосохранение изменений. Файл другой версии
+ * (записан более новой сборкой) не затирается: копии Rust не делает, поэтому автосохранение в этом
+ * запуске выключено — вкладки этой сборки не сохранятся, зато чужая сессия цела.
+ */
 export async function restoreSession(): Promise<void> {
   let raw: unknown = null
   try {
@@ -365,6 +424,11 @@ export async function restoreSession(): Promise<void> {
     raw = null
   }
   applySession(raw)
+  if (isRec(raw) && raw.version !== SESSION_VERSION) {
+    foreign = true
+    logError('session', `файл сессии версии ${String(raw.version)} (ожидалась ${SESSION_VERSION}): не применён и не перезаписывается`)
+    return
+  }
   enabled = true
   useTabs.subscribe(scheduleSave)
   useClaudeSessions.subscribe(scheduleSave)
@@ -373,7 +437,9 @@ export async function restoreSession(): Promise<void> {
 /** Для тестов: начальное состояние модуля. */
 export function resetPersistForTests(): void {
   clearTimeout(timer)
+  timer = undefined
   enabled = false
+  foreign = false
   feeds.clear()
   restored.clear()
 }

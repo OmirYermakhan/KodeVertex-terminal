@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { highlightLines, type Piece } from '../attach/preview/highlight'
 import { unchangedLabel } from '../claude/cards/DiffView'
 import { diffParts, type DiffPart, type DiffRow } from '../claude/diff'
@@ -9,6 +9,13 @@ import { parseUnified } from './unified'
 
 /** Строк до «… ещё N строк · Показать всё»: огромный diff не рисуется целиком сразу. */
 export const DIFF_TAB_SHOWN = 1000
+/** Высота строки и отступ сверху (`.dvw .code`: line-height 21px, padding-top 4px). */
+const LH = 21
+const PAD = 4
+/** Запас строк над и под видимым окном. */
+const OVER = 30
+/** Подсветка кусками строк новой стороны (как в FileView): красим только то, что видно. */
+const CHUNK = 2000
 const TRUNCATED = 'Изменения урезаны: больше 4 МБ'
 const FILE_CUT = 'Файл усечён'
 const MARK = { a: '+', d: '−', n: ' ' } as const
@@ -42,8 +49,10 @@ function Line({ row, lit }: { row: DiffRow; lit: Piece[] | undefined }) {
  */
 export default function DiffTab({ rel, rev, oldPath }: { rel: string; rev: string | null; oldPath?: string }) {
   const root = useProject((s) => s.root)
-  // Локальные изменения перечитываются при каждом обновлении статуса; коммит не меняется.
+  // Локальные изменения перечитываются при каждом ответе обновления статуса (tick: и когда список
+  // файлов тот же — правка в уже изменённом файле, ↻); коммит не меняется.
   const changes = useProject((s) => (rev === null ? s.changes : null))
+  const tick = useProject((s) => (rev === null ? s.tick : 0))
   // Локально удалённый: файла на диске нет — «Открыть файл» не показываем.
   const deleted = useProject((s) => rev === null && s.changes?.some((c) => c.path === rel && c.status === 'D') === true)
   const [data, setData] = useState<Loaded | null>(null)
@@ -60,7 +69,7 @@ export default function DiffTab({ rel, rev, oldPath }: { rel: string; rev: strin
     return () => {
       alive = false
     }
-  }, [root, rel, rev, oldPath, changes])
+  }, [root, rel, rev, oldPath, changes, tick])
 
   useEffect(() => {
     if (!copied) return
@@ -94,21 +103,48 @@ export default function DiffTab({ rel, rev, oldPath }: { rel: string; rev: strin
     return { entries, cut }
   }, [parts, all])
 
-  // Подсветка — новой стороной одним текстом (многострочные комментарии); цвета берут только строки контекста.
-  const lit = useMemo(() => {
-    const side: DiffRow[] = []
-    for (const e of entries) if (e.kind === 'row' && e.row.k !== 'd') side.push(e.row)
-    const out = new Map<DiffRow, Piece[]>()
-    if (!side.some((r) => r.k === 'n')) return out
-    const pieces = highlightLines(
-      side.map((r) => r.t),
-      rel,
-    )
-    side.forEach((r, i) => {
-      if (r.k === 'n') out.set(r, pieces[i])
-    })
-    return out
-  }, [entries, rel])
+  // Подсветка — новой стороной (многострочные комментарии), кусками по CHUNK строк и только видимых;
+  // цвета берут только строки контекста.
+  const side = useMemo(() => {
+    const texts: string[] = []
+    const at = new Map<DiffRow, number>()
+    let context = false
+    for (const e of entries) {
+      if (e.kind !== 'row' || e.row.k === 'd') continue
+      at.set(e.row, texts.length)
+      texts.push(e.row.t)
+      if (e.row.k === 'n') context = true
+    }
+    return { texts, at, context, chunks: new Map<number, Piece[][]>() }
+  }, [entries])
+  const litOf = (row: DiffRow): Piece[] | undefined => {
+    if (row.k !== 'n' || !side.context) return undefined
+    const i = side.at.get(row)
+    if (i === undefined) return undefined
+    const c = Math.floor(i / CHUNK)
+    let hl = side.chunks.get(c)
+    if (!hl) {
+      hl = highlightLines(side.texts.slice(c * CHUNK, (c + 1) * CHUNK), rel)
+      side.chunks.set(c, hl)
+    }
+    return hl[i - c * CHUNK]
+  }
+
+  // Видимое окно строк: в DOM — только оно (± OVER), как в FileView.
+  const codeRef = useRef<HTMLDivElement>(null)
+  const [top, setTop] = useState(0)
+  const [viewH, setViewH] = useState(0)
+  const hasRows = entries.length > 0
+  useLayoutEffect(() => {
+    const el = codeRef.current
+    if (!el) return
+    const measure = () => setViewH(el.clientHeight)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [hasRows])
 
   const short = rev ? rev.slice(0, 7) : null
   const badge = short === null ? 'HEAD → рабочая копия' : isNew ? `новый файл в ${short}` : short
@@ -120,6 +156,12 @@ export default function DiffTab({ rel, rev, oldPath }: { rel: string; rev: strin
       .catch(() => {})
   }
 
+  const h = viewH || 800 // до замера (и в тестах) — примерно один экран
+  const win = {
+    start: Math.max(0, Math.floor((top - PAD) / LH) - OVER),
+    end: Math.min(entries.length, Math.ceil((top + h) / LH) + OVER),
+  }
+
   let body
   if (!data) body = null
   else if (data.kind === 'error') body = <div className="ed-msg">{data.message}</div>
@@ -127,17 +169,18 @@ export default function DiffTab({ rel, rev, oldPath }: { rel: string; rev: strin
   else if (entries.length === 0 && !parsed?.truncated && !parsed?.fileCut) body = <div className="ed-msg">Изменений нет</div>
   else
     body = (
-      <div className="code">
-        <div className="code-in">
-          {entries.map((e) =>
+      <div className="code" ref={codeRef} onScroll={(e) => setTop(e.currentTarget.scrollTop)}>
+        <div className="code-in" style={{ paddingTop: win.start * LH }}>
+          {entries.slice(win.start, win.end).map((e) =>
             e.kind === 'row' ? (
-              <Line key={e.key} row={e.row} lit={lit.get(e.row)} />
+              <Line key={e.key} row={e.row} lit={litOf(e.row)} />
             ) : (
               <div key={e.key} className="dl gap">
                 {unchangedLabel(e.count)}
               </div>
             ),
           )}
+          {win.end < entries.length && <div style={{ height: (entries.length - win.end) * LH }} />}
           {cut > 0 && (
             <button type="button" className="dl gap" onClick={() => setAll(true)}>
               {`… ещё ${cut} ${plural(cut, 'строка', 'строки', 'строк')} · Показать всё`}

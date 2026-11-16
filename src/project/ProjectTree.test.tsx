@@ -323,4 +323,12 @@ describe('ProjectTree', () => {
     act(() => useProject.setState((s) => ({ tick: s.tick + 1 })))
     expect(await screen.findByText('new.txt')).toBeInTheDocument()
   })
+
+  it('git, чистое дерево (git checkout/pull): тот же пустой список, новый tick — папки перечитываются', async () => {
+    act(() => useProject.setState({ notGit: false, tick: 0 }))
+    await mount()
+    fs[''] = ls(d('.gradle'), d('app'), f('pulled.txt'), f('README.md'), f('settings.gradle.kts'))
+    act(() => useProject.setState((s) => ({ tick: s.tick + 1, changes: s.changes })))
+    expect(await screen.findByText('pulled.txt')).toBeInTheDocument()
+  })
 })

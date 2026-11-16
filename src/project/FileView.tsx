@@ -51,11 +51,24 @@ export function crumbs(rel: string): { dirs: string; name: string } {
   return { dirs: dirs.map((d) => `${d} › `).join(''), name }
 }
 
+/** То же содержимое — прежний объект: подсветка не пересчитывается на каждом обновлении статуса. */
+function sameText(a: FileText | null, b: FileText): boolean {
+  if (!a || a.kind !== b.kind) return false
+  if (a.kind === 'text' && b.kind === 'text')
+    return a.size === b.size && a.truncated === b.truncated && a.lines.length === b.lines.length && a.lines.every((l, i) => l === b.lines[i])
+  if (a.kind === 'binary' && b.kind === 'binary') return a.size === b.size
+  if (a.kind === 'error' && b.kind === 'error') return a.message === b.message
+  return a.kind === 'missing'
+}
+
 /** Просмотр файла во вкладке (макет 07 `.ebar` + `.code`): только чтение, в DOM — только видимые строки. */
 export default function FileView({ rel }: { rel: string }) {
   const root = useProject((s) => s.root)
   const changes = useProject((s) => s.changes)
   const notGit = useProject((s) => s.notGit)
+  // Счётчик ответов обновления: тот же список изменений (вне git — всегда пустой, правка уже
+  // изменённого файла, ↻) — файл всё равно перечитывается.
+  const tick = useProject((s) => s.tick)
   const cursor = useProject((s) => s.cursors[rel] ?? 1)
   const focusLine = useProject((s) => s.focusLine)
   const [data, setData] = useState<FileText | null>(null)
@@ -71,10 +84,8 @@ export default function FileView({ rel }: { rel: string }) {
   useEffect(() => {
     if (!root) return
     let alive = true
-    projectRead(root, rel).then(
-      (d) => alive && setData(d),
-      (e) => alive && setData({ kind: 'error', message: String(e) }),
-    )
+    const put = (d: FileText) => alive && setData((prev) => (sameText(prev, d) ? prev : d))
+    projectRead(root, rel).then(put, (e) => put({ kind: 'error', message: String(e) }))
     // Неотслеживаемый — без полосок (как в AS); чистый файл — diff пуст, не спрашиваем git.
     if (notGit || (status !== 'mod' && status !== 'add')) setMarks(new Map())
     else
@@ -85,7 +96,7 @@ export default function FileView({ rel }: { rel: string }) {
     return () => {
       alive = false
     }
-  }, [root, rel, changes, notGit, status])
+  }, [root, rel, changes, notGit, status, tick])
 
   const lines = data?.kind === 'text' ? data.lines : null
   const hasText = lines !== null

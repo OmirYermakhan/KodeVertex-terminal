@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { gitCommitFiles, gitLog, type Change, type Commit } from './api'
 import { ChangeRow, commitSummary, filesWord } from './changeRow'
 import { useTakeFocus } from './ChangesView'
@@ -52,6 +52,53 @@ const commitKey = (hash: string) => `c:${hash}`
 const signature = (list: Commit[]) => list.map((c) => `${c.hash}\0${c.refs.join('\0')}`).join('\n')
 const fileKey = (hash: string, path: string) => `f:${hash}\0${path}`
 
+/** Строка коммита: memo — стрелки меняют выбор у двух строк, остальные не перерисовываются. */
+const CommitRow = memo(function CommitRow({
+  c,
+  sel,
+  open,
+  when,
+  selRef,
+  onPick,
+}: {
+  c: Commit
+  sel: boolean
+  open: boolean
+  when: string
+  selRef: RefObject<HTMLDivElement | null> | undefined
+  onPick: (hash: string) => void
+}) {
+  const k = commitKey(c.hash)
+  return (
+    <div
+      ref={selRef}
+      data-key={k}
+      className={sel ? 'cm sel' : 'cm'}
+      role="option"
+      aria-selected={sel}
+      aria-expanded={open}
+      title={`${c.subject}\n${c.author} · ${c.short}`}
+      onClick={() => onPick(c.hash)}
+    >
+      <span className="gr">
+        <i />
+      </span>
+      <div className="cm-b">
+        <div className="msg">{c.subject}</div>
+        <div className="meta">
+          {parseRefs(c.refs).map((r, j) => (
+            <span key={j} className={r.head ? 'ref head' : 'ref'}>
+              {r.name}
+            </span>
+          ))}
+          <span className="h">{c.short}</span>
+          <span>{when}</span>
+        </div>
+      </div>
+    </div>
+  )
+})
+
 export default function GitLog({ now }: { now?: Date }) {
   const root = useProject((s) => s.root)
   const notGit = useProject((s) => s.notGit)
@@ -68,6 +115,11 @@ function Log({ root, now }: { root: string; now?: Date }) {
   const host = useRef<HTMLDivElement>(null)
   useTakeFocus(host)
   const changes = useProject((s) => s.changes)
+  // Каждый ответ обновления статуса: `git checkout`/`pull` на чистом дереве не меняют список
+  // изменений, но меняют лог; ↻ — тоже сюда.
+  const tick = useProject((s) => s.tick)
+  /** Выбранная строка (ref ставится только ей) — прокрутка к ней без поиска по DOM. */
+  const selRow = useRef<HTMLDivElement | null>(null)
   const [commits, setCommits] = useState<Commit[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [more, setMore] = useState(false)
@@ -134,7 +186,7 @@ function Log({ root, now }: { root: string; now?: Date }) {
     return () => {
       alive = false
     }
-  }, [root, changes, ensureFiles])
+  }, [root, changes, tick, ensureFiles])
 
   const loadMore = useCallback(() => {
     const cur = commitsRef.current
@@ -186,9 +238,26 @@ function Log({ root, now }: { root: string; now?: Date }) {
   // Выбранная строка — в видимой области.
   useEffect(() => {
     if (sel === null) return
-    const el = [...(host.current?.querySelectorAll<HTMLElement>('[data-key]') ?? [])].find((x) => x.dataset.key === sel)
-    el?.scrollIntoView?.({ block: 'nearest' })
+    selRow.current?.scrollIntoView?.({ block: 'nearest' })
   }, [sel])
+
+  // Клик по коммиту: выбрать и раскрыть/свернуть. Стабильная ссылка — для memo строк.
+  const pick = useCallback(
+    (hash: string) => {
+      setSel(commitKey(hash))
+      const open = !expandedRef.current.has(hash)
+      setExpanded((s) => {
+        if (open === s.has(hash)) return s
+        const n = new Set(s)
+        if (open) n.add(hash)
+        else n.delete(hash)
+        expandedRef.current = n
+        return n
+      })
+      if (open) ensureFiles(hash)
+    },
+    [ensureFiles],
+  )
 
   const toggle = (hash: string, open?: boolean) => {
     setExpanded((s) => {
@@ -242,6 +311,7 @@ function Log({ root, now }: { root: string; now?: Date }) {
     rows.push(
       <div
         key="local"
+        ref={sel === 'local' ? selRow : undefined}
         data-key="local"
         className={sel === 'local' ? 'local sel' : 'local'}
         role="option"
@@ -258,35 +328,15 @@ function Log({ root, now }: { root: string; now?: Date }) {
   for (const c of commits ?? []) {
     const k = commitKey(c.hash)
     rows.push(
-      <div
+      <CommitRow
         key={k}
-        data-key={k}
-        className={sel === k ? 'cm sel' : 'cm'}
-        role="option"
-        aria-selected={sel === k}
-        aria-expanded={expanded.has(c.hash)}
-        title={`${c.subject}\n${c.author} · ${c.short}`}
-        onClick={() => {
-          setSel(k)
-          toggle(c.hash)
-        }}
-      >
-        <span className="gr">
-          <i />
-        </span>
-        <div className="cm-b">
-          <div className="msg">{c.subject}</div>
-          <div className="meta">
-            {parseRefs(c.refs).map((r, j) => (
-              <span key={j} className={r.head ? 'ref head' : 'ref'}>
-                {r.name}
-              </span>
-            ))}
-            <span className="h">{c.short}</span>
-            <span>{commitDate(c.time, date)}</span>
-          </div>
-        </div>
-      </div>,
+        c={c}
+        sel={sel === k}
+        open={expanded.has(c.hash)}
+        when={commitDate(c.time, date)}
+        selRef={sel === k ? selRow : undefined}
+        onPick={pick}
+      />,
     )
     if (!expanded.has(c.hash)) continue
     const fl = files.get(c.hash)
@@ -299,7 +349,7 @@ function Log({ root, now }: { root: string; now?: Date }) {
           fl.map((f) => {
             const fk = fileKey(c.hash, f.path)
             return (
-              <div key={fk} data-key={fk}>
+              <div key={fk} data-key={fk} ref={sel === fk ? selRow : undefined}>
                 <ChangeRow
                   c={f}
                   sel={sel === fk}
