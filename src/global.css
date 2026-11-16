@@ -183,6 +183,39 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .sb:hover { background: var(--hover); }
 .sb.on { background: var(--acc); color: #fff; }
 .sb svg { width: 16px; height: 16px; }
+/* Быстрые входы: значок цвета входа (--lc), открытая вкладка — плашка этого цвета, точка — сессия идёт. */
+.stripe { padding-bottom: 8px; }
+.tab-li { display: inline-flex; flex: none; margin-right: 6px; }
+.sb-sep { width: 20px; height: 1px; flex: none; background: var(--rule); margin: 4px 0; }
+.sb-launchers { flex: 1; min-height: 0; width: 100%; overflow-y: auto; scrollbar-width: none; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.sb-launchers::-webkit-scrollbar { display: none; }
+.sb-l { position: relative; color: var(--lc); }
+.sb-l.on { background: var(--lc); color: #fff; }
+.sb-live { position: absolute; right: 3px; bottom: 3px; width: 6px; height: 6px; border-radius: 50%; background: #3fb950; box-shadow: 0 0 0 1.5px var(--panel); }
+.sb-l.on .sb-live { box-shadow: 0 0 0 1.5px var(--lc); }
+.sb-add { margin-top: 4px; }
+.sb-menu { position: fixed; z-index: 120; min-width: 150px; padding: 4px; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); display: flex; flex-direction: column; }
+.sb-menu button { text-align: left; padding: 6px 10px; border: 0; border-radius: 5px; background: transparent; color: var(--text); font: inherit; font-size: 13px; cursor: default; }
+.sb-menu button:hover { background: var(--acc); color: #fff; }
+.sb-menu button.danger:hover { background: #d9534f; }
+/* Окно «Новый вход» */
+.st-panel.ld { width: 460px; }
+.ld-body { display: flex; flex-direction: column; gap: 14px; padding: 16px 18px; }
+.ld-field { display: flex; flex-direction: column; gap: 6px; }
+.ld-field > span { font-size: 12px; text-transform: uppercase; color: var(--muted); }
+.ld-field input { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--rule); border-radius: 6px; padding: 7px 10px; outline: none; }
+.ld-field input:focus { border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc); }
+.ld-field input.ld-cmd { font-family: var(--font-code); font-size: 13px; }
+.ld-icons { display: grid; grid-template-columns: repeat(6, 34px); gap: 6px; }
+.st-panel .ld-icon { width: 34px; height: 34px; padding: 0; display: grid; place-items: center; border-radius: 7px; }
+.st-panel .ld-icon.on { border-color: currentColor; box-shadow: 0 0 0 1px currentColor; }
+.ld-colors { display: flex; gap: 8px; }
+.st-panel .ld-color { width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 2px solid transparent; }
+.st-panel .ld-color.on { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--strong); }
+.ld-foot { display: flex; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--rule); }
+.st-panel .ld-save { background: var(--acc); border-color: var(--acc); color: #fff; }
+.st-panel .ld-save:disabled { opacity: 0.5; }
+.st-panel .ld-del { color: #f0646e; }
 
 /* Окно инструмента (макет 07 .tw/.twh); ширина — из стора, правый край тянется (.tw-resize). */
 .tw { position: relative; flex: none; box-sizing: border-box; background: var(--panel2); border-right: 1px solid var(--rule); display: flex; flex-direction: column; min-height: 0; font-family: var(--font-text); line-height: normal; color: var(--text); outline: none; }
@@ -271,7 +304,10 @@ body.tw-resizing, body.tw-resizing * { cursor: col-resize !important; user-selec
 /* Просмотр справа, только чтение (макет 07 .ed/.etabs/.et). Изменения (.full) — во всю ширину вместо панелей. */
 .ed { flex: 1.15; min-width: 0; border-left: 1px solid var(--rule); display: flex; flex-direction: column; background: var(--bg); font-family: var(--font-text); line-height: normal; color: var(--text); outline: none; }
 .ed.full { flex: 1; }
-.etabs { display: flex; height: 34px; box-sizing: border-box; background: var(--panel2); border-bottom: 1px solid var(--rule); flex: none; font-size: 12.5px; overflow: hidden; }
+.etabs { display: flex; height: 34px; box-sizing: border-box; background: var(--panel2); border-bottom: 1px solid var(--rule); flex: none; font-size: 12.5px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.etabs::-webkit-scrollbar { display: none; }
+.et-all { position: sticky; right: 0; margin-left: auto; flex: none; padding: 0 12px; border: 0; border-left: 1px solid var(--rule); background: var(--panel2); color: var(--muted); font: inherit; white-space: nowrap; cursor: default; }
+.et-all:hover { color: var(--strong); background: var(--hover); }
 .et { display: flex; align-items: center; gap: 6px; padding: 0 10px 0 12px; color: var(--text); border-right: 1px solid var(--rule); position: relative; white-space: nowrap; user-select: none; cursor: default; }
 .et.on { background: var(--bg); color: var(--strong); }
 .et.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--acc); }

@@ -13,6 +13,9 @@ interface UiState {
   agentRequest: { paneId: string; agentId: string} | null
   requestAgent(paneId: string, agentId: string): void
   clearAgentRequest(): void
+  /** Окно быстрого входа: { id: null } — новый, иначе правка; null — закрыто. */
+  launcherEdit: { id: string | null } | null
+  setLauncherEdit(v: { id: string | null } | null): void
 }
 
 export const useUi = create<UiState>((set) => ({
@@ -25,4 +28,6 @@ export const useUi = create<UiState>((set) => ({
   agentRequest: null,
   requestAgent: (paneId, agentId) => set({ agentRequest: { paneId, agentId }, agentsHidden: false }),
   clearAgentRequest: () => set({ agentRequest: null }),
+  launcherEdit: null,
+  setLauncherEdit: (launcherEdit) => set({ launcherEdit }),
 }))

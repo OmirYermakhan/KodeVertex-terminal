@@ -5,7 +5,7 @@ import { applyTheme } from '../theme/applyTheme'
 
 describe('settings', () => {
   it('defaults', () => {
-    expect(DEFAULTS).toEqual({ theme: 'as', textFont: 'Inter', codeFont: 'JetBrains Mono', textSize: 16, codeSize: 13, lineHeight: 1.7, ligatures: true, pathCompletions: true, notifySystem: true, notifySound: true, notifySubagents: false, notifyLongCommands: true, claudePermissionMode: 'acceptEdits', claudePromptSuggestions: true, claudeDiagrams: true })
+    expect(DEFAULTS).toEqual({ theme: 'as', textFont: 'Inter', codeFont: 'JetBrains Mono', textSize: 16, codeSize: 13, lineHeight: 1.7, ligatures: true, pathCompletions: true, notifySystem: true, notifySound: true, notifySubagents: false, notifyLongCommands: true, claudePermissionMode: 'acceptEdits', claudePromptSuggestions: true, claudeDiagrams: true, launchers: [] })
     expect(normalizeSettings(undefined)).toEqual(DEFAULTS)
     expect(normalizeSettings('мусор')).toEqual(DEFAULTS)
   })

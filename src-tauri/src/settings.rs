@@ -41,6 +41,16 @@ mod tests {
   use super::*;
   use serde_json::json;
 
+  #[test]
+  fn launchers_roundtrip() {
+    let d = tmp("launchers");
+    let p = d.join("settings.toml");
+    let v = json!({"theme": "as", "launchers": [{"id": "a", "name": "prod", "command": "ssh u@h", "icon": "server", "color": "#4f8cff"}], "textSize": 16, "z": true});
+    save_to(&p, &v).unwrap();
+    assert_eq!(load_from(&p).unwrap(), v);
+    let _ = std::fs::remove_dir_all(&d);
+  }
+
   fn tmp(name: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("kv-settings-{}-{}", name, std::process::id()));
     let _ = std::fs::remove_dir_all(&d);

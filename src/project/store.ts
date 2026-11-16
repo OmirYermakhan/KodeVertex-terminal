@@ -95,6 +95,8 @@ interface ProjectState extends RootView {
   openFile(rel: string, line?: number): void
   openDiff(rel: string, rev: string | null, oldPath?: string | null): void
   closeTab(i: number): void
+  /** «Закрыть все» в полосе вкладок просмотра. */
+  closeAllTabs(): void
   setCursor(rel: string, line: number): void
   markClaudeTouched(absPath: string): void
   /** Новая сессия Claude: «Claude менял» начинается заново. */
@@ -226,6 +228,7 @@ export const useProject = create<ProjectState>((set, get) => {
         const active = i < s.active || (i === s.active && i >= tabs.length) ? Math.max(0, s.active - 1) : s.active
         return { tabs, active: Math.min(active, Math.max(0, tabs.length - 1)) }
       }),
+    closeAllTabs: () => set((s) => (s.tabs.length === 0 ? {} : { tabs: [], active: 0 })),
     setCursor: (rel, line) => set((s) => (s.cursors[rel] === line ? {} : { cursors: { ...s.cursors, [rel]: line } })),
     markClaudeTouched: (absPath) => {
       const s = get()

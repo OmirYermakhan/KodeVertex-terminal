@@ -42,6 +42,8 @@ import { Feed } from '../feed/FeedView'
 import { LiveTerminal } from '../feed/LiveTerminal'
 import { registerPaneCommands, type PaneAction } from '../feed/paneCommands'
 import { FindBar, type FindBarHandle } from '../feed/FindBar'
+import { parseClaudeCommand } from '../input/claudeCommand'
+import { registerPaneRunner, takePending, usePaneRunning } from '../launch/runner'
 import { feedAttachment, quoteAttachment } from '../attach/fromFeed'
 import { QuoteReply, quoteSelection, type QuoteSel } from '../claude/QuoteReply'
 import { DROP_TITLE, DROP_TITLE_SHELL, DROP_TITLE_SHELL_MANY, dropSubline, registerDropTarget, setAttachCount, useDrop } from '../attach/dragDrop'
@@ -218,6 +220,20 @@ export function TerminalPane(p: TerminalPaneProps) {
   // ↵ отправлен, оболочка ещё не начала команду (нет C) и не вернула приглашение (нет A):
   // второй ↵ ушёл бы в stdin первой команды — строка ввода пока неактивна.
   const [awaiting, setAwaiting] = useState(false)
+  const awaitingRef = useRef(false)
+  useEffect(() => {
+    awaitingRef.current = awaiting
+  })
+  // Быстрый вход: команда ждёт первого приглашения оболочки (и готового PTY).
+  const promptSeenRef = useRef(false)
+  const runPendingRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    usePaneRunning.getState().set(p.paneId, running)
+  }, [p.paneId, running])
+  useEffect(() => {
+    const paneId = p.paneId
+    return () => usePaneRunning.getState().set(paneId, false)
+  }, [p.paneId])
   const awaitTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const setAwaitingShell = useCallback((v: boolean) => {
     clearTimeout(awaitTimer.current)
@@ -361,6 +377,8 @@ export function TerminalPane(p: TerminalPaneProps) {
         // Строка принята, но команда не запустилась (ошибка разбора): её вывод — блоком.
         if (acceptedRef.current !== null) flushStray(acceptedRef.current)
         acceptedRef.current = null
+        promptSeenRef.current = true
+        runPendingRef.current()
         return true
       }
       const at = Date.now()
@@ -445,6 +463,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         handleRef.current = h
         // Resizes during the in-flight spawn were dropped; sync the current size.
         h.resize(term.cols, term.rows)
+        if (promptSeenRef.current) runPendingRef.current()
       })
       .catch((err) => {
         console.error('pty_spawn failed:', err)
@@ -842,6 +861,39 @@ export function TerminalPane(p: TerminalPaneProps) {
     setSelected(null)
     feedCleared(p.paneId, from)
   }, [p.paneId])
+  // Быстрый вход: команда входа (ssh …) в этой панели. Лента очищается — сессия начинается заново.
+  const runLauncher = useCallback(
+    (cmd: string) => {
+      if (!handleRef.current || !promptSeenRef.current) return false
+      // `claude [вопрос]` — наши карточки, как из строки ввода (не полноэкранный TUI в PTY).
+      const c = parseClaudeCommand(cmd)
+      if (c.kind !== 'shell') {
+        const input = inputRef.current
+        if (!input) return false
+        if (itemsRef.current.length > 0) onClearFeed()
+        input.enterClaude(c.kind === 'ask' ? c.text : undefined)
+        return true
+      }
+      if (itemsRef.current.length > 0) onClearFeed()
+      return onRun(c.cmd)
+    },
+    [onClearFeed, onRun],
+  )
+  useEffect(() => {
+    runPendingRef.current = () => {
+      if (!handleRef.current || runningRef.current) return
+      const cmd = takePending(p.paneId)
+      if (cmd !== null) runLauncher(cmd)
+    }
+  })
+  useEffect(
+    () =>
+      registerPaneRunner(p.paneId, {
+        run: runLauncher,
+        busy: () => runningRef.current || awaitingRef.current || claudeOpen(useClaudeSessions.getState().sessions[p.paneId]),
+      }),
+    [p.paneId, runLauncher],
+  )
   // `claude [вопрос]` ↵ — наши карточки вместо полноэкранного TUI (в PTY ничего не уходит).
   const onEnterClaude = useCallback(
     (question?: string) => {

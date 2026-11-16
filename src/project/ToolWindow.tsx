@@ -7,7 +7,7 @@ import { useProject, type Tool } from './store'
 
 /** Заголовок окна (макет 07 `.twh`): название, серая подпись, кнопки справа; «—» — скрыть. */
 const HEAD: Record<Tool, { title: string; sub: (branch: string | null) => string; acts: string[] }> = {
-  project: { title: 'Проект', sub: () => '', acts: ['⌖', '⇕', '⋮'] },
+  project: { title: 'Проект', sub: () => '', acts: [] },
   changes: { title: 'Изменения', sub: (b) => b ?? '', acts: ['↻', '⇕'] },
   git: { title: 'Git', sub: (b) => (b ? `лог · ${b}` : 'лог'), acts: ['⌕', '↻'] },
 }

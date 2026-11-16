@@ -4,6 +4,8 @@ import { projectName, useHome, type GitInfo } from '../status/useGitInfo'
 import { claudeOpen, useClaudeSessions } from '../claude/sessionStore'
 import { tabStatus } from './tabStatus'
 import ProjectButton from '../project/ProjectButton'
+import { useSettings } from '../settings/store'
+import { LauncherIcon } from '../launch/LauncherIcon'
 
 export function tabTitle(t: Tab, git: GitInfo | null = null, home = ''): string {
   const cwd = t.cwd[t.focused]
@@ -27,6 +29,7 @@ export default function TabBar({ activeGit = null }: { activeGit?: GitInfo | nul
   const sessions = useClaudeSessions((s) => s.sessions)
   const { activate, closeTab, newTab } = useTabs.getState()
   const home = useHome()
+  const launchers = useSettings((s) => s.settings.launchers)
   // Когда вкладку смотрели в последний раз: «готово» после этого — ещё не увиденное.
   const [seen, setSeen] = useState<Record<string, number>>({})
 
@@ -47,6 +50,7 @@ export default function TabBar({ activeGit = null }: { activeGit?: GitInfo | nul
         if (st && st.status !== 'done') dot = st.status
         else if (st?.status === 'done' && !on && st.doneAt > (seen[t.id] ?? 0)) dot = 'done'
         const claude = claudeOpen(sessions[t.focused])
+        const l = t.launcher ? launchers.find((x) => x.id === t.launcher) : undefined
         return (
           <div
             key={t.id}
@@ -59,8 +63,13 @@ export default function TabBar({ activeGit = null }: { activeGit?: GitInfo | nul
             }}
           >
             {dot && <i className={`tdot ${dot}`} data-testid="tab-dot" data-status={dot} />}
+            {l && (
+              <span className="tab-li" style={{ color: l.color }}>
+                <LauncherIcon icon={l.icon} size={13} />
+              </span>
+            )}
             <span>
-              {tabTitle(t, on ? activeGit : null, home)}
+              {l ? l.name : tabTitle(t, on ? activeGit : null, home)}
               {claude ? ' · claude' : ''}
             </span>
             <button

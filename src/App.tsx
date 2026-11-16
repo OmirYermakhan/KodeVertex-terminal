@@ -16,6 +16,7 @@ import { installNotifications } from './notify/notify'
 import { claudeOpen, useClaudeSessions } from './claude/sessionStore'
 import { installDragDrop, useAttachCount } from './attach/dragDrop'
 import Stripe from './project/Stripe'
+import LauncherDialog from './launch/LauncherDialog'
 import ToolWindow from './project/ToolWindow'
 import Viewer from './project/Viewer'
 import { useProject } from './project/store'
@@ -50,6 +51,7 @@ export default function App() {
   })
   const settingsOpen = useUi((s) => s.settingsOpen)
   const paletteOpen = useUi((s) => s.paletteOpen)
+  const launcherEdit = useUi((s) => s.launcherEdit)
   // Вкладка изменений занимает всю область справа: панели терминала скрыты как неактивная вкладка
   // (смонтированы; при возврате — фокус в строку ввода и доведённые анимации, см. PaneView).
   const diffOpen = useProject((s) => s.tabs[s.active]?.kind === 'diff')
@@ -89,6 +91,8 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       const a = matchKey(e)
       if (!a) return
+      // Окно быстрого входа: клавиши (⌘A, ⌘←…) — его полям.
+      if (useUi.getState().launcherEdit) return
       e.preventDefault()
       e.stopPropagation()
       // Автоповтор только для размера шрифта: зажатый ⌘W не должен закрыть всё подряд.
@@ -150,6 +154,7 @@ export default function App() {
       </div>
       <Toasts />
       {paletteOpen && <CommandPalette onClose={() => useUi.getState().setPaletteOpen(false)} />}
+      {launcherEdit && <LauncherDialog key={launcherEdit.id ?? 'new'} editId={launcherEdit.id} onClose={() => useUi.getState().setLauncherEdit(null)} />}
       <SettingsPanel open={settingsOpen} onClose={() => useUi.getState().setSettingsOpen(false)} />
     </div>
   )

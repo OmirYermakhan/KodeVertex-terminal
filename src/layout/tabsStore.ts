@@ -6,6 +6,8 @@ export interface Tab {
   tree: PaneNode
   focused: string
   cwd: Record<string, string>
+  /** Вкладка быстрого входа (id из настроек): её первая панель запускает команду входа. */
+  launcher?: string
 }
 
 /** Больше стольких автозапусков последней вкладки за окно — оболочка падает сразу. */
@@ -18,7 +20,8 @@ interface TabsState {
   active: string
   /** Времена автозапусков новой вкладки после выхода оболочки в последней. */
   respawns: number[]
-  newTab(cwd?: string): void
+  /** Возвращает id новой вкладки (он же id её единственной панели). */
+  newTab(cwd?: string, launcher?: string): string
   closeTab(id: string): void
   activate(id: string): void
   activateIndex(i: number): void
@@ -33,9 +36,9 @@ interface TabsState {
   setRatio(tabId: string, path: ('a' | 'b')[], ratio: number): void
 }
 
-function makeTab(cwd?: string): Tab {
+function makeTab(cwd?: string, launcher?: string): Tab {
   const id = crypto.randomUUID()
-  return { id, tree: leaf(id), focused: id, cwd: cwd ? { [id]: cwd } : {} }
+  return { id, tree: leaf(id), focused: id, cwd: cwd ? { [id]: cwd } : {}, ...(launcher ? { launcher } : {}) }
 }
 
 export function initialTabsState(): Pick<TabsState, 'tabs' | 'active' | 'respawns'> {
@@ -82,11 +85,11 @@ function removeTab(s: TabsState, id: string, byExit = false): Partial<TabsState>
 
 export const useTabs = create<TabsState>((set) => ({
   ...initialTabsState(),
-  newTab: (cwd) =>
-    set((s) => {
-      const t = makeTab(cwd)
-      return { tabs: [...s.tabs, t], active: t.id }
-    }),
+  newTab: (cwd, launcher) => {
+    const t = makeTab(cwd, launcher)
+    set((s) => ({ tabs: [...s.tabs, t], active: t.id }))
+    return t.id
+  },
   closeTab: (id) => set((s) => removeTab(s, id)),
   activate: (id) => set((s) => (s.tabs.some((t) => t.id === id) ? { active: id } : {})),
   activateIndex: (i) =>

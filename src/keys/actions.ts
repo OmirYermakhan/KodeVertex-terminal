@@ -15,7 +15,8 @@ export function runAction(a: Action): void {
     case 'splitDown': return tabs.split('col')
     case 'newTab': {
       const t = tabs.tabs.find((x) => x.id === tabs.active)
-      return tabs.newTab(t?.cwd[t.focused])
+      tabs.newTab(t?.cwd[t.focused])
+      return
     }
     case 'closePane': {
       // Фокус в просмотре — закрыть его вкладку, панели терминала не трогать. Активна вкладка изменений —

@@ -1,4 +1,5 @@
 import type { ThemeId } from '../theme/themes'
+import { normalizeLaunchers, type Launcher } from '../launch/launchers'
 
 /**
  * Режим разрешений процесса `claude` (`--permission-mode`): `default` — спрашивать всё,
@@ -37,6 +38,8 @@ export interface Settings {
    * mermaid, лента показывает их картинкой. Подсказка — со следующего запуска сессии.
    */
   claudeDiagrams: boolean
+  /** Быстрые входы (+ внизу полосы слева): команда, значок, цвет — каждый своей вкладкой. */
+  launchers: Launcher[]
 }
 
 export const DEFAULTS: Settings = {
@@ -55,6 +58,7 @@ export const DEFAULTS: Settings = {
   claudePermissionMode: 'acceptEdits',
   claudePromptSuggestions: true,
   claudeDiagrams: true,
+  launchers: [],
 }
 
 const THEME_IDS: ThemeId[] = ['kv', 'warm', 'cold', 'light', 'as']
@@ -104,6 +108,7 @@ export function normalizeSettings(raw: unknown): Settings {
       : DEFAULTS.claudePermissionMode,
     claudePromptSuggestions: bool(r.claudePromptSuggestions, DEFAULTS.claudePromptSuggestions),
     claudeDiagrams: bool(r.claudeDiagrams, DEFAULTS.claudeDiagrams),
+    launchers: normalizeLaunchers(r.launchers),
   }
 }
 

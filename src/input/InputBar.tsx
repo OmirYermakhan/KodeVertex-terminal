@@ -184,6 +184,8 @@ export interface InputBarHandle {
   load(d: Doc): boolean
   /** ⌘P «Режим Claude»: включить (как `claude` ↵) или выключить (как esc на пустой строке). */
   toggleClaude(): void
+  /** Быстрый вход с командой `claude [вопрос]`: режим Claude, как после ↵ в строке. */
+  enterClaude(question?: string): boolean
   /** Палитра ⌘P: поиск по истории, как ⌃R в строке. */
   openHistorySearch(): void
   /** ⌘P «/model»: карточка выбора модели, как после `/model` ↵ (набранное в строке остаётся). */
@@ -684,6 +686,16 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       if (claudeRef.current) setClaudeMode(false)
       else if (q.onEnterClaude()) setClaudeMode(true)
       edRef.current?.focus()
+    },
+    enterClaude: (question) => {
+      const q = props.current
+      completionRef.current.close()
+      hintsRef.current.reset()
+      setAt(null)
+      if (!q.onEnterClaude(question)) return false
+      setClaudeMode(true)
+      edRef.current?.focus()
+      return true
     },
     openModelPicker: () => {
       const q = props.current
