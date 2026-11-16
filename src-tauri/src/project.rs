@@ -73,7 +73,7 @@ pub fn project_root_at(cwd: &Path) -> String {
   let deadline = Instant::now() + GIT_TIMEOUT;
   let top = cwd.to_str().and_then(|c| {
     let args = git_args(c, &["rev-parse", "--show-toplevel"]);
-    run_cmd("git", &args, Path::new("."), &env_refs(&git_env(&[], &[])), deadline)
+    run_cmd(crate::git::git_bin(), &args, Path::new("."), &env_refs(&git_env(&[], &[])), deadline)
   });
   match top.filter(|s| !s.is_empty()) {
     Some(t) => t,
@@ -230,12 +230,12 @@ impl<'a> Git<'a> {
   }
 
   fn run(&self, args: &[&str]) -> Option<String> {
-    run_cmd("git", &git_args(self.cwd, args), Path::new("."), &env_refs(&self.env), self.deadline)
+    run_cmd(crate::git::git_bin(), &git_args(self.cwd, args), Path::new("."), &env_refs(&self.env), self.deadline)
   }
 
   /// Вывод без обрезки пробелов и с потолком `max` байт; true — вывод урезан.
   fn run_raw(&self, args: &[&str], max: usize) -> Option<(String, bool)> {
-    run_cmd_capped("git", &git_args(self.cwd, args), Path::new("."), &env_refs(&self.env), self.deadline, max)
+    run_cmd_capped(crate::git::git_bin(), &git_args(self.cwd, args), Path::new("."), &env_refs(&self.env), self.deadline, max)
   }
 
   fn has_head(&self) -> bool {

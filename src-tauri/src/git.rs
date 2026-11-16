@@ -119,6 +119,27 @@ pub(crate) fn git_env(keys: &[String], extra: &[(&str, &str)]) -> Vec<(String, S
   env
 }
 
+/// Где искать git. Приложение из Finder получает PATH `/usr/bin:/bin:…`, а `/usr/bin/git` —
+/// заглушка Xcode: без Command Line Tools она падает (`xcrun: invalid active developer path`),
+/// и панель проекта считала любую папку «не git». Поэтому кроме PATH — обычные места установки.
+const GIT_CANDIDATES: &[&str] = &["git", "/opt/homebrew/bin/git", "/usr/local/bin/git", "/opt/local/bin/git"];
+
+/// Первый кандидат, для которого `works` вернул true.
+fn pick_git<'a>(candidates: &[&'a str], works: impl Fn(&str) -> bool) -> Option<&'a str> {
+  candidates.iter().copied().find(|c| works(c))
+}
+
+/// Рабочий git (проверяется один раз — `git --version` с кодом 0); не нашли — просто "git".
+pub(crate) fn git_bin() -> &'static str {
+  static BIN: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+  BIN.get_or_init(|| {
+    let works = |p: &str| {
+      run_cmd_code(p, &["--version"], Path::new("."), GIT_ENV, Instant::now() + GIT_TIMEOUT).is_some_and(|(_, code)| code == Some(0))
+    };
+    pick_git(GIT_CANDIDATES, works).unwrap_or("git")
+  })
+}
+
 /// Пары окружения как ссылки — для `run_cmd`.
 pub(crate) fn env_refs(env: &[(String, String)]) -> Vec<(&str, &str)> {
   env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
@@ -127,7 +148,7 @@ pub(crate) fn env_refs(env: &[(String, String)]) -> Vec<(&str, &str)> {
 /// `git -C <cwd> <args>` с общим дедлайном и защитными настройками.
 fn run_git(cwd: &Path, args: &[&str], deadline: Instant) -> Option<String> {
   let env = git_env(&[], &[]);
-  run_cmd("git", &git_args(cwd.to_str()?, args), Path::new("."), &env_refs(&env), deadline)
+  run_cmd(git_bin(), &git_args(cwd.to_str()?, args), Path::new("."), &env_refs(&env), deadline)
 }
 
 /// Фильтры (`filter.<имя>.clean/smudge/process`) из конфига: `git status`/`diff` запускают их
@@ -141,7 +162,7 @@ pub(crate) fn filter_overrides(cwd: &Path, deadline: Instant) -> Option<Vec<Stri
   let env = git_env(&[], &[]);
   let args = git_args(c, &["config", "-z", "--name-only", "--get-regexp", FILTER_RE]);
   // Код 1 — совпадений нет: это тоже ответ («фильтров нет»).
-  let (names, code) = run_cmd_code("git", &args, Path::new("."), &env_refs(&env), deadline)?;
+  let (names, code) = run_cmd_code(git_bin(), &args, Path::new("."), &env_refs(&env), deadline)?;
   matches!(code, Some(0 | 1)).then(|| filter_overrides_from(&names))
 }
 
@@ -218,13 +239,13 @@ fn git_info_with(cwd: &Path, list_filters: FilterLister) -> GitInfo {
   // Отслеживаемые изменения — без обхода неотслеживаемых (в большом репозитории он не успевал
   // за дедлайн) и без подмодулей (их конфиг с фильтрами не перекрыт). Дедлайн — свой, полный.
   let args = git_args(c, &["status", "--porcelain", "--untracked-files=no", "--ignore-submodules=all"]);
-  let tracked = run_cmd("git", &args, Path::new("."), &env, Instant::now() + GIT_TIMEOUT);
+  let tracked = run_cmd(git_bin(), &args, Path::new("."), &env, Instant::now() + GIT_TIMEOUT);
   let mut dirty = tracked.is_some_and(|s| !s.is_empty());
   if !dirty {
     // Неотслеживаемые: хватает первого (потолок вывода в 1 байт — git сразу останавливается),
     // `--directory` не спускается в неотслеживаемые папки.
     let args = git_args(c, &["ls-files", "--others", "--exclude-standard", "--directory", "--no-empty-directory"]);
-    dirty = run_cmd_capped("git", &args, Path::new("."), &env, Instant::now() + UNTRACKED_TIMEOUT, 1).is_some_and(|(s, _)| !s.is_empty());
+    dirty = run_cmd_capped(git_bin(), &args, Path::new("."), &env, Instant::now() + UNTRACKED_TIMEOUT, 1).is_some_and(|(s, _)| !s.is_empty());
   }
   GitInfo { root: Some(root), branch, dirty }
 }
@@ -238,6 +259,15 @@ pub async fn git_info(cwd: String) -> GitInfo {
 #[cfg(test)]
 pub(crate) mod tests {
   use super::*;
+
+  #[test]
+  fn pick_git_skips_broken_candidates() {
+    // Из Finder PATH = /usr/bin:…, а /usr/bin/git без Command Line Tools — нерабочая заглушка.
+    let works = |p: &str| p == "/opt/homebrew/bin/git";
+    assert_eq!(pick_git(&["git", "/opt/homebrew/bin/git", "/usr/bin/git"], works), Some("/opt/homebrew/bin/git"));
+    assert_eq!(pick_git(&["git", "/opt/homebrew/bin/git"], |_| true), Some("git"));
+    assert_eq!(pick_git(&["git"], |_| false), None);
+  }
 
   fn git(dir: &Path, args: &[&str]) {
     let ok = Command::new("git")
