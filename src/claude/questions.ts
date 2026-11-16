@@ -119,13 +119,51 @@ function isHidden(c: number): boolean {
   )
 }
 
-/** Невидимые символы — видимой меткой `⟨U+202E⟩`: в запросе разрешения видно всё, что уйдёт в инструмент. */
+/** Столько пустых строк подряд и больше — одной меткой «⟨12 пустых строк⟩». */
+export const BLANK_RUN = 3
+/** Столько пробелов подряд и больше — одной меткой «⟨40 пробелов⟩». */
+export const SPACE_RUN = 20
+
+/** Русское число: 1 строка, 2 строки, 5 строк. */
+function plural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10
+  const m100 = n % 100
+  const w = m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many
+  return `${n} ${w}`
+}
+
+export const blankMark = (n: number) => `⟨${plural(n, 'пустая строка', 'пустые строки', 'пустых строк')}⟩`
+export const spaceMark = (n: number) => `⟨${plural(n, 'пробел', 'пробела', 'пробелов')}⟩`
+
+/**
+ * Невидимые символы — видимой меткой `⟨U+202E⟩`, длинные пробелы и пустые строки — меткой с числом:
+ * в запросе разрешения видно всё, что уйдёт в инструмент (хвост команды не спрятать за экран пустоты).
+ */
 export function neutralize(s: string): string {
   let out = ''
   // По кодовым точкам, а не по UTF-16: теги (U+E0000…) — суррогатные пары.
   for (const ch of s) {
     const c = ch.codePointAt(0)!
     out += isHidden(c) ? `⟨U+${c.toString(16).toUpperCase().padStart(4, '0')}⟩` : ch
+  }
+  // Пустые (или из пробелов и табуляций) строки подряд: \n + n×(пусто\n) — метка между переводами.
+  out = out.replace(new RegExp(`\\n(?:[ \\t]*\\n){${BLANK_RUN},}`, 'g'), (m) => `\n${blankMark(m.split('\n').length - 2)}\n`)
+  return out.replace(new RegExp(` {${SPACE_RUN},}`, 'g'), (m) => spaceMark(m.length))
+}
+
+/** Пустые строки подряд в строках правки (каждая — отдельной ViewLine) — тоже одной меткой. */
+function collapseBlankLines(lines: ViewLine[]): ViewLine[] {
+  const out: ViewLine[] = []
+  for (let i = 0; i < lines.length; ) {
+    let j = i
+    while (j < lines.length && lines[j].k === lines[i].k && !lines[j].t.trim()) j++
+    if (j - i >= BLANK_RUN) {
+      out.push({ k: lines[i].k, t: blankMark(j - i) })
+      i = j
+    } else {
+      out.push(lines[i])
+      i++
+    }
   }
   return out
 }
@@ -267,11 +305,12 @@ export function permissionView(tool: string, input: Record<string, unknown>): Pe
   }
   const rest = Object.fromEntries(Object.entries(input).filter(([k]) => !used.has(k)))
   const extra = Object.keys(rest).length ? pretty(rest) : ''
+  const shown = collapseBlankLines(out)
   return {
     target: neutralize(target),
     code: neutralize(code),
-    lines: out.slice(0, VIEW_LINES).map((l) => ({ k: l.k, t: neutralize(l.t) })),
-    more: Math.max(0, out.length - VIEW_LINES),
+    lines: shown.slice(0, VIEW_LINES).map((l) => ({ k: l.k, t: neutralize(l.t) })),
+    more: Math.max(0, shown.length - VIEW_LINES),
     facts,
     extra: neutralize(extra),
     agentNote: neutralize(agentNote),

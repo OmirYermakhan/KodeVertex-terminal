@@ -27,8 +27,10 @@ function Output({ block }: { block: ShellBlock }) {
   const html = block.html ?? ''
   // Длинный блок рисуем свёрнутым: первые COLLAPSED_ROWS строк и кнопка.
   const collapsed = !all && block.lines > COLLAPSE_LINES
-  // HTML восстановленной ленты читается с диска (session.json): форма аддона проверяется один раз на HTML.
-  const safe = useMemo(() => isSerializedHtml(html), [html])
+  // Блок этого запуска — HTML прямо из SerializeAddon. HTML восстановленной ленты читается с диска
+  // (session.json): форма аддона проверяется один раз на HTML.
+  const live = block.live === true
+  const safe = useMemo(() => live || isSerializedHtml(html), [html, live])
   const shown = useMemo(
     () => (!safe ? '' : collapsed ? serializedRows(html).slice(0, COLLAPSED_ROWS).join('') : html),
     [html, collapsed, safe],
@@ -38,7 +40,7 @@ function Output({ block }: { block: ShellBlock }) {
   return (
     <>
       {safe ? (
-        // HTML только из SerializeAddon (текст экранирован аддоном), форма проверена isSerializedHtml.
+        // HTML только из SerializeAddon (текст экранирован аддоном); с диска — форма проверена isSerializedHtml.
         <div className="out" dangerouslySetInnerHTML={{ __html: shown }} />
       ) : (
         // Не та форма (подправленный файл сессии) — только текст.

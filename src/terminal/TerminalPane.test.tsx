@@ -1,4 +1,4 @@
-import { act, fireEvent, render } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PtyHandle, SpawnOptions } from './ptyClient'
 
@@ -440,16 +440,16 @@ describe('TerminalPane', () => {
         invoke.mockImplementation(async (cmd: string) => (cmd === 'claude_start' ? 'c1' : undefined))
       }
 
-      it('⌘↵: карточка «Вы» сразу, claude_start в cwd панели, затем claude_send; второй — только send', async () => {
+      it('⌘↵: карточка «Вы», claude_start в cwd панели, затем claude_send; второй — только send', async () => {
         claudeOk()
         await mounted()
         type('что тут?')
         keyIn('Enter', { metaKey: true })
         expect(inputText()).toBe('')
-        expect(document.querySelector('.you')?.textContent).toContain('что тут?')
         await act(async () => await flush())
-        // claude_control — запрос текущих модели и усилия после запуска.
-        const names = calls().map((c) => c[0]).filter((n) => n.startsWith('claude'))
+        expect(document.querySelector('.you')?.textContent).toContain('что тут?')
+        // claude_control — запрос текущих модели и усилия после запуска (проверка доверия к папке — не в счёт).
+        const names = calls().map((c) => c[0]).filter((n) => n.startsWith('claude') && n !== 'claude_trust_check')
         expect(names).toEqual(['claude_start', 'claude_control', 'claude_send'])
         expect(calls().find((c) => c[0] === 'claude_start')![1]).toMatchObject({ cwd: '/w', resume: null })
         expect(calls().find((c) => c[0] === 'claude_send')![1]).toEqual({ id: 'c1', text: 'что тут?' })
@@ -461,7 +461,45 @@ describe('TerminalPane', () => {
         type('ещё')
         keyIn('Enter', { metaKey: true })
         await act(async () => await flush())
-        expect(calls().map((c) => c[0]).filter((n) => n.startsWith('claude'))).toEqual(['claude_start', 'claude_control', 'claude_send', 'claude_send'])
+        expect(calls().map((c) => c[0]).filter((n) => n.startsWith('claude') && n !== 'claude_trust_check')).toEqual(['claude_start', 'claude_control', 'claude_send', 'claude_send'])
+      })
+
+      it('папка не доверенная: ⌘↵ — блок «Доверять папке»; esc — сообщение в строке, режим Claude выключен; «Доверять» — отправка', async () => {
+        const { resetTrustForTests } = await import('../claude/sessionStore')
+        const { ARM_MS } = await import('../claude/PermissionPrompt')
+        resetTrustForTests()
+        invoke.mockImplementation(async (cmd: string) => (cmd === 'claude_trust_check' ? false : cmd === 'claude_start' ? 'c1' : undefined))
+        await mounted()
+        type('что тут?')
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        const box = () => document.querySelector('.aprompt') as HTMLElement
+        expect(box().querySelector('.ap-who')!.textContent).toBe('? Доверять папке')
+        expect(box().querySelector('pre.p-code')!.textContent).toBe('/w')
+        expect(box().querySelector('.p-note')!.textContent).toContain('.claude/')
+        expect(screen.getAllByRole('option').map((r) => r.textContent)).toEqual(['1.Доверять', '2.Нет'])
+        expect(document.activeElement).toBe(box())
+        expect(document.querySelector('.you')).toBeNull()
+        // ↵ сразу после появления — не «Доверять».
+        fireEvent.keyDown(box(), { key: 'Enter' })
+        expect(calls().some((c) => c[0] === 'claude_trust_add')).toBe(false)
+        fireEvent.keyDown(box(), { key: 'Escape' })
+        await act(async () => await flush())
+        expect(document.querySelector('.aprompt')).toBeNull()
+        expect(inputText()).toBe('что тут?')
+        expect(document.querySelector('.input .in-mode')).toBeNull()
+        expect(calls().some((c) => c[0] === 'claude_start')).toBe(false)
+
+        keyIn('Enter', { metaKey: true })
+        await act(async () => await flush())
+        await act(() => new Promise((r) => setTimeout(r, ARM_MS + 10)))
+        fireEvent.keyDown(box(), { key: 'Enter' })
+        await act(async () => await flush())
+        await act(async () => await flush())
+        expect(document.querySelector('.aprompt')).toBeNull()
+        expect(calls().find((c) => c[0] === 'claude_trust_add')![1]).toEqual({ path: '/w' })
+        expect(calls().find((c) => c[0] === 'claude_send')![1]).toEqual({ id: 'c1', text: 'что тут?' })
+        expect(document.querySelector('.you')?.textContent).toContain('что тут?')
       })
 
       it('`claude` и `claude <вопрос>` сначала очищают ленту от прежних команд', async () => {
@@ -562,6 +600,9 @@ describe('TerminalPane', () => {
         const own = prompt.querySelector('input.q-own') as HTMLInputElement
         expect(document.activeElement).toBe(own)
         fireEvent.change(own, { target: { value: 'MySQL' } })
+        // Свой ответ, как и варианты, уходит только после ARM_MS с появления вопроса.
+        const { ARM_MS } = await import('../claude/PermissionPrompt')
+        await act(() => new Promise((r) => setTimeout(r, ARM_MS + 10)))
         fireEvent.keyDown(own, { key: 'Enter' })
         await act(async () => await flush())
         expect(calls().filter((c) => c[0] === 'claude_respond').map((c) => c[1])).toEqual([
@@ -977,17 +1018,35 @@ describe('TerminalPane', () => {
     expect(h.resume).toHaveBeenCalledTimes(1)
   })
 
-  it('ссылки OSC 8 — во внешний браузер, только http(s)', async () => {
+  it('ссылки OSC 8 — во внешний браузер, только http(s) и после вопроса с хостом', async () => {
     const { openUrl } = await import('@tauri-apps/plugin-opener')
+    const { ARM_MS } = await import('../claude/PermissionPrompt')
     const open = vi.mocked(openUrl)
     open.mockReset()
     open.mockResolvedValue(undefined)
     render(<TerminalPane {...props()} />)
     const lh = terms[0].options.linkHandler as { activate(e: MouseEvent, uri: string): void }
-    lh.activate(new MouseEvent('click'), 'https://example.com/a')
-    lh.activate(new MouseEvent('click'), 'file:///etc/passwd')
-    lh.activate(new MouseEvent('click'), 'javascript:alert(1)')
+    act(() => lh.activate(new MouseEvent('click'), 'file:///etc/passwd'))
+    act(() => lh.activate(new MouseEvent('click'), 'javascript:alert(1)'))
+    expect(document.querySelector('.aprompt')).toBeNull()
+    act(() => lh.activate(new MouseEvent('click'), 'https://example.com/a'))
+    const box = document.querySelector('.aprompt') as HTMLElement
+    expect(box.querySelector('.ap-who')!.textContent).toBe('? Открыть ссылку')
+    expect(box.querySelector('.p-main')!.textContent).toBe('example.com')
+    expect(box.querySelector('pre.p-code')!.textContent).toBe('https://example.com/a')
+    expect(document.activeElement).toBe(box)
+    // ↵ сразу после появления не открывает.
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(open).not.toHaveBeenCalled()
+    await act(() => new Promise((r) => setTimeout(r, ARM_MS + 10)))
+    fireEvent.keyDown(box, { key: 'Enter' })
     expect(open.mock.calls).toEqual([['https://example.com/a']])
+    expect(document.querySelector('.aprompt')).toBeNull()
+    // esc — отмена.
+    act(() => lh.activate(new MouseEvent('click'), 'https://example.com/b'))
+    fireEvent.keyDown(document.querySelector('.aprompt')!, { key: 'Escape' })
+    expect(document.querySelector('.aprompt')).toBeNull()
+    expect(open).toHaveBeenCalledTimes(1)
   })
 
   it('смена настройки не про шрифт и тему не перемеряет xterm', async () => {
@@ -1516,6 +1575,25 @@ describe('TerminalPane', () => {
       expect(textarea()).not.toHaveAttribute('aria-disabled')
     })
 
+    it('`exec nosuch` не удался: ошибка оболочки — в блок exec с кодом, не под reset; строка RAW_NOTE в блок не идёт', async () => {
+      const { term } = await mounted()
+      osc133(term, 'C;' + b64('exec nosuch'))
+      expect(document.querySelector('[data-testid="live-overlay"]')).not.toBeNull()
+      // В xterm после reset: перевод строки и RAW_NOTE (перенесена на две строки), затем ошибка zsh.
+      term.lines = ['', '[оболочка заменена командой exec — блоки недоступны,', ' терминал работает как обычный]', 'zsh: command not found: nosuch']
+      serializeAsHTML.mockClear()
+      term.reset.mockClear()
+      osc133(term, 'D;127')
+      expect(serializeAsHTML).toHaveBeenCalledWith(expect.objectContaining({ range: { startLine: 3, endLine: 3, startCol: 0 } }))
+      expect(term.reset).toHaveBeenCalled()
+      const blocks = document.querySelectorAll('.feed [data-block-id]')
+      expect(blocks).toHaveLength(1)
+      expect(blocks[0].querySelector('.cmd')!.textContent).toBe('exec nosuch')
+      expect(blocks[0].querySelector('.exit')!.textContent).toBe('exit 127')
+      expect(blocks[0].querySelector('.out')!.textContent).toContain('out1')
+      expect(document.querySelector('[data-testid="live-overlay"]')).toBeNull()
+    })
+
     it('конец команды при активном alt screen — содержимое alt не замораживается', async () => {
       const { term } = await mounted()
       osc133(term, 'C;' + b64('vim'))
@@ -1953,10 +2031,10 @@ describe('⌘F — поиск в ленте', () => {
 describe('replacesShell', () => {
   it('exec с командой заменяет оболочку; только перенаправления, цепочки и не-exec — нет', async () => {
     const { replacesShell } = await import('./TerminalPane')
-    for (const c of ['exec zsh', '  exec bash -l', 'exec -l zsh', 'exec -a foo zsh', 'builtin exec zsh', 'exec 2>/dev/null zsh', 'exec > log fish']) {
+    for (const c of ['exec zsh', '  exec bash -l', 'exec -l zsh', 'exec -a foo zsh', 'builtin exec zsh', 'exec 2>/dev/null zsh', 'exec > log fish', 'FOO=1 exec zsh', 'A=1 B="x y" exec bash', "X='q' builtin exec zsh", 'exec {fd}>log zsh']) {
       expect(replacesShell(c), c).toBe(true)
     }
-    for (const c of ['exec', 'exec >log 2>&1', 'exec 3< file', 'exec > log', 'executor run', 'echo exec zsh', 'exec zsh; ls', 'cd x && exec zsh']) {
+    for (const c of ['exec', 'exec >log 2>&1', 'exec 3< file', 'exec > log', 'executor run', 'echo exec zsh', 'exec zsh; ls', 'cd x && exec zsh', 'exec {fd}>file', 'exec {log}>> /tmp/a', 'exec {fd}< in', 'FOO=1 exec >log', 'exec &>log', 'FOO=1 echo exec zsh']) {
       expect(replacesShell(c), c).toBe(false)
     }
   })

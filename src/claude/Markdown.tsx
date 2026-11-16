@@ -5,6 +5,7 @@ import { memo, useRef, type MouseEvent, type ReactNode } from 'react'
 import ReactMarkdown, { type Components, type Options } from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
+import { askOpenLink, linkHost, misleadingText, paneOf } from '../feed/linkAsk'
 import { useSettings } from '../settings/store'
 import { Diagram } from './diagram/Diagram'
 import { rehypeDiff } from './diffBlock'
@@ -49,8 +50,21 @@ function onLinkClick(e: MouseEvent<HTMLAnchorElement>, href: string | undefined)
   // Ссылки не открываются внутри окна приложения — только в системном браузере
   // (обычный клик и ⌘-клик одинаково; средний клик гасится в onAuxClick).
   e.preventDefault()
-  if (href && SAFE_URL.test(href)) openUrl(href).catch(() => {})
+  if (!href || !SAFE_URL.test(href)) return
+  // Текст выдаёт себя за другой адрес (`[github.com](https://evil.example)`) — сначала вопрос с настоящим хостом.
+  const text = e.currentTarget.textContent ?? ''
+  if (misleadingText(text, href)) return askOpenLink(paneOf(e.currentTarget), href, text)
+  openUrl(href).catch(() => {})
 }
+
+/** Подсказка ссылки — куда она ведёт (хост; для mailto — адрес). */
+const linkTitle = (href: string | undefined) => (href && SAFE_URL.test(href) ? linkHost(href) || href : undefined)
+
+/**
+ * Своё меню WKWebView у ссылки («Открыть ссылку») открыло бы её в главном окне приложения —
+ * у ссылок меню нет.
+ */
+const noMenu = (e: MouseEvent) => e.preventDefault()
 
 function CodeBlock({ children, note, className }: { children?: ReactNode; note?: string; className?: string }) {
   const ref = useRef<HTMLPreElement>(null)
@@ -84,7 +98,7 @@ function mermaidSource(pre: HNode | undefined): string | undefined {
 
 const base: Components = {
   a: ({ href, children }) => (
-    <a href={href} onClick={(e) => onLinkClick(e, href)} onAuxClick={(e) => e.preventDefault()}>
+    <a href={href} title={linkTitle(href)} onClick={(e) => onLinkClick(e, href)} onAuxClick={(e) => e.preventDefault()} onContextMenu={noMenu}>
       {children}
     </a>
   ),
@@ -93,7 +107,7 @@ const base: Components = {
     const href = typeof src === 'string' ? src : undefined
     const label = alt ? `Изображение: ${alt}` : 'Изображение'
     return href && SAFE_URL.test(href) ? (
-      <a href={href} className="md-img" onClick={(e) => onLinkClick(e, href)} onAuxClick={(e) => e.preventDefault()}>
+      <a href={href} className="md-img" title={linkTitle(href)} onClick={(e) => onLinkClick(e, href)} onAuxClick={(e) => e.preventDefault()} onContextMenu={noMenu}>
         {label}
       </a>
     ) : (

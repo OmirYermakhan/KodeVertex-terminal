@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
 }))
 
-const { dismissSuggestion, claudeOpen, clearClaude, exitClaude, listSessions, resumeClaude, editClaude, recallQueued, removeQueued, sendQueued, dismissQueueHint, answerPermission, answerQuestion, interruptClaude, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD } = await import('./sessionStore')
+const { dismissSuggestion, claudeOpen, clearClaude, exitClaude, listSessions, resumeClaude, editClaude, recallQueued, removeQueued, sendQueued, dismissQueueHint, answerPermission, answerQuestion, interruptClaude, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD, answerTrust, resetTrustForTests, useClaudeTrust, UNTRUSTED_DIR, NOT_TRUSTED } = await import('./sessionStore')
 
 const { useSettings } = await import('../settings/store')
 
@@ -1050,5 +1050,111 @@ describe('поздние ответы после закрытия панели',
     await submitQuestion('z', 'rq')
     await answerPermission('z', 'rp', 'allow')
     expect('z' in useClaudeSessions.getState().sessions).toBe(false)
+  })
+})
+
+describe('доверие к папке перед запуском claude', () => {
+  const ask = () => useClaudeTrust.getState().asks.t ?? null
+  /** trusted: ответ claude_trust_check (throw — бэкенд без проверки). */
+  const backend = (trusted: boolean | 'throw', start: () => Promise<unknown> = () => Promise.resolve('proc-t')) =>
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === 'claude_trust_check') return trusted === 'throw' ? Promise.reject(new Error('unknown command')) : Promise.resolve(trusted)
+      if (cmd === 'claude_start') return start()
+      return Promise.resolve(undefined)
+    })
+  beforeEach(() => {
+    stopClaude('t')
+    resetTrustForTests()
+    invoke.mockReset()
+  })
+
+  it('папка не доверенная: ⌘↵ — блок «Доверять папке», сообщение отложено; «Доверять» — trust_add, запуск и отправка', async () => {
+    backend(false)
+    await askClaude('t', '/repo', 'привет')
+    await flush()
+    expect(ask()).toEqual({ cwd: '/repo' })
+    expect(calls('claude_trust_check')).toEqual([['claude_trust_check', { path: '/repo' }]])
+    expect(calls('claude_start')).toHaveLength(0)
+    expect(items('t')).toEqual([])
+    expect(await answerTrust('t', true)).toBeNull()
+    expect(ask()).toBeNull()
+    expect(calls('claude_trust_add')).toEqual([['claude_trust_add', { path: '/repo' }]])
+    await flush()
+    await flush()
+    expect(calls('claude_start')).toHaveLength(1)
+    expect(calls('claude_send')).toEqual([['claude_send', { id: 'proc-t', text: 'привет' }]])
+    // Дальше папка доверенная: без повторной проверки.
+    stopClaude('t')
+    await askClaude('t', '/repo', 'ещё')
+    expect(calls('claude_trust_check')).toHaveLength(1)
+  })
+
+  it('«Нет»: claude не запускается, сообщение — обратно в строку, режим Claude выключается', async () => {
+    backend(false)
+    await askClaude('t', '/repo', 'привет')
+    await flush()
+    expect(await answerTrust('t', false)).toEqual({ text: 'привет', leave: true })
+    expect(await answerTrust('t', false)).toBeNull()
+    await flush()
+    expect(calls('claude_start')).toHaveLength(0)
+    expect(calls('claude_trust_add')).toHaveLength(0)
+    expect(useClaudeSessions.getState().sessions.t).toBeUndefined()
+  })
+
+  it('`claude` в строке: вход отложен до ответа; «Нет» — без текста, с выходом из режима', async () => {
+    backend(false)
+    expect(enterClaude('t', '/repo')).toBe(true)
+    await flush()
+    expect(ask()).toEqual({ cwd: '/repo' })
+    expect(items('t')).toEqual([])
+    expect(await answerTrust('t', false)).toEqual({ text: null, leave: true })
+    expect(calls('claude_start')).toHaveLength(0)
+  })
+
+  it('бэкенд без claude_trust_check — запуск как раньше', async () => {
+    backend('throw')
+    enterClaude('t', '/old')
+    await flush()
+    await flush()
+    expect(ask()).toBeNull()
+    expect(calls('claude_start')).toHaveLength(1)
+  })
+
+  it('claude_start ответил UNTRUSTED_DIR — тот же блок; «Доверять» — запуск заново и отправка, «Нет» — карточка ошибки', async () => {
+    let n = 0
+    backend(true, () => (++n === 1 ? Promise.reject(UNTRUSTED_DIR) : Promise.resolve('proc-2')))
+    const first = askClaude('t', '/r2', 'вопрос')
+    await flush()
+    await flush()
+    expect(ask()).toEqual({ cwd: '/r2' })
+    await answerTrust('t', true)
+    await first
+    await flush()
+    expect(calls('claude_start')).toHaveLength(2)
+    expect(calls('claude_trust_add')).toEqual([['claude_trust_add', { path: '/r2' }]])
+    expect(calls('claude_send')).toEqual([['claude_send', { id: 'proc-2', text: 'вопрос' }]])
+
+    stopClaude('t')
+    resetTrustForTests()
+    invoke.mockReset()
+    backend(true, () => Promise.reject(UNTRUSTED_DIR))
+    const p = askClaude('t', '/r3', 'вопрос')
+    await flush()
+    await flush()
+    expect(ask()).toEqual({ cwd: '/r3' })
+    await answerTrust('t', false)
+    await p
+    await flush()
+    expect(items('t').at(-1)).toEqual({ type: 'error', text: NOT_TRUSTED })
+    expect(calls('claude_send')).toHaveLength(0)
+  })
+
+  it('закрытие панели убирает запрос доверия', async () => {
+    backend(false)
+    await askClaude('t', '/repo', 'привет')
+    await flush()
+    expect(ask()).not.toBeNull()
+    stopClaude('t')
+    expect(ask()).toBeNull()
   })
 })

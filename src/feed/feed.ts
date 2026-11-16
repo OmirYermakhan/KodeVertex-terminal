@@ -13,6 +13,11 @@ export type ShellBlock = {
   running: boolean
   /** Команда шла, когда приложение закрылось: блок восстановлен законченным, «прервано». */
   interrupted?: boolean
+  /**
+   * Блок создан в этом запуске: HTML только что отдал SerializeAddon — форма не проверяется.
+   * В файл сессии не пишется: блоки восстановленной ленты проверяются (isSerializedHtml).
+   */
+  live?: true
 }
 export type ClaudeItem = { kind: 'claude'; id: string; item: FeedClaudeItem }
 export type FeedItem = ShellBlock | ClaudeItem
@@ -24,6 +29,11 @@ export type ShellEvent =
   | { t: 'end'; exitCode: number | null; at: number; html: string; lines: number }
   /** Вывод вне пары C…D (ошибка разбора, сообщения о фоновых заданиях): готовый блок. */
   | { t: 'stray'; command: string; cwd: string; at: number; html: string; lines: number }
+  /**
+   * Вывод и код уже закрытого блока: `exec` не удался (`exec nosuch`) — блок закрыт сразу при C,
+   * а ошибка и 133;D пришли потом. Ложится в последний блок, если он без вывода, иначе — отдельным.
+   */
+  | { t: 'late'; command: string; cwd: string; exitCode: number | null; at: number; html: string; lines: number }
 
 /** Результат разбора OSC 133 — без времени, cwd и HTML. */
 export type ParsedOsc133 =
@@ -129,8 +139,21 @@ export function applyShell(items: FeedItem[], ev: ShellEvent): FeedItem[] {
         html: ev.html,
         lines: ev.lines,
         running: false,
+        live: true,
       },
     ])
+  }
+  if (ev.t === 'late') {
+    let last = -1
+    for (let i = items.length - 1; i >= 0 && last < 0; i--) if (items[i].kind === 'shell') last = i
+    const cur = last >= 0 ? (items[last] as ShellBlock) : null
+    if (cur && !cur.running && !cur.html && cur.command === ev.command) {
+      const next = items.slice()
+      next[last] = { ...cur, exitCode: ev.exitCode ?? cur.exitCode, durationMs: Math.max(0, ev.at - cur.startedAt), html: ev.html, lines: ev.lines, live: true }
+      return capFeed(next)
+    }
+    if (ev.lines === 0) return items
+    return applyShell(items, { t: 'stray', command: ev.command, cwd: ev.cwd, at: ev.at, html: ev.html, lines: ev.lines })
   }
   const idx = runningIndex(items)
   if (ev.t === 'end') {
@@ -163,6 +186,7 @@ export function applyShell(items: FeedItem[], ev: ShellEvent): FeedItem[] {
     html: null,
     lines: 0,
     running: true,
+    live: true,
   })
   return capFeed(next)
 }

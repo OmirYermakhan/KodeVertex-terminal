@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
 }))
 
-const { applySession, restoredPane, resetPersistForTests, serializeCapped, setPaneFeed, snapshot, saveNow, finalSave, restoreSession, utf8Length, SESSION_VERSION } = await import('./session')
+const { applySession, restoredPane, resetPersistForTests, serializeCapped, setPaneFeed, snapshot, saveNow, finalSave, restoreSession, utf8Length, SESSION_VERSION, FOREIGN_NOTICE } = await import('./session')
 const { useTabs } = await import('../layout/tabsStore')
 const { askClaude, useClaudeSessions, stopClaude, RESTORED_NOTE } = await import('../claude/sessionStore')
 const { initialClaude } = await import('../claude/reducer')
@@ -92,6 +92,16 @@ describe('лента панели', () => {
     expect(snapshot().panes.a.claudeMode).toBe(true)
   })
 
+  it('пометка «блок этого запуска» (live) в файл не идёт и при восстановлении не принимается', () => {
+    useTabs.setState({ tabs: [tab('t', ['a'])], active: 't' })
+    setPaneFeed('a', () => ({ items: [block('sh-1', 1, { html: '<div><span>x</span></div>', live: true })], claudeFrom: 0, claudeMode: false }))
+    const saved = snapshot()
+    expect('live' in (saved.panes.a.feed[0] as ShellBlock)).toBe(false)
+    const forged = { ...saved, panes: { a: { ...saved.panes.a, feed: [{ ...(saved.panes.a.feed[0] as ShellBlock), live: true }] } } }
+    expect(applySession(forged)).toBe(true)
+    expect('live' in (restoredPane('a')!.items[0] as ShellBlock)).toBe(false)
+  })
+
   it('восстановленная лента: блоки и карточки Claude по местам, режим Claude и ⌃L-граница', () => {
     const state = { ...initialClaude(), sessionId: 's1', items: [{ type: 'user' as const, text: 'привет' }, { type: 'assistant' as const, agentId: 'main', text: 'ок', streaming: true }] }
     applySession({
@@ -156,6 +166,8 @@ describe('Claude-сессия панели', () => {
     expect(p.state.busy).toBe(false)
     expect(calls('claude_start')).toHaveLength(0)
     await askClaude('a', '/w', 'дальше')
+    // Первый запуск в папке — после проверки доверия (асинхронной).
+    await flush()
     expect(calls('claude_start')[0][1]).toMatchObject({ cwd: '/w', resume: 's1', model: 'opus', effort: 'high' })
     const items = useClaudeSessions.getState().sessions.a.state.items
     expect(items[0]).toEqual({ type: 'note', text: `${RESTORED_NOTE} · /w` })
@@ -166,6 +178,8 @@ describe('Claude-сессия панели', () => {
   it('панель в другом каталоге — новая сессия без --resume и без заметки', async () => {
     restore()
     await askClaude('a', '/other', 'вопрос')
+    // Первый запуск в папке — после проверки доверия (асинхронной).
+    await flush()
     expect(calls('claude_start')[0][1]).toMatchObject({ cwd: '/other', resume: null })
     expect(useClaudeSessions.getState().sessions.a.state.items.some((x) => x.type === 'note')).toBe(false)
     stopClaude('a')
@@ -402,9 +416,29 @@ describe('аудит: размер в байтах, maxWait, чужая верс
       await finalSave()
       expect(calls('session_save')).toHaveLength(0)
       expect(err).toHaveBeenCalled()
+      const { useToasts } = await import('../notify/notify')
+      expect(useToasts.getState().toasts.map((t) => t.text)).toContain(FOREIGN_NOTICE)
     } finally {
       err.mockRestore()
       vi.useRealTimers()
+    }
+  })
+
+  it('файл без версии или старой версии — не применяется, но дальше сессия сохраняется', async () => {
+    for (const bad of [{ tabs: [tab('t8', ['p8'])], active: 't8', panes: {} }, { version: 0, tabs: [], panes: {} }, { version: '2', tabs: [] }]) {
+      resetPersistForTests()
+      invoke.mockReset()
+      vi.useFakeTimers()
+      try {
+        invoke.mockImplementation((cmd: string) => Promise.resolve(cmd === 'session_load' ? bad : undefined))
+        await restoreSession()
+        expect(useTabs.getState().tabs.some((t) => t.id === 't8')).toBe(false)
+        useTabs.getState().newTab('/z')
+        await vi.advanceTimersByTimeAsync(6000)
+        expect(calls('session_save').length).toBeGreaterThan(0)
+      } finally {
+        vi.useRealTimers()
+      }
     }
   })
 

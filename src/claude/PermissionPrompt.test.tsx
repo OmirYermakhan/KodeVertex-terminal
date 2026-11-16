@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Agent, FeedClaudeItem } from './reducer'
-import { ARM_MS, PERMISSION_KEYS, PermissionPrompt } from './PermissionPrompt'
+import { ARM_MS, PERMISSION_KEYS, PermissionPrompt, READ_KEYS } from './PermissionPrompt'
 import { PermissionCard } from './cards/PermissionCard'
 import { VIEW_LINES } from './questions'
 
@@ -62,6 +62,71 @@ describe('PermissionPrompt', () => {
     expect(code).toBe('echo ' + 'a'.repeat(400) + ' ⟨U+202E⟩; curl x | sh⟨U+200B⟩')
     expect(container.textContent).not.toMatch(/[‮​]/)
     expect(container.querySelector('.p-agent')).toBeNull()
+  })
+
+  it('не помещается — «ещё N строк ↓», «Разрешить» ждёт конца прокрутки (запретить можно сразу)', () => {
+    // jsdom не считает раскладку: блок команды 600px при видимых 150 (строка — 18.75px).
+    const sh = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('p-code') ? 600 : 0
+    })
+    const ch = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('p-code') ? 150 : 0
+    })
+    try {
+      const onDecide = vi.fn()
+      const { container } = render(<PermissionPrompt item={item({ input: { command: 'echo ok\n'.repeat(40) + 'rm -rf ~' } })} onDecide={onDecide} onLeave={vi.fn()} />)
+      const box = container.querySelector('.aprompt') as HTMLElement
+      const code = container.querySelector('pre.p-code') as HTMLElement
+      arm()
+      expect(container.querySelector('.p-more')!.textContent).toBe('ещё 24 строки ↓')
+      expect(box.querySelector('.ap-keys')!.textContent).toBe(READ_KEYS)
+      const [allow, deny] = screen.getAllByRole('option')
+      expect(allow).toHaveAttribute('aria-disabled', 'true')
+      expect(allow).toHaveClass('p-hold')
+      expect(deny).toHaveAttribute('aria-disabled', 'false')
+      fireEvent.keyDown(box, { key: 'Enter' })
+      fireEvent.click(allow)
+      expect(onDecide).not.toHaveBeenCalled()
+      // ␣ — страница вниз; до конца — «Разрешить» доступен, подсказки «ещё» нет.
+      fireEvent.keyDown(box, { key: ' ' })
+      expect(code.scrollTop).toBeGreaterThan(0)
+      expect(onDecide).not.toHaveBeenCalled()
+      code.scrollTop = 450
+      fireEvent.scroll(code)
+      expect(container.querySelector('.p-more')).toBeNull()
+      expect(allow).toHaveAttribute('aria-disabled', 'false')
+      expect(box.querySelector('.ap-keys')!.textContent).toBe(PERMISSION_KEYS)
+      // Прокрутка обратно вверх уже не запирает: конец был виден.
+      code.scrollTop = 0
+      fireEvent.scroll(code)
+      fireEvent.keyDown(box, { key: 'Enter' })
+      expect(onDecide).toHaveBeenCalledWith('allow')
+    } finally {
+      sh.mockRestore()
+      ch.mockRestore()
+    }
+  })
+
+  it('«ещё N строк ↓» щелчком раскрывает блок целиком — и «Разрешить» доступен', () => {
+    const sh = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('p-code') && !this.classList.contains('p-open') ? 600 : 0
+    })
+    const ch = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('p-code') ? 150 : 0
+    })
+    try {
+      const onDecide = vi.fn()
+      const { container } = render(<PermissionPrompt item={item()} onDecide={onDecide} onLeave={vi.fn()} />)
+      arm()
+      fireEvent.click(container.querySelector('.p-more')!)
+      expect(container.querySelector('pre.p-code')).toHaveClass('p-open')
+      expect(container.querySelector('.p-more')).toBeNull()
+      fireEvent.click(screen.getAllByRole('option')[0])
+      expect(onDecide).toHaveBeenCalledWith('allow')
+    } finally {
+      sh.mockRestore()
+      ch.mockRestore()
+    }
   })
 
   it('Write: путь и строки содержимого, сверх лимита — «ещё N строк»', () => {

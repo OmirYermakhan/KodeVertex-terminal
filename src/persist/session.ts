@@ -85,7 +85,11 @@ export function restoredPane(paneId: string): PaneFeed | null {
   const items = useClaudeSessions.getState().sessions[paneId]?.state.items ?? []
   const feed: FeedItem[] = []
   for (const it of r.feed) {
-    if (it.kind === 'shell') feed.push(it)
+    if (it.kind === 'shell') {
+      // Файл подправлен руками: «создан в этом запуске» у восстановленного блока не бывает.
+      const { live: _live, ...b } = it
+      feed.push(b)
+    }
     else {
       const i = claudeIndex(it.id)
       if (i >= 0 && i < items.length) feed.push({ kind: 'claude', id: claudeItemId(i), item: items[i] })
@@ -94,7 +98,9 @@ export function restoredPane(paneId: string): PaneFeed | null {
   return { items: feed, claudeFrom: r.claudeFrom, claudeMode: r.claudeMode }
 }
 
-function saveBlock(b: ShellBlock): ShellBlock {
+function saveBlock(block: ShellBlock): ShellBlock {
+  // «Создан в этом запуске» в файл не идёт: после перезапуска HTML блока читается с диска и проверяется.
+  const { live: _live, ...b } = block
   const html = b.html !== null && b.html.length > MAX_BLOCK_HTML ? null : b.html
   if (!b.running) return html === b.html ? b : { ...b, html, lines: html === null ? 0 : b.lines }
   // Шла при закрытии: живой xterm не сохранить — законченный блок «прервано» без вывода.
@@ -411,10 +417,14 @@ export function applySession(raw: unknown): boolean {
   return true
 }
 
+/** Тост: файл сессии записан более новой сборкой. */
+export const FOREIGN_NOTICE = 'session.json другой версии — сессия не восстановлена и не сохраняется в этом запуске'
+
 /**
- * Загрузка при старте (до первого рендера панелей) и автосохранение изменений. Файл другой версии
- * (записан более новой сборкой) не затирается: копии Rust не делает, поэтому автосохранение в этом
- * запуске выключено — вкладки этой сборки не сохранятся, зато чужая сессия цела.
+ * Загрузка при старте (до первого рендера панелей) и автосохранение изменений. Файл более новой
+ * версии (записан более новой сборкой) не затирается: копии Rust не делает, поэтому автосохранение
+ * в этом запуске выключено и об этом говорит тост — вкладки этой сборки не сохранятся, зато чужая
+ * сессия цела. Без версии, старой версии или битый — не применяется, дальше сохраняется новая.
  */
 export async function restoreSession(): Promise<void> {
   let raw: unknown = null
@@ -424,9 +434,13 @@ export async function restoreSession(): Promise<void> {
     raw = null
   }
   applySession(raw)
-  if (isRec(raw) && raw.version !== SESSION_VERSION) {
+  if (isRec(raw) && typeof raw.version === 'number' && raw.version > SESSION_VERSION) {
     foreign = true
     logError('session', `файл сессии версии ${String(raw.version)} (ожидалась ${SESSION_VERSION}): не применён и не перезаписывается`)
+    // Лениво: notify сам импортирует сторы, которые импортирует этот модуль.
+    void import('../notify/notify')
+      .then((m) => m.useToasts.getState().push({ kind: 'error', text: FOREIGN_NOTICE, paneId: '', agentId: null }))
+      .catch(() => {})
     return
   }
   enabled = true
