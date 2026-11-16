@@ -83,7 +83,7 @@ export const ClaudeCard = memo(function ClaudeCard({
     case 'question':
       return <QuestionCard id={item.id} item={it} agent={agent} />
     case 'summary':
-      return <SummaryCard id={item.id} text={it.text} durationMs={it.durationMs} costUsd={it.costUsd} isError={it.isError} />
+      return <SummaryCard id={item.id} text={it.text} durationMs={it.durationMs} costUsd={it.costUsd} isError={it.isError} stopped={it.stopped} />
     case 'error':
       return <ErrorCard id={item.id} text={it.text} />
     case 'session':

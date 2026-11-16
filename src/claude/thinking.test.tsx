@@ -40,6 +40,6 @@ describe('ThinkingRow', () => {
     render(<ThinkingRow since={Date.now() - 3000} />)
     expect(screen.getByRole('status').textContent).toContain('Думает')
     expect(screen.getByRole('status').textContent).toContain('3 с')
-    expect(screen.getByRole('status').textContent).toContain('⌃C')
+    expect(screen.getByRole('status').textContent).toContain('esc — прервать')
   })
 })

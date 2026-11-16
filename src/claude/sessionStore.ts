@@ -207,7 +207,7 @@ function start(paneId: string): Proc {
     }
     const prevState = get(paneId).state
     const before = prevState.pending
-    patchState(paneId, (s) => reduceClaude(s, line, Date.now()))
+    patchState(paneId, (s) => reduceClaude(s, line, Date.now(), proc.interrupted))
     // Закончились правки файлов или команды — панель проекта обновляется.
     const tools = finishedTools(prevState, get(paneId).state)
     if (tools.length > 0) emitClaudeEvent({ kind: 'tools', tools })

@@ -3,7 +3,7 @@ import type { Change } from './api'
 import { ChangeRow, filesWord, sumStat } from './changeRow'
 import { useProject } from './store'
 
-type Group = { id: 'tracked' | 'untracked'; title: string; items: Change[] }
+type Group = { id: 'tracked' | 'untracked' | 'claude'; title: string; items: Change[] }
 
 /** Окно инструмента открылось с фокусом на себе — фокус в список, чтобы стрелки работали сразу. */
 export function useTakeFocus(ref: React.RefObject<HTMLElement | null>) {
@@ -33,6 +33,11 @@ export default function ChangesView() {
     useProject.setState((s) => ({ changesClosed: f(s.changesClosed) }))
 
   const groups = useMemo(() => {
+    // Не git: сравнивать не с чем — показываем файлы, которые менял Claude (по клику открывается сам файл).
+    if (notGit) {
+      const items = [...touched].sort().map((path): Change => ({ path, status: 'M' }))
+      return items.length ? [{ id: 'claude', title: 'Claude менял', items } as Group] : []
+    }
     const all = changes ?? []
     const tracked = all.filter((c) => c.status !== '?')
     const untracked = all.filter((c) => c.status === '?')
@@ -40,7 +45,7 @@ export default function ChangesView() {
     if (tracked.length) out.push({ id: 'tracked', title: 'Изменения', items: tracked })
     if (untracked.length) out.push({ id: 'untracked', title: 'Не отслеживаются', items: untracked })
     return out
-  }, [changes])
+  }, [changes, notGit, touched])
   const count = (g: Group) => g.items.length + (g.id === 'untracked' ? more : 0)
   const nav = groups.flatMap((g) => (closed.has(g.id) ? [] : g.items))
 
@@ -51,7 +56,8 @@ export default function ChangesView() {
     el?.scrollIntoView?.({ block: 'nearest' })
   }, [sel])
 
-  const openDiff = (c: Change) => useProject.getState().openDiff(c.path, null, c.oldPath)
+  const openDiff = (c: Change) =>
+    notGit ? useProject.getState().openFile(c.path) : useProject.getState().openDiff(c.path, null, c.oldPath)
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.ctrlKey || e.altKey) return
@@ -77,7 +83,9 @@ export default function ChangesView() {
 
   const all = changes ?? []
   const msg = notGit
-    ? 'Не git-репозиторий'
+    ? touched.size === 0
+      ? 'Не git-репозиторий'
+      : null
     : changes === null
       ? gitError
       : all.length === 0
@@ -99,8 +107,7 @@ export default function ChangesView() {
         onKeyDown={onKeyDown}
       >
         {msg && <div className="tree-hint">{msg}</div>}
-        {!notGit &&
-          groups.map((g, gi) => {
+        {groups.map((g, gi) => {
             const open = !closed.has(g.id)
             return (
               <div key={g.id} role="group">
@@ -135,6 +142,11 @@ export default function ChangesView() {
             )
           })}
       </div>
+      {notGit && touched.size > 0 && (
+        <div className="twf">
+          <span>{`${touched.size} ${filesWord(touched.size)} · не git, без сравнения`}</span>
+        </div>
+      )}
       {!notGit && all.length > 0 && (
         <div className="twf">
           <span>{`+${add} −${del} · ${total} ${filesWord(total)}`}</span>

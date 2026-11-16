@@ -491,6 +491,22 @@ describe('TerminalPane', () => {
         expect(document.querySelector('.feed .you')?.textContent).toContain('что тут?')
       })
 
+      it('`/exit`: лента очищается от разговора, над строкой — «сессия закрыта», дальше оболочка', async () => {
+        claudeOk()
+        await mounted()
+        type('claude что тут?')
+        keyIn('Enter')
+        await act(async () => await flush())
+        expect(document.querySelector('.feed .you')).not.toBeNull()
+        type('/exit')
+        keyIn('Enter')
+        await act(async () => await flush())
+        expect(document.querySelector('.feed .you')).toBeNull()
+        expect(document.querySelector('.feed .cl-note')).toBeNull()
+        expect(document.querySelector('.input .in-mode')).toBeNull()
+        expect(document.querySelector('.in-note')?.textContent).toBe('Сессия Claude закрыта — обычный терминал')
+      })
+
       it('подсказка пустой ленты пропадает сразу с входом в режим `claude`, до первого ответа', async () => {
         claudeOk()
         await mounted()
@@ -1686,14 +1702,14 @@ describe('TerminalPane: правка отправленного сообщени
       expect(sugg()).toBeNull()
     })
 
-    it('esc убирает подсказку, второй esc — выход из режима Claude', async () => {
+    it('esc убирает подсказку, второй esc из режима Claude не выводит', async () => {
       await twoTurns()
       suggest('спасибо')
       keyIn('Escape')
       expect(sugg()).toBeNull()
       expect(document.querySelector('.input .in-mode')).not.toBeNull()
       keyIn('Escape')
-      expect(document.querySelector('.input .in-mode')).toBeNull()
+      expect(document.querySelector('.input .in-mode')).not.toBeNull()
     })
   })
 

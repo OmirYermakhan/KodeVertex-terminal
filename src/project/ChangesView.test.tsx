@@ -138,12 +138,23 @@ describe('ChangesView', () => {
     const { rerender } = render(<ChangesView />)
     expect(screen.getByText('Изменений нет')).toBeInTheDocument()
     expect(document.querySelector('.twf')).toBeNull()
-    act(() => useProject.setState({ changes: [], notGit: true }))
+    act(() => useProject.setState({ changes: [], notGit: true, claudeTouched: new Set() }))
     rerender(<ChangesView />)
     expect(screen.getByText('Не git-репозиторий')).toBeInTheDocument()
     act(() => useProject.setState({ changes: null, notGit: false, gitError: 'git: таймаут' }))
     rerender(<ChangesView />)
     expect(screen.getByText('git: таймаут')).toBeInTheDocument()
+  })
+
+  it('не git — список файлов, которые менял Claude; клик открывает сам файл', () => {
+    act(() => useProject.setState({ changes: [], notGit: true, claudeTouched: new Set(['src/b.ts', 'a.md']) }))
+    render(<ChangesView />)
+    expect(screen.queryByText('Не git-репозиторий')).toBeNull()
+    expect(document.querySelector('.grp')?.textContent).toBe('▾Claude менял 2 файла')
+    expect(rows().map((r) => r.dataset.path)).toEqual(['a.md', 'src/b.ts'])
+    fireEvent.click(rows()[1])
+    expect(useProject.getState().tabs).toEqual([{ kind: 'file', rel: 'src/b.ts' }])
+    expect(document.querySelector('.twf')?.textContent).toBe('2 файла · не git, без сравнения')
   })
 
   it('неотслеживаемых сверх потолка — строка «ещё N не отслеживаются», в счётчиках — все', () => {

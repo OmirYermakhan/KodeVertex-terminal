@@ -918,7 +918,14 @@ export function TerminalPane(p: TerminalPaneProps) {
     }
     return enterClaude(p.paneId, cwdRef.current)
   }, [p.paneId])
-  const onExitClaude = useCallback(() => exitClaude(p.paneId), [p.paneId])
+  // `/exit`: сессия закрыта, лента чистится целиком (как `/clear`, идущая команда остаётся) — дальше обычный терминал.
+  const onExitClaude = useCallback(() => {
+    const n = useClaudeSessions.getState().sessions[p.paneId]?.state.items.length ?? 0
+    exitClaude(p.paneId)
+    claudeFrom.current = n
+    setItems((it) => it.filter((x) => (x.kind === 'shell' ? x.running : claudeIndex(x.id) >= n)))
+    setSelected(null)
+  }, [p.paneId])
   // `/resume`: прошлые разговоры каталога панели; выбранный — с чистой ленты (как `/clear`), его история —
   // карточками. Лента чистится, только когда история прочитана (иначе текущий разговор остаётся).
   const onListSessions = useCallback(() => listSessions(p.paneId, cwdRef.current), [p.paneId])
@@ -1038,6 +1045,14 @@ export function TerminalPane(p: TerminalPaneProps) {
     const i = st ? lastEditable(st) : -1
     return i >= 0 && beginEdit(i)
   }, [beginEdit])
+  const onEscInterrupt = useCallback(
+    (empty: boolean) => {
+      if (!interruptClaude(p.paneId)) return false
+      if (empty) onEditLast()
+      return true
+    },
+    [p.paneId, onEditLast],
+  )
   const onEditSelected = useCallback(() => {
     const i = selectedRef.current ? claudeIndex(selectedRef.current) : -1
     return i >= 0 && beginEdit(i)
@@ -1300,6 +1315,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           onListSessions={onListSessions}
           onResume={onResume}
           onInterrupt={onInterrupt}
+          onEscInterrupt={onEscInterrupt}
           onEof={onEof}
           onClearFeed={onClearFeed}
           preview={preview.api}

@@ -19,7 +19,7 @@ export function ThinkingRow({ since }: { since: number }) {
       <span className="spin" aria-hidden="true" />
       <span className="th-l">Думает</span>
       <span className="th-t">· {elapsedLabel(now - since)}</span>
-      <span className="th-k">⌃C — прервать</span>
+      <span className="th-k">esc — прервать</span>
     </div>
   )
 }

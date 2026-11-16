@@ -237,7 +237,7 @@ describe('InputBar', () => {
       expect(p.onRun).not.toHaveBeenCalled()
     })
 
-    it('/exit, exit и esc на пустой строке выходят из режима', () => {
+    it('/exit и exit выходят из режима, esc — нет', () => {
       const { p, set, key, container } = setup()
       for (const cmd of ['/exit', 'exit']) {
         set('claude')
@@ -256,6 +256,9 @@ describe('InputBar', () => {
       expect(inMode(container)).toBe(true)
       set('')
       key('Escape')
+      expect(inMode(container)).toBe(true)
+      set('/exit')
+      key('Enter')
       expect(inMode(container)).toBe(false)
       // После выхода ↵ снова идёт в оболочку.
       set('ls')
@@ -291,6 +294,25 @@ describe('InputBar', () => {
       expect(p.onEnterClaude).toHaveBeenCalled()
       expect(inMode(container)).toBe(false)
       expect(ta.value).toBe('')
+    })
+
+    it('esc в режиме, пока идёт ход: прерывает (onEscInterrupt), режим и набранное остаются', () => {
+      const onEscInterrupt = vi.fn(() => true)
+      const { ta, set, key, container } = setup({ onEscInterrupt })
+      set('claude')
+      key('Enter')
+      key('Escape')
+      expect(onEscInterrupt).toHaveBeenLastCalledWith(true)
+      expect(inMode(container)).toBe(true)
+      set('abc')
+      key('Escape')
+      expect(onEscInterrupt).toHaveBeenLastCalledWith(false)
+      expect(ta.value).toBe('abc')
+      // Claude не занят — esc ничего не делает, режим остаётся.
+      onEscInterrupt.mockReturnValue(false)
+      set('')
+      key('Escape')
+      expect(inMode(container)).toBe(true)
     })
 
     it('⌃C в режиме: onInterrupt с признаком режима, в оболочку не уходит', () => {
@@ -600,10 +622,11 @@ describe('InputBar: очередь сообщений Claude', () => {
     key('Enter')
     expect(container.querySelector('.in-mode')).not.toBeNull()
     key('Escape')
-    // Первый esc — подсказка паузы, режим Claude остаётся.
+    // Первый esc — подсказка паузы; ни он, ни следующий из режима Claude не выводят.
+    expect(dismissHint).toHaveBeenCalledTimes(1)
     expect(container.querySelector('.in-mode')).not.toBeNull()
     key('Escape')
-    expect(container.querySelector('.in-mode')).toBeNull()
+    expect(container.querySelector('.in-mode')).not.toBeNull()
   })
 })
 

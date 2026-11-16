@@ -102,16 +102,18 @@ body {
 }
 
 .sg.v {
-  background: var(--acc);
-  color: var(--onAcc);
+  background: color-mix(in srgb, var(--acc) 16%, transparent);
+  color: color-mix(in srgb, var(--acc) 70%, var(--strong));
   font-weight: 500;
+  letter-spacing: 0.04em;
 }
 
-/* Claude запущен с bypassPermissions: та же плашка, что .sg.v, но цветом --del. */
+/* Claude запущен с bypassPermissions: та же мягкая плашка, что .sg.v, но цветом --del. */
 .sg.danger {
-  background: var(--del);
-  color: var(--onAcc);
+  background: color-mix(in srgb, var(--del) 14%, transparent);
+  color: color-mix(in srgb, var(--del) 75%, var(--strong));
   font-weight: 500;
+  letter-spacing: 0.04em;
 }
 
 .sg.right {
@@ -640,6 +642,7 @@ body.tw-resizing, body.tw-resizing * { cursor: col-resize !important; user-selec
 .sum .sum-meta { color: var(--muted); text-transform: none; letter-spacing: 0; }
 .sum.err { border-color: var(--del); }
 .sum.err .who > span:first-child { color: var(--del); }
+.sum.stop .who > span:first-child { color: var(--muted); }
 
 /* Режим чтения (макет 01, вариант B): markdown в карточках */
 .md { font-size: calc(var(--size-text) - 0.5px); line-height: var(--lh-text); color: var(--text); overflow-wrap: anywhere; }

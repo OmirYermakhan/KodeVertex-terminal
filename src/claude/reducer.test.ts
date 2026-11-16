@@ -138,6 +138,15 @@ describe('устойчивость', () => {
     expect(s.busy).toBe(false)
     expect(s.agents.find((a) => a.id === 'main')!.status).toBe('error')
   })
+
+  it('прерванный пользователем ход: result с is_error — «Прервано», не ошибка', () => {
+    const ev = { type: 'result', subtype: 'error_during_execution', is_error: true, result: '', total_cost_usd: 0, duration_ms: 600 }
+    const s = reduceClaude(userSent(initialClaude(), 'x', 0), ev, 9, true)
+    expect(s.items.at(-1)).toEqual({ type: 'summary', text: '', durationMs: 600, costUsd: 0, isError: false, stopped: true })
+    const main = s.agents.find((a) => a.id === 'main')!
+    expect(main.status).toBe('done')
+    expect(main.now).toBe('Остановлено')
+  })
 })
 
 describe('modelLabel', () => {

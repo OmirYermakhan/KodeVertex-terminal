@@ -26,7 +26,8 @@ export type FeedClaudeItem =
       result?: string
     }
   /** costUsd нет — стоимость хода неизвестна (см. ClaudeState.costUnknown). */
-  | { type: 'summary'; text: string; durationMs: number; costUsd?: number; isError: boolean }
+  /** stopped — ход прервал пользователь (esc/⌃C): «◼ Прервано», не ошибка. */
+  | { type: 'summary'; text: string; durationMs: number; costUsd?: number; isError: boolean; stopped?: boolean }
   | { type: 'error'; text: string }
   /**
    * План агента (TodoWrite): одна карточка на агента, каждый следующий TodoWrite обновляет её
@@ -569,10 +570,13 @@ function repeatsAnswer(items: readonly FeedClaudeItem[], result: string): boolea
   return false
 }
 
-function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
+function onResult(prev: ClaudeState, ev: Rec, now: number, interrupted = false): ClaudeState {
   // Ход закончен — его вопросы и запросы разрешений больше не ждут ответа.
   const s = cancelPrompts(prev)
-  const isError = ev.is_error === true
+  // Прерванный пользователем ход CLI закрывает result с is_error — это не ошибка, а «Прервано».
+  const stopped = interrupted
+  const isError = ev.is_error === true && !stopped
+  const doneNow = stopped ? 'Остановлено' : isError ? 'Ошибка' : 'Готово'
   const prevProc = s.costProc ?? 0
   const procTotal = typeof ev.total_cost_usd === 'number' && ev.total_cost_usd >= 0 ? ev.total_cost_usd : prevProc
   // Ход стоит разницу нарастающих итогов процесса; итог сессии — с учётом прежних процессов.
@@ -618,7 +622,8 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
   // Отдельная карточка итога — только когда она что-то добавляет: ошибка, итог, отличный от ответа,
   // или ход без ответа (время и цену негде показать). «✓ Готово» после ответа не нужен.
   const text = repeatsAnswer(items, result) ? '' : result
-  if (isError || text || !shown) items.push({ type: 'summary', text, durationMs, ...price, isError })
+  if (stopped) items.push({ type: 'summary', text, durationMs, ...price, isError: false, stopped: true })
+  else if (isError || text || !shown) items.push({ type: 'summary', text, durationMs, ...price, isError })
   // Ход закончен: его незавершённые действия и субагенты больше не идут.
   const closed: FeedClaudeItem[] = items.map((it) =>
     it.type === 'action' && it.status === 'running' ? { ...it, status: isError ? 'error' : 'done' } : it,
@@ -642,13 +647,13 @@ function onResult(prev: ClaudeState, ev: Rec, now: number): ClaudeState {
     currentAgentId: pending > 0 ? MAIN : null,
     agents: s.agents.map((a) =>
       a.id !== MAIN && (a.status === 'running' || a.status === 'waiting')
-        ? { ...a, status: isError ? 'error' : 'done', endedAt: now, now: isError ? 'Ошибка' : 'Готово' }
+        ? { ...a, status: isError ? 'error' : 'done', endedAt: now, now: doneNow }
         : a,
     ),
   }
   // В очереди ещё сообщение — главный агент продолжает (следующий ход), «закончил» не наступает.
   if (pending > 0) return patchAgent(next, MAIN, { status: 'running', now: 'Думает' })
-  next = patchAgent(next, MAIN, { status: isError ? 'error' : 'done', endedAt: now, now: isError ? 'Ошибка' : 'Готово' })
+  next = patchAgent(next, MAIN, { status: isError ? 'error' : 'done', endedAt: now, now: doneNow })
   return next
 }
 
@@ -859,7 +864,8 @@ export function replaceFrom(s: ClaudeState, index: number): ClaudeState {
   return freezeTodos({ ...s, items }, index)
 }
 
-export function reduceClaude(s: ClaudeState, line: string | object, now: number): ClaudeState {
+/** interrupted — ход прерван пользователем: его result — «Прервано», а не ошибка. */
+export function reduceClaude(s: ClaudeState, line: string | object, now: number, interrupted = false): ClaudeState {
   const ev = parse(line)
   if (!ev) return s
   try {
@@ -889,7 +895,7 @@ export function reduceClaude(s: ClaudeState, line: string | object, now: number)
       case 'user':
         return onUser(s, ev, now)
       case 'result':
-        return onResult(s, ev, now)
+        return onResult(s, ev, now, interrupted)
       case 'control_response':
         return onControl(s, ev)
       case 'control_request':

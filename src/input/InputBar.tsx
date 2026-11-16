@@ -1,6 +1,6 @@
 // Строка ввода панели (как в Warp, макет 04-main-window `.input`): ↵ — команда в оболочку,
 // ⌘↵ — вопрос Claude, ↑/↓ — история, подсказки путей — попап над полем.
-// `claude` ↵ — режим Claude: ↵ шлёт вопросы агенту, `/exit`, `exit` или esc на пустой строке — выход.
+// `claude` ↵ — режим Claude: ↵ шлёт вопросы агенту, `/exit` или `exit` — выход (esc из режима не выводит).
 // В режиме Claude в текст встают значки вложений (макет 06-attachments): поле — contenteditable,
 // модель — Doc (текст + значки), см. src/attach/doc.ts и richDom.ts.
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -55,6 +55,8 @@ export const PREVIEW_HINT = '␣ просмотр'
 /** Боковой просмотр в `@` — только если строка не уже этого. */
 const AT_SIDE_MIN = 600
 const NOTE_MS = 3500
+/** Над строкой после `/exit`: сессия закрыта, строка снова — оболочка. */
+export const EXIT_NOTE = 'Сессия Claude закрыта — обычный терминал'
 
 export interface InputBarProps {
   /** Режим Claude при монтировании (восстановлен после перезапуска приложения). */
@@ -91,6 +93,11 @@ export interface InputBarProps {
    * false — строка очищается.
    */
   onInterrupt(empty: boolean, claude: boolean): boolean
+  /**
+   * esc в режиме Claude, пока идёт ход (как в Warp): прервать его; при пустой строке — последнее
+   * сообщение в строку на правку. true — ход прерван, false — Claude не занят.
+   */
+  onEscInterrupt?(empty: boolean): boolean
   /** ⌃L (и `clear` в оболочке): очистить ленту. */
   onClearFeed(): void
   /**
@@ -456,6 +463,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       // Как выход из claude в терминале: сессия закрывается, строка — снова оболочка.
       q.onExitClaude?.()
       setClaudeMode(false)
+      showNote(EXIT_NOTE)
     } else if (ask || claudeRef.current) {
       const d = docOf(text, tokens)
       // Красный значок (видео, аудио, больше лимита) не уйдёт: сообщение остаётся в строке.
@@ -1063,6 +1071,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       props.current.edit.onCancel()
       return
     }
+    // Идёт ход Claude: esc прерывает его (пустая строка — последнее сообщение на правку).
+    if (e.key === 'Escape' && plain && claudeRef.current && !props.current.answer && props.current.onEscInterrupt?.(v === '')) {
+      e.preventDefault()
+      return
+    }
     // Пауза очереди: esc сначала убирает подсказку (режим Claude остаётся).
     if (e.key === 'Escape' && plain && !props.current.answer && v === '' && props.current.queue?.dismissHint()) {
       e.preventDefault()
@@ -1074,11 +1087,9 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       props.current.answer.onCancel()
       return
     }
-    // esc на пустой строке — выход из режима Claude (сессия продолжает жить).
-    if (e.key === 'Escape' && claudeRef.current && v === '' && plain) {
+    // esc из режима Claude не выводит (выход — /exit или exit): только прерывает и отменяет.
+    if (e.key === 'Escape' && claudeRef.current && plain) {
       e.preventDefault()
-      setClaudeMode(false)
-      hintsRef.current.reset()
       return
     }
 

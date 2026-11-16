@@ -9,6 +9,7 @@ export const SummaryCard = memo(function SummaryCard({
   durationMs,
   costUsd,
   isError,
+  stopped,
   id,
 }: {
   text: string
@@ -16,13 +17,15 @@ export const SummaryCard = memo(function SummaryCard({
   /** Нет — стоимость хода неизвестна (первый ход после `/resume` без записи стоимости): только время. */
   costUsd?: number
   isError: boolean
+  /** Ход прервал пользователь: «◼ Прервано», приглушённо, без рамки ошибки. */
+  stopped?: boolean
   id?: string
 }) {
   return (
-    <div className={isError ? 'sum err' : 'sum'} data-item-id={id}>
+    <div className={isError ? 'sum err' : stopped ? 'sum stop' : 'sum'} data-item-id={id}>
       <div className="who">
         {/* Ответ уже в карточке выше — итог одной строкой: «✓ Готово · время · цена». */}
-        <span>{text ? (isError ? '✕ Итог' : '✓ Итог') : isError ? '✕ Ошибка' : '✓ Готово'}</span>
+        <span>{stopped ? '◼ Прервано' : text ? (isError ? '✕ Итог' : '✓ Итог') : isError ? '✕ Ошибка' : '✓ Готово'}</span>
         <span className="sum-meta">
           {formatDuration(durationMs)}
           {costUsd !== undefined && ` · ${formatCost(costUsd)}`}
