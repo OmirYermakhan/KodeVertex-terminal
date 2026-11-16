@@ -467,8 +467,9 @@ body.tw-resizing, body.tw-resizing * { cursor: col-resize !important; user-selec
 
 /* Карточки Claude (макет 04 .you/.card/.act, макет 02 вариант B .sum/.diff) */
 .feed .who { font-family: var(--font-code); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 6px; line-height: normal; }
-.you { box-sizing: border-box; width: fit-content; min-width: 64px; margin: 0 0 12px auto; max-width: 60%; background: var(--you); border-radius: 10px 10px 2px 10px; padding: 9px 14px; font-family: var(--font-text); font-size: calc(var(--size-text) - 1.5px); line-height: normal; color: var(--strong); white-space: pre-wrap; overflow-wrap: anywhere; }
-.you .who { color: var(--youWho); text-align: right; white-space: normal; }
+/* Текст вопроса — как текст ответа (тот же размер и межстрочный интервал), строка не длиннее ~72 знаков. */
+.you { box-sizing: border-box; width: fit-content; min-width: 64px; margin: 0 0 14px auto; max-width: min(68%, 72ch); background: var(--you); border-radius: 12px 12px 3px 12px; padding: 10px 16px 12px; font-family: var(--font-text); font-size: calc(var(--size-text) - 0.5px); line-height: var(--lh-text); letter-spacing: 0.005em; color: var(--strong); white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; }
+.you .who { color: var(--youWho); text-align: right; white-space: normal; line-height: normal; margin-bottom: 4px; }
 /* Пузырь «Вы»: панелька «✎ Изменить» при наведении; выбран ⌘↑ или правится в строке ввода — обводка --acc. */
 .you { position: relative; }
 .you.sel, .you.edit { outline: 1px solid var(--acc); outline-offset: 0; }
@@ -950,3 +951,8 @@ body.tw-resizing, body.tw-resizing * { cursor: col-resize !important; user-selec
 .ks ul { list-style: none; margin: 0; padding: 0; }
 .ks li { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 3px 0; color: var(--muted); font-size: 13.5px; }
 .ks-k { display: flex; gap: 4px; flex: none; }
+
+/* «↩ Ответить» у выделенного фрагмента ответа Claude. */
+.quote-btn { position: fixed; z-index: 40; display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-text); font-size: 12px; color: var(--strong); background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 3px 9px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); cursor: pointer; }
+.quote-btn:hover { border-color: var(--acc); }
+.quote-btn kbd { font-family: var(--font-code); font-size: 10.5px; color: var(--muted); }

@@ -82,7 +82,8 @@ function quotedMessage(n: number, t: Attachment): string {
   const m = t.message
   if (!m) return ''
   const text = capBytes(m.text, MESSAGE_MAX_BYTES, 'head')
-  return `<quoted_message n="${n}" author="${attr(m.author)}">\n${body(text)}\n</quoted_message>`
+  const part = m.excerpt ? ' part="excerpt"' : ''
+  return `<quoted_message n="${n}" author="${attr(m.author)}"${part}>\n${body(text)}\n</quoted_message>`
 }
 
 function pathRef(t: Attachment, cwd: string | null | undefined): string {

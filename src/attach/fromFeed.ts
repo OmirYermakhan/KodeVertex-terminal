@@ -51,6 +51,18 @@ export function messageAttachment(text: string, agent: Agent | undefined, source
   }
 }
 
+/** Цитата: выделенный фрагмент ответа Claude — значком «Цитата: «…»», Claude получает его как часть сообщения. */
+export function quoteAttachment(text: string, agent: Agent | undefined, source?: string): Attachment {
+  const author = agent?.name ?? 'Claude'
+  return {
+    id: attachmentId(),
+    kind: 'message',
+    ...(source ? { source } : {}),
+    label: `Цитата: «${clip(plain(text), SNIPPET_MAX)}»`,
+    message: { author, model: agent?.model ?? null, text, excerpt: true },
+  }
+}
+
 /** Значок для элемента ленты (блок или ответ Claude); null — такой не вкладывается. */
 export function feedAttachment(it: FeedItem | undefined, agents: readonly Agent[] = []): Attachment | null {
   if (!it) return null

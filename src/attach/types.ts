@@ -22,6 +22,8 @@ export interface MessageSnapshot {
   author: string
   model?: string | null
   text: string
+  /** Не всё сообщение, а выделенный в нём фрагмент («Ответить» на выделение). */
+  excerpt?: boolean
 }
 
 export interface Attachment {

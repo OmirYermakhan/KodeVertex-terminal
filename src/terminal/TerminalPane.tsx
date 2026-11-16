@@ -42,7 +42,8 @@ import { Feed } from '../feed/FeedView'
 import { LiveTerminal } from '../feed/LiveTerminal'
 import { registerPaneCommands, type PaneAction } from '../feed/paneCommands'
 import { FindBar, type FindBarHandle } from '../feed/FindBar'
-import { feedAttachment } from '../attach/fromFeed'
+import { feedAttachment, quoteAttachment } from '../attach/fromFeed'
+import { QuoteReply, quoteSelection, type QuoteSel } from '../claude/QuoteReply'
 import { DROP_TITLE, DROP_TITLE_SHELL, DROP_TITLE_SHELL_MANY, dropSubline, registerDropTarget, setAttachCount, useDrop } from '../attach/dragDrop'
 import { DROP_PATH, Token } from '../attach/tokenView'
 import type { Attachment } from '../attach/types'
@@ -687,12 +688,26 @@ export function TerminalPane(p: TerminalPaneProps) {
   }, [p.paneId])
 
   /** Блок или ответ Claude из ленты — значком у курсора строки ввода (из оболочки — в режим Claude). */
+  /** Выделенный фрагмент ответа Claude — значком-цитатой в строку ввода («Ответить»). */
+  const attachQuote = useCallback((q: QuoteSel) => {
+    const it = itemsRef.current.find((x) => x.id === q.id)
+    const agents = useClaudeSessions.getState().sessions[callbacks.current.paneId]?.state.agents
+    const agentId = it?.kind === 'claude' && it.item.type === 'assistant' ? it.item.agentId : undefined
+    inputRef.current?.insertTokens([quoteAttachment(q.text, agents?.find((a) => a.id === agentId), q.id)], { claude: true })
+  }, [])
   const attachItem = useCallback((id: string | null) => {
+    // В ответе выделен текст — ⌘L отвечает на фрагмент, а не вкладывает всё сообщение.
+    const q = quoteSelection(feedRef.current)
+    if (q) {
+      attachQuote(q)
+      window.getSelection()?.removeAllRanges()
+      return
+    }
     const it = id ? itemsRef.current.find((x) => x.id === id) : undefined
     const agents = useClaudeSessions.getState().sessions[callbacks.current.paneId]?.state.agents
     const tok = feedAttachment(it, agents)
     if (tok) inputRef.current?.insertTokens([tok], { claude: true })
-  }, [])
+  }, [attachQuote])
   // Мини-просмотр значков (строка ввода и пузыри «Вы»): ↵ — открыть файл, к блоку/сообщению, ⌫ — убрать.
   const onPreviewAction = useCallback((a: PreviewAction) => {
     const note = (t: string) => inputRef.current?.note(t)
@@ -1151,6 +1166,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         }
       />
       </PreviewContext.Provider>
+      {!alt && <QuoteReply feedRef={feedRef} onQuote={attachQuote} />}
       {findOpen && !alt && <FindBar ref={findRef} paneId={p.paneId} feedRef={feedRef} onClose={closeFind} />}
       <div className="dock">
         {claudeOpen(claude) && !agentsHidden && (
