@@ -24,34 +24,30 @@ pub fn load_from(path: &Path) -> Option<Value> {
   }
 }
 
-/// Атомарная запись: временный файл рядом, затем rename. Текст должен быть JSON-объектом.
+/// Атомарная запись (уникальный временный файл, sync_all, rename). Текст — JSON-объект от фронта:
+/// полный разбор до 24 МБ на каждую запись не нужен, проверяем лишь, что это объект (`{`).
+/// Битый файл всё равно не потеряет сессию: при чтении он уходит в `.bak`.
 pub fn save_to(path: &Path, text: &str) -> Result<(), String> {
   if text.len() > MAX_BYTES {
     return Err(format!("сессия больше {} МБ", MAX_BYTES / 1024 / 1024));
   }
-  let v: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
-  if !v.is_object() {
+  if text.trim_start().as_bytes().first() != Some(&b'{') {
     return Err("сессия — не объект".into());
   }
-  let parent = path.parent().ok_or("нет родительской папки")?;
-  std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-  let tmp = path.with_extension("json.tmp");
-  std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
-  std::fs::rename(&tmp, path).map_err(|e| {
-    let _ = std::fs::remove_file(&tmp);
-    e.to_string()
-  })
+  crate::settings::atomic_write(path, text.as_bytes())
+}
+
+/// Чтение и разбор (до 24 МБ) — в пуле блокирующих задач, не в главном потоке.
+#[tauri::command]
+pub async fn session_load(app: AppHandle) -> Option<Value> {
+  let path = session_path(&app)?;
+  crate::blocking(move || load_from(&path)).await.ok().flatten()
 }
 
 #[tauri::command]
-pub fn session_load(app: AppHandle) -> Option<Value> {
-  load_from(&session_path(&app)?)
-}
-
-#[tauri::command]
-pub fn session_save(app: AppHandle, text: String) -> Result<(), String> {
+pub async fn session_save(app: AppHandle, text: String) -> Result<(), String> {
   let path = session_path(&app).ok_or("не найдена папка данных приложения")?;
-  save_to(&path, &text)
+  crate::blocking(move || save_to(&path, &text)).await?
 }
 
 #[cfg(test)]
@@ -65,7 +61,9 @@ mod tests {
     let p = d.path().join("a").join(FILE);
     save_to(&p, r#"{"version":1,"tabs":[]}"#).unwrap();
     assert_eq!(load_from(&p), Some(json!({"version":1,"tabs":[]})));
-    assert!(!p.with_extension("json.tmp").exists());
+    // Временных файлов рядом не остаётся.
+    let names: Vec<_> = std::fs::read_dir(p.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(names, vec![std::ffi::OsString::from(FILE)]);
   }
 
   #[test]
@@ -99,6 +97,8 @@ mod tests {
     let p = d.path().join(FILE);
     assert!(save_to(&p, "nope").is_err());
     assert!(save_to(&p, "[]").is_err());
+    assert!(save_to(&p, "").is_err());
+    assert!(save_to(&p, "  \n").is_err());
     let big = format!(r#"{{"x":"{}"}}"#, "a".repeat(MAX_BYTES));
     assert!(save_to(&p, &big).is_err());
     assert!(!p.exists());

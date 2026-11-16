@@ -34,15 +34,30 @@ fn io_message(e: &io::Error) -> String {
   }
 }
 
+/// Записей папки читаем не больше: папка на сотни тысяч файлов не должна надолго занять поток.
+const SCAN_MAX: usize = 100_000;
+
+#[cfg(test)]
 pub fn list_dir(dir: &Path, dirs_only: bool, include_hidden: bool) -> Result<Vec<FsEntry>, String> {
+  list_matching(dir, dirs_only, include_hidden, "", MAX_ENTRIES).map(|(v, _)| v)
+}
+
+/// Записи папки: сначала отбор (скрытые, только папки, начало имени `prefix` без учёта регистра),
+/// затем сортировка (папки первыми, по имени без учёта регистра), и только потом первые `limit`.
+/// Второе значение — сколько записей подошло всего (из первых SCAN_MAX прочитанных).
+pub fn list_matching(dir: &Path, dirs_only: bool, include_hidden: bool, prefix: &str, limit: usize) -> Result<(Vec<FsEntry>, usize), String> {
   let rd = fs::read_dir(dir).map_err(|e| io_message(&e))?;
+  let prefix = prefix.to_lowercase();
   let mut out = Vec::new();
   // Лимит на число ПРОЧИТАННЫХ записей (включая ошибки итератора и отфильтрованные).
-  for item in rd.take(MAX_ENTRIES) {
+  for item in rd.take(SCAN_MAX) {
     let Ok(item) = item else { continue };
     // Имя не в UTF-8 нельзя ни показать, ни подставить без искажения — пропускаем.
     let Ok(name) = item.file_name().into_string() else { continue };
     if !include_hidden && name.starts_with('.') {
+      continue;
+    }
+    if !prefix.is_empty() && !name.to_lowercase().starts_with(&prefix) {
       continue;
     }
     let Ok(ft) = item.file_type() else { continue };
@@ -58,13 +73,10 @@ pub fn list_dir(dir: &Path, dirs_only: bool, include_hidden: bool) -> Result<Vec
     }
     out.push(FsEntry { name, is_dir, is_symlink });
   }
-  out.sort_by(|a, b| {
-    b.is_dir
-      .cmp(&a.is_dir)
-      .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-      .then_with(|| a.name.cmp(&b.name))
-  });
-  Ok(out)
+  out.sort_by_cached_key(|e| (!e.is_dir, e.name.to_lowercase(), e.name.clone()));
+  let total = out.len();
+  out.truncate(limit);
+  Ok((out, total))
 }
 
 pub fn preview(path: &Path) -> FsPreview {
@@ -73,12 +85,8 @@ pub fn preview(path: &Path) -> FsPreview {
     Err(e) => return FsPreview::Error { message: io_message(&e) },
   };
   if meta.is_dir() {
-    return match list_dir(path, false, true) {
-      Ok(mut entries) => {
-        let total = entries.len();
-        entries.truncate(PREVIEW_ENTRIES);
-        FsPreview::Dir { entries, total }
-      }
+    return match list_matching(path, false, true, "", PREVIEW_ENTRIES) {
+      Ok((entries, total)) => FsPreview::Dir { entries, total },
       Err(message) => FsPreview::Error { message },
     };
   }
@@ -86,14 +94,19 @@ pub fn preview(path: &Path) -> FsPreview {
   if !meta.is_file() {
     return FsPreview::Error { message: "Особый файл".to_string() };
   }
+  // Открытие без блокировки, тип — у открытого дескриптора: файл могли подменить после stat.
+  let (f, meta) = match crate::attach::open_regular(path) {
+    Ok(v) => v,
+    Err(e) if e.kind() == io::ErrorKind::InvalidInput => return FsPreview::Error { message: "Особый файл".to_string() },
+    Err(e) => return FsPreview::Error { message: io_message(&e) },
+  };
   let size = meta.len();
   if size > MAX_TEXT_BYTES {
     return FsPreview::Binary { size };
   }
   let mut buf = Vec::with_capacity(size as usize);
-  match fs::File::open(path).and_then(|f| f.take(MAX_TEXT_BYTES).read_to_end(&mut buf)) {
-    Ok(_) => {}
-    Err(e) => return FsPreview::Error { message: io_message(&e) },
+  if let Err(e) = f.take(MAX_TEXT_BYTES).read_to_end(&mut buf) {
+    return FsPreview::Error { message: io_message(&e) };
   }
   if buf.contains(&0) {
     return FsPreview::Binary { size };
@@ -111,14 +124,19 @@ pub fn preview(path: &Path) -> FsPreview {
   FsPreview::Text { lines, truncated }
 }
 
-#[tauri::command(async)]
-pub fn fs_list(dir: String, dirs_only: bool, include_hidden: bool) -> Result<Vec<FsEntry>, String> {
-  list_dir(Path::new(&dir), dirs_only, include_hidden)
+/// `prefix` — необязательное начало имени (без учёта регистра): с ним 2000 записей берутся из
+/// подходящих, а не из первых попавшихся. Фронт может его не передавать.
+#[tauri::command]
+pub async fn fs_list(dir: String, dirs_only: bool, include_hidden: bool, prefix: Option<String>) -> Result<Vec<FsEntry>, String> {
+  crate::blocking(move || {
+    list_matching(Path::new(&dir), dirs_only, include_hidden, prefix.as_deref().unwrap_or(""), MAX_ENTRIES).map(|(v, _)| v)
+  })
+  .await?
 }
 
-#[tauri::command(async)]
-pub fn fs_preview(path: String) -> FsPreview {
-  preview(Path::new(&path))
+#[tauri::command]
+pub async fn fs_preview(path: String) -> FsPreview {
+  crate::blocking(move || preview(Path::new(&path))).await.unwrap_or_else(|message| FsPreview::Error { message })
 }
 
 #[cfg(test)]
@@ -179,14 +197,32 @@ mod tests {
     for i in 0..2500 {
       fs::write(t.path().join(format!("f{i}")), "").unwrap();
     }
-    assert_eq!(list_dir(t.path(), false, false).unwrap().len(), 2000);
+    let all = list_dir(t.path(), false, false).unwrap();
+    assert_eq!(all.len(), 2000);
+    // Первые по алфавиту, а не первые попавшиеся.
+    let mut want: Vec<String> = (0..2500).map(|i| format!("f{i}")).collect();
+    want.sort();
+    assert_eq!(names(&all), want[..2000].iter().map(String::as_str).collect::<Vec<_>>());
     match preview(t.path()) {
       FsPreview::Dir { entries, total } => {
-        assert_eq!(entries.len(), 20);
-        assert_eq!(total, 2000);
+        assert_eq!(names(&entries), want[..20].iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(total, 2500);
       }
       other => panic!("{other:?}"),
     }
+  }
+
+  #[test]
+  fn prefix_filters_before_limit() {
+    let t = tempdir().unwrap();
+    for i in 0..2500 {
+      fs::write(t.path().join(format!("a{i}")), "").unwrap();
+    }
+    fs::write(t.path().join("Zeta.txt"), "").unwrap();
+    fs::create_dir(t.path().join("zoo")).unwrap();
+    let (v, total) = list_matching(t.path(), false, false, "z", MAX_ENTRIES).unwrap();
+    assert_eq!(names(&v), ["zoo", "Zeta.txt"]);
+    assert_eq!(total, 2);
   }
 
   #[test]
@@ -209,9 +245,10 @@ mod tests {
     for i in 0..2500 {
       fs::write(t.path().join(format!("v{i}")), "").unwrap();
     }
-    // 3000 записей, прочитано 2000: видимых не больше 2000 и не меньше 1500
-    let n = list_dir(t.path(), false, false).unwrap().len();
-    assert!((1500..=2000).contains(&n), "{n}");
+    // 3000 записей: скрытые отброшены до лимита, видимых — ровно 2000 первых
+    let v = list_dir(t.path(), false, false).unwrap();
+    assert_eq!(v.len(), 2000);
+    assert!(v.iter().all(|e| !e.name.starts_with('.')));
   }
 
   #[test]

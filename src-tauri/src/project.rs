@@ -152,20 +152,21 @@ pub fn read_file(root: &Path, rel: &str) -> FileText {
   FileText::Text { lines, truncated, size }
 }
 
-/// Async-команды: ввод-вывод и git идут в пуле, не в главном потоке.
-#[tauri::command(async)]
-pub fn project_root(cwd: String) -> String {
-  project_root_at(Path::new(&cwd))
+/// Команды панели: ввод-вывод и git — в пуле блокирующих задач, не в главном потоке и не в рабочих потоках tokio.
+#[tauri::command]
+pub async fn project_root(cwd: String) -> String {
+  let fallback = cwd.clone();
+  crate::blocking(move || project_root_at(Path::new(&cwd))).await.unwrap_or(fallback)
 }
 
-#[tauri::command(async)]
-pub fn project_list(root: String, rel: String) -> Result<DirList, String> {
-  list_dir(Path::new(&root), &rel)
+#[tauri::command]
+pub async fn project_list(root: String, rel: String) -> Result<DirList, String> {
+  crate::blocking(move || list_dir(Path::new(&root), &rel)).await?
 }
 
-#[tauri::command(async)]
-pub fn project_read(root: String, rel: String) -> FileText {
-  read_file(Path::new(&root), &rel)
+#[tauri::command]
+pub async fn project_read(root: String, rel: String) -> FileText {
+  crate::blocking(move || read_file(Path::new(&root), &rel)).await.unwrap_or_else(|message| FileText::Error { message })
 }
 
 #[derive(Serialize, Debug, PartialEq, Clone)]
@@ -417,6 +418,7 @@ fn untracked_diff(root: &Path, rel: &str) -> Result<String, String> {
   }
 }
 
+#[cfg(test)]
 pub fn git_diff_at(root: &Path, rel: &str, rev: Option<&str>) -> Result<String, String> {
   git_diff_pair(root, rel, None, rev)
 }
@@ -463,24 +465,24 @@ fn cut_mark((mut s, cut): (String, bool)) -> String {
   s
 }
 
-#[tauri::command(async)]
-pub fn git_status(root: String) -> Result<GitStatus, String> {
-  git_status_at(Path::new(&root))
+#[tauri::command]
+pub async fn git_status(root: String) -> Result<GitStatus, String> {
+  crate::blocking(move || git_status_at(Path::new(&root))).await?
 }
 
-#[tauri::command(async)]
-pub fn git_log(root: String, skip: u32, limit: u32) -> Result<Vec<Commit>, String> {
-  git_log_at(Path::new(&root), skip, limit)
+#[tauri::command]
+pub async fn git_log(root: String, skip: u32, limit: u32) -> Result<Vec<Commit>, String> {
+  crate::blocking(move || git_log_at(Path::new(&root), skip, limit)).await?
 }
 
-#[tauri::command(async)]
-pub fn git_commit_files(root: String, hash: String) -> Result<Vec<Change>, String> {
-  git_commit_files_at(Path::new(&root), &hash)
+#[tauri::command]
+pub async fn git_commit_files(root: String, hash: String) -> Result<Vec<Change>, String> {
+  crate::blocking(move || git_commit_files_at(Path::new(&root), &hash)).await?
 }
 
-#[tauri::command(async)]
-pub fn git_diff(root: String, rel: String, old_rel: Option<String>, rev: Option<String>) -> Result<String, String> {
-  git_diff_pair(Path::new(&root), &rel, old_rel.as_deref(), rev.as_deref())
+#[tauri::command]
+pub async fn git_diff(root: String, rel: String, old_rel: Option<String>, rev: Option<String>) -> Result<String, String> {
+  crate::blocking(move || git_diff_pair(Path::new(&root), &rel, old_rel.as_deref(), rev.as_deref())).await?
 }
 
 #[cfg(test)]
