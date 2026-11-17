@@ -24,13 +24,15 @@ import App from './App.tsx'
 import { ErrorBoundary } from './diag/ErrorBoundary'
 import { installGlobalErrorLog } from './diag/log'
 
-import { finalSave, restoreSession } from './persist/session'
+import { finalSave } from './persist/session'
+import { bootWindow } from './windows/transfer'
 import { installExitHandler } from './persist/exit'
 
 installGlobalErrorLog()
 
-// Вкладки, панели и ленты прошлого запуска — до первого рендера (оболочки стартуют в своих каталогах).
-void restoreSession().then(() => {
+// Вкладки, панели и ленты прошлого запуска (или вкладка, перенесённая из другого окна) — до первого
+// рендера: оболочки стартуют в своих каталогах, живые — подключаются.
+void bootWindow().then(() => {
   // ⌘Q и закрытие окна: Rust ждёт app_exit_ready, пока дописываются сессия и настройки.
   installExitHandler().catch(() => {})
   // Перезагрузка страницы (без выхода): запись без ожидания — лучше, чем ничего.

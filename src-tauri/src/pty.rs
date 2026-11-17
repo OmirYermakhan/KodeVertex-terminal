@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use tauri::ipc::{Channel, InvokeResponseBody};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
 
 use crate::shell;
 
@@ -27,24 +27,60 @@ const READ_POLL: Duration = Duration::from_millis(100);
 const FLUSH_EVERY: Duration = Duration::from_millis(4);
 const FLUSH_MAX: usize = 64 * 1024;
 
-/// Пауза чтения (обратное давление от фронта): пока закрыта, читатель не берёт вывод из PTY —
-/// буфер ядра заполняется, и программа в терминале блокируется на записи.
+/// Пауза чтения: пока закрыта, читатель не берёт вывод из PTY — буфер ядра заполняется,
+/// и программа в терминале блокируется на записи. Две независимые причины:
+/// - `paused` — обратное давление от фронта (`pty_pause` / `pty_resume`);
+/// - `detached` — сессия отсоединена от окна (`pty_detach`), переезжает в другое окно.
+///
+/// Отдельный флаг нужен, чтобы `pty_resume` старого окна не открыл отсоединённую сессию.
+/// `pty_attach` снимает оба: пауза обратного давления принадлежала старому окну (его счётчик
+/// непрочитанного ушёл вместе с ним), а клиент нового окна начинает без паузы.
 #[derive(Default)]
 struct Gate {
-  paused: Mutex<bool>,
+  state: Mutex<GateState>,
   cv: Condvar,
 }
 
+#[derive(Default, Clone, Copy)]
+struct GateState {
+  paused: bool,
+  detached: bool,
+}
+
+impl GateState {
+  fn closed(self) -> bool {
+    self.paused || self.detached
+  }
+}
+
 impl Gate {
-  fn set(&self, paused: bool) {
-    *lock(&self.paused) = paused;
+  fn update(&self, f: impl FnOnce(&mut GateState)) {
+    f(&mut lock(&self.state));
     self.cv.notify_all();
+  }
+
+  fn set(&self, paused: bool) {
+    self.update(|s| s.paused = paused);
+  }
+
+  fn set_detached(&self, detached: bool) {
+    self.update(|s| s.detached = detached);
+  }
+
+  /// Открыть полностью (оболочка вышла — хвост вывода надо дочитать; новое окно подключилось).
+  fn open_all(&self) {
+    self.update(|s| *s = GateState::default());
+  }
+
+  #[cfg(unix)]
+  fn closed(&self) -> bool {
+    lock(&self.state).closed()
   }
 
   /// Ждёт снятия паузы; false — пора останавливаться (флаг stop).
   fn wait_open(&self, stop: &AtomicBool) -> bool {
-    let mut p = lock(&self.paused);
-    while *p {
+    let mut p = lock(&self.state);
+    while p.closed() {
       if stop.load(Ordering::SeqCst) {
         return false;
       }
@@ -54,6 +90,49 @@ impl Gate {
   }
 }
 
+type DataSink = Box<dyn Fn(Vec<u8>) + Send>;
+type ExitSink = Box<dyn Fn(Option<u32>) + Send>;
+
+/// Связь сессии с окном: заменяемые колбэки вывода и выхода и окно-владелец. Пока сессия
+/// отсоединена (колбэков нет), прочитанное до паузы копится в `pending`, а код выхода — в `exit`;
+/// всё отдаётся по порядку при `attach`.
+struct Link {
+  owner: Option<String>,
+  on_data: Option<DataSink>,
+  on_exit: Option<ExitSink>,
+  pending: Vec<u8>,
+  /// Оболочка вышла, пока сессия была отсоединена: код ждёт нового окна.
+  exit: Option<Option<u32>>,
+  /// Номер отсоединения: таймер сироты убивает сессию, только если с тех пор её не подключали.
+  generation: u64,
+  gate: Arc<Gate>,
+}
+
+impl Link {
+  fn data(&mut self, bytes: Vec<u8>) {
+    match &self.on_data {
+      Some(f) => f(bytes),
+      None => self.pending.extend_from_slice(&bytes),
+    }
+  }
+
+  fn exited(&mut self, code: Option<u32>) {
+    match &self.on_exit {
+      Some(f) => f(code),
+      None => self.exit = Some(code),
+    }
+  }
+
+  fn attached(&self) -> bool {
+    self.on_data.is_some()
+  }
+}
+
+type SharedLink = Arc<Mutex<Link>>;
+
+/// Сколько отсоединённая сессия ждёт нового окна, прежде чем её закроют (перенос потерялся).
+pub const ORPHAN_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct SpawnOpts {
   pub cwd: Option<PathBuf>,
   pub cols: u16,
@@ -62,6 +141,8 @@ pub struct SpawnOpts {
   pub zdotdir: PathBuf,
   /// Доп. переменные окружения; перекрывают базовые.
   pub env: Vec<(String, String)>,
+  /// Окно-владелец (метка): его перезагрузка или закрытие закрывает сессию.
+  pub owner: Option<String>,
 }
 
 struct Session {
@@ -76,8 +157,10 @@ struct Session {
   /// Оболочка завершилась и подобрана `wait`: её pid мог достаться другому процессу.
   #[cfg_attr(not(unix), allow(dead_code))]
   exited: Arc<AtomicBool>,
-  /// Пауза чтения (`pty_pause` / `pty_resume`).
+  /// Пауза чтения (`pty_pause` / `pty_resume`, отсоединение).
   gate: Arc<Gate>,
+  /// Колбэки и владелец (заменяются при переносе в другое окно).
+  link: SharedLink,
 }
 
 type Sessions = Arc<Mutex<HashMap<String, Session>>>;
@@ -109,6 +192,8 @@ fn is_zsh(shell: &str) -> bool {
 #[derive(Default)]
 pub struct PtyManager {
   sessions: Sessions,
+  /// Отсоединённые сессии (в том числе уже вышедшие — их код выхода ждёт `attach`).
+  detached: Arc<Mutex<HashMap<String, SharedLink>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -165,6 +250,15 @@ impl PtyManager {
     let stop_reading = Arc::new(AtomicBool::new(false));
     let exited = Arc::new(AtomicBool::new(false));
     let gate = Arc::new(Gate::default());
+    let link = Arc::new(Mutex::new(Link {
+      owner: opts.owner,
+      on_data: Some(Box::new(on_data)),
+      on_exit: Some(Box::new(on_exit)),
+      pending: Vec::new(),
+      exit: None,
+      generation: 0,
+      gate: gate.clone(),
+    }));
     let (input, input_rx) = mpsc::channel::<Vec<u8>>();
     let (read_done, read_done_rx) = mpsc::channel::<()>();
 
@@ -178,6 +272,7 @@ impl PtyManager {
         stop_reading: stop_reading.clone(),
         exited: exited.clone(),
         gate: gate.clone(),
+        link: link.clone(),
       },
     );
 
@@ -193,8 +288,11 @@ impl PtyManager {
 
     let stop = stop_reading.clone();
     let read_gate = gate.clone();
+    let read_link = link.clone();
     spawn_thread(format!("pty-read-{id}"), move || {
-      reader.run(&stop, &read_gate, on_data);
+      // Под замком связи: `attach` отдаёт накопленное и ставит новый колбэк атомарно — порядок
+      // байтов сохраняется.
+      reader.run(&stop, &read_gate, |bytes| lock(&read_link).data(bytes));
       let _ = read_done.send(());
     })?;
 
@@ -203,15 +301,17 @@ impl PtyManager {
     spawn_thread(format!("pty-wait-{id}"), move || {
       let code = child.wait().ok().map(|s| s.exit_code());
       exited.store(true, Ordering::SeqCst);
-      // Пауза больше не нужна: хвост вывода дочитываем, иначе он пропал бы.
-      gate.set(false);
+      // Пауза больше не нужна: хвост вывода дочитываем, иначе он пропал бы (у отсоединённой
+      // сессии он копится в `pending`).
+      gate.open_all();
       // Даём читателю дочитать хвост вывода, затем останавливаем его в любом случае:
       // слейв может держать отвязанный потомок, и тогда EOF не придёт никогда.
       let _ = read_done_rx.recv_timeout(DRAIN_GRACE);
       stop_reading.store(true, Ordering::SeqCst);
       // Сессию убираем до события, чтобы после on_exit write уже давал Err.
       lock(&sessions).remove(&wait_id);
-      on_exit(code);
+      // Отсоединена — код запоминается до `attach`.
+      lock(&link).exited(code);
     })?;
 
     Ok(Spawned { id, mark })
@@ -237,6 +337,8 @@ impl PtyManager {
   /// оболочке, если она ещё жива. Задания с `nohup`/`trap '' HUP` и отвязанные
   /// (`disown`) переживают закрытие. Неизвестная или уже завершённая сессия — не ошибка.
   pub fn kill(&self, id: &str) -> Result<(), String> {
+    // Отсоединённую сессию (даже вышедшую) больше никто не подключит.
+    lock(&self.detached).remove(id);
     #[cfg_attr(unix, allow(unused_mut))]
     let Some(mut s) = lock(&self.sessions).remove(id) else { return Ok(()) };
     s.stop_reading.store(true, Ordering::SeqCst);
@@ -281,12 +383,84 @@ impl PtyManager {
     }
   }
 
-  /// Закрыть все сессии (перезагрузка страницы: прежние терминалы фронту уже не принадлежат).
+  /// Закрыть все сессии (выход из приложения).
   pub fn kill_all(&self) {
     let ids: Vec<String> = lock(&self.sessions).keys().cloned().collect();
     for id in ids {
       let _ = self.kill(&id);
     }
+    lock(&self.detached).clear();
+  }
+
+  /// Закрыть сессии окна `owner` (его страница перезагрузилась или окно закрыто). Отсоединённые
+  /// (владельца нет) не трогаются — их ждёт другое окно или таймер сироты.
+  pub fn kill_owner(&self, owner: &str) {
+    let links: Vec<(String, SharedLink)> = lock(&self.sessions).iter().map(|(id, s)| (id.clone(), s.link.clone())).collect();
+    for (id, link) in links {
+      if lock(&link).owner.as_deref() == Some(owner) {
+        let _ = self.kill(&id);
+      }
+    }
+  }
+
+  /// Отсоединить сессию от окна (переезд вкладки): пауза чтения, колбэки сняты, владельца нет.
+  /// Возвращает номер отсоединения для `expire_orphan`.
+  pub fn detach(&self, id: &str) -> Result<u64, String> {
+    let link = lock(&self.sessions).get(id).map(|s| s.link.clone()).ok_or_else(|| no_session(id))?;
+    let generation = {
+      let mut l = lock(&link);
+      // Пауза до снятия колбэка: дочитанное до паузы читатель отдаст в `pending`.
+      l.gate.set_detached(true);
+      l.on_data = None;
+      l.on_exit = None;
+      l.owner = None;
+      l.generation += 1;
+      l.generation
+    };
+    lock(&self.detached).insert(id.to_string(), link);
+    Ok(generation)
+  }
+
+  /// Подключить отсоединённую сессию к окну `owner`: сначала накопленный вывод, затем живой;
+  /// если оболочка уже вышла — сразу `on_exit`. Неизвестная сессия — ошибка.
+  pub fn attach(
+    &self,
+    id: &str,
+    owner: Option<String>,
+    on_data: impl Fn(Vec<u8>) + Send + 'static,
+    on_exit: impl Fn(Option<u32>) + Send + 'static,
+  ) -> Result<(), String> {
+    let link = lock(&self.detached)
+      .remove(id)
+      .or_else(|| lock(&self.sessions).get(id).map(|s| s.link.clone()))
+      .ok_or_else(|| no_session(id))?;
+    let mut l = lock(&link);
+    let pending = std::mem::take(&mut l.pending);
+    if !pending.is_empty() {
+      on_data(pending);
+    }
+    l.owner = owner;
+    l.on_data = Some(Box::new(on_data));
+    if let Some(code) = l.exit.take() {
+      on_exit(code);
+    }
+    l.on_exit = Some(Box::new(on_exit));
+    l.gate.open_all();
+    Ok(())
+  }
+
+  /// Таймер сироты: сессия так и не подключена с отсоединения `generation` — закрыть.
+  /// true — закрыта.
+  pub fn expire_orphan(&self, id: &str, generation: u64) -> bool {
+    let stale = lock(&self.detached).get(id).is_some_and(|l| {
+      let l = lock(l);
+      l.generation == generation && !l.attached()
+    });
+    if stale {
+      log::warn!("отсоединённый терминал {id} не подключён за {ORPHAN_TIMEOUT:?}: закрываем");
+      let _ = self.kill(id);
+    }
+    stale
   }
 
   /// PID оболочки живой сессии.
@@ -340,7 +514,7 @@ impl PtyReader {
       *since = None;
     };
     while !stop.load(Ordering::SeqCst) {
-      if *lock(&gate.paused) {
+      if gate.closed() {
         // Перед паузой отдаём накопленное: фронт видит всё, что уже прочитано.
         flush(&mut pending, &mut since);
         if !gate.wait_open(stop) {
@@ -422,8 +596,10 @@ fn wait_readable(file: &std::fs::File, timeout: Duration) -> std::io::Result<boo
 }
 
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)] // параметры команды — поля JSON от фронта
 pub fn pty_spawn(
   app: AppHandle,
+  window: WebviewWindow,
   manager: State<'_, PtyManager>,
   cwd: Option<String>,
   cols: u16,
@@ -437,6 +613,7 @@ pub fn pty_spawn(
     rows,
     zdotdir: shell::integration_dir(&app),
     env: Vec::new(),
+    owner: Some(window.label().to_string()),
   };
   manager.spawn(
     opts,
@@ -477,6 +654,39 @@ pub fn pty_pause(manager: State<'_, PtyManager>, id: String) -> Result<(), Strin
 pub fn pty_resume(manager: State<'_, PtyManager>, id: String) -> Result<(), String> {
   manager.resume(&id);
   Ok(())
+}
+
+/// Отсоединить терминал от окна (вкладка переезжает). Вывод ждёт в ядре, выход запоминается.
+/// Не подключённый за `ORPHAN_TIMEOUT` — закрывается.
+#[tauri::command]
+pub fn pty_detach(app: AppHandle, manager: State<'_, PtyManager>, id: String) -> Result<(), String> {
+  let generation = manager.detach(&id)?;
+  std::thread::spawn(move || {
+    std::thread::sleep(ORPHAN_TIMEOUT);
+    app.state::<PtyManager>().expire_orphan(&id, generation);
+  });
+  Ok(())
+}
+
+/// Подключить отсоединённый терминал к окну вызова с новыми каналами.
+#[tauri::command]
+pub fn pty_attach(
+  window: WebviewWindow,
+  manager: State<'_, PtyManager>,
+  id: String,
+  on_data: Channel<InvokeResponseBody>,
+  on_exit: Channel<Option<u32>>,
+) -> Result<(), String> {
+  manager.attach(
+    &id,
+    Some(window.label().to_string()),
+    move |bytes| {
+      let _ = on_data.send(InvokeResponseBody::Raw(bytes));
+    },
+    move |code| {
+      let _ = on_exit.send(code);
+    },
+  )
 }
 
 #[cfg(test)]
@@ -580,6 +790,7 @@ pub(crate) mod tests {
       rows: 24,
       zdotdir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("shell/zsh"),
       env,
+      owner: None,
     }
   }
 
@@ -1172,5 +1383,109 @@ pub(crate) mod tests {
     let reader_done = out.wait_reader_done();
     unsafe { libc::kill(bg as libc::pid_t, libc::SIGKILL) };
     assert!(reader_done, "поток чтения не завершился");
+  }
+
+  fn exit_sink(tx: mpsc::Sender<Option<u32>>) -> impl Fn(Option<u32>) + Send + 'static {
+    move |code| {
+      let _ = tx.send(code);
+    }
+  }
+
+  /// Вывод, появившийся, пока сессия отсоединена, не теряется: приходит в новый колбэк.
+  #[test]
+  fn pty_detach_holds_output_and_attach_delivers_it() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, out, rx, _mk) = start(&m, opts(home.path(), &[]));
+    m.detach(&id).unwrap();
+    let from = out.len();
+    m.write(&id, b"echo \"MO\"\"VED\"\n").unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(!out.text()[from..].contains("MOVED"), "вывод ушёл в старый колбэк: {:?}", out.text());
+    // pty_resume старого окна отсоединённую сессию не открывает.
+    m.resume(&id);
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(!out.text()[from..].contains("MOVED"));
+    let out2 = Output::default();
+    let (tx2, rx2) = mpsc::channel();
+    m.attach(&id, Some("w-2".into()), out2.sink(), exit_sink(tx2)).unwrap();
+    assert!(out2.wait_for(b"MOVED", 0), "после attach вывода нет: {:?}", out2.text());
+    m.kill(&id).unwrap();
+    // Выход — в новый колбэк, не в старый.
+    rx2.recv_timeout(EXIT_TIMEOUT).expect("on_exit нового окна");
+    assert!(rx.try_recv().is_err());
+  }
+
+  /// Оболочка вышла во время отсоединения — код приходит сразу при attach.
+  #[test]
+  fn pty_exit_during_detach_is_delivered_on_attach() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, _out, rx, _mk) = start(&m, opts(home.path(), &[]));
+    m.detach(&id).unwrap();
+    // `exit` здесь не годится: zsh при выходе ждёт, пока вывод уйдёт из tty (а чтение на паузе).
+    // Оболочку завершает сигнал — как упавшая программа.
+    let pid = m.pid(&id).expect("pid");
+    unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    let deadline = Instant::now() + EXIT_TIMEOUT;
+    while m.write(&id, b"").is_ok() && Instant::now() < deadline {
+      std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(m.write(&id, b"").is_err(), "оболочка не вышла");
+    assert!(rx.try_recv().is_err(), "выход ушёл в старый колбэк");
+    let out2 = Output::default();
+    let (tx2, rx2) = mpsc::channel();
+    m.attach(&id, None, out2.sink(), exit_sink(tx2)).unwrap();
+    assert!(rx2.recv_timeout(Duration::from_millis(100)).is_ok(), "on_exit при attach");
+    // Второй раз подключить нечего.
+    let (tx3, _rx3) = mpsc::channel();
+    assert!(m.attach(&id, None, |_| {}, exit_sink(tx3)).is_err());
+  }
+
+  #[test]
+  fn pty_attach_unknown_is_error_and_orphan_expires() {
+    let m = PtyManager::default();
+    let (tx, _rx) = mpsc::channel();
+    assert!(m.attach("нет", None, |_| {}, exit_sink(tx)).is_err());
+    assert!(m.detach("нет").is_err());
+
+    let home = temp_home();
+    let (id, _out, rx, _mk) = start(&m, opts(home.path(), &[]));
+    let g1 = m.detach(&id).unwrap();
+    // Подключили и снова отсоединили: таймер первого отсоединения сессию не трогает.
+    let (tx2, _rx2) = mpsc::channel();
+    m.attach(&id, None, |_| {}, exit_sink(tx2)).unwrap();
+    let g2 = m.detach(&id).unwrap();
+    assert!(!m.expire_orphan(&id, g1));
+    assert!(m.write(&id, b"").is_ok());
+    assert!(m.expire_orphan(&id, g2));
+    assert!(m.write(&id, b"").is_err());
+    let (tx3, _rx3) = mpsc::channel();
+    assert!(m.attach(&id, None, |_| {}, exit_sink(tx3)).is_err());
+    assert!(rx.try_recv().is_err());
+  }
+
+  /// Перезагрузка/закрытие окна закрывает только его терминалы.
+  #[test]
+  fn pty_kill_owner_closes_only_that_window() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let mut oa = opts(home.path(), &[]);
+    oa.owner = Some("main".into());
+    let mut ob = opts(home.path(), &[]);
+    ob.owner = Some("w-1".into());
+    let (a, _oa, rxa, _) = start(&m, oa);
+    let (b, _ob, rxb, _) = start(&m, ob);
+    let (c, _oc, rxc, _) = start(&m, opts(home.path(), &[]));
+    m.detach(&c).unwrap();
+    m.kill_owner("main");
+    assert!(rxa.recv_timeout(EXIT_TIMEOUT).is_ok());
+    assert!(m.write(&a, b"").is_err());
+    assert!(m.write(&b, b"").is_ok());
+    assert!(m.write(&c, b"").is_ok(), "отсоединённая сессия закрыта вместе с окном");
+    assert!(rxb.try_recv().is_err());
+    m.kill(&b).unwrap();
+    m.kill(&c).unwrap();
+    let _ = rxc;
   }
 }

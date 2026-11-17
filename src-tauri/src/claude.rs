@@ -38,15 +38,55 @@ struct Proc {
   stopping: bool,
 }
 
+type LineSink = Box<dyn Fn(String) + Send>;
+type ExitSink = Box<dyn Fn(Option<i32>, String) + Send>;
+
+/// Связь процесса с окном: заменяемые колбэки и окно-владелец. Пока процесс отсоединён
+/// (вкладка переезжает в другое окно), строки stdout копятся в `queue` — процесс не блокируется,
+/// а выход запоминается в `exit`; `attach` отдаёт всё по порядку: строки, затем выход.
+struct Link {
+  owner: Option<String>,
+  on_line: Option<LineSink>,
+  on_exit: Option<ExitSink>,
+  queue: Vec<String>,
+  exit: Option<(Option<i32>, String)>,
+  /// Номер отсоединения: таймер сироты останавливает процесс, только если с тех пор его не подключали.
+  generation: u64,
+}
+
+impl Link {
+  fn line(&mut self, line: String) {
+    match &self.on_line {
+      Some(f) => f(line),
+      None => self.queue.push(line),
+    }
+  }
+
+  fn exited(&mut self, code: Option<i32>, stderr: String) {
+    match &self.on_exit {
+      Some(f) => f(code, stderr),
+      None => self.exit = Some((code, stderr)),
+    }
+  }
+}
+
+type SharedLink = Arc<Mutex<Link>>;
+
+/// Сколько отсоединённый процесс ждёт нового окна, прежде чем его остановят (перенос потерялся).
+pub const ORPHAN_TIMEOUT: Duration = Duration::from_secs(30);
+
 struct Session {
   pid: u32,
   proc_: Arc<Mutex<Proc>>,
   stdin: Arc<Mutex<ChildStdin>>,
+  link: SharedLink,
 }
 
 #[derive(Default, Clone)]
 pub struct ClaudeManager {
   sessions: Arc<Mutex<HashMap<String, Session>>>,
+  /// Отсоединённые процессы (в том числе уже вышедшие — их выход ждёт `attach`).
+  detached: Arc<Mutex<HashMap<String, SharedLink>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -101,6 +141,8 @@ pub struct Launch {
   /// `--append-system-prompt DIAGRAMS_HINT`: просит claude рисовать схемы блоками ```mermaid
   /// (лента показывает их картинкой). Нет — флаг не передаётся.
   pub diagrams_hint: bool,
+  /// Окно-владелец (метка): его перезагрузка или закрытие останавливает процесс.
+  pub owner: Option<String>,
 }
 
 /// Подсказка claude про схемы: терминал рисует блоки ```mermaid картинкой.
@@ -209,12 +251,22 @@ impl ClaudeManager {
     let id = uuid::Uuid::new_v4().to_string();
     let pid = child.id();
     let proc_ = Arc::new(Mutex::new(Proc::default()));
-    lock(&self.sessions).insert(id.clone(), Session { pid, proc_: proc_.clone(), stdin: Arc::new(Mutex::new(stdin)) });
+    let link = Arc::new(Mutex::new(Link {
+      owner: launch.owner.clone(),
+      on_line: Some(Box::new(on_line)),
+      on_exit: Some(Box::new(on_exit)),
+      queue: Vec::new(),
+      exit: None,
+      generation: 0,
+    }));
+    lock(&self.sessions)
+      .insert(id.clone(), Session { pid, proc_: proc_.clone(), stdin: Arc::new(Mutex::new(stdin)), link: link.clone() });
 
     let (out_done, out_done_rx) = mpsc::channel::<()>();
     let (err_done, err_done_rx) = mpsc::channel::<Vec<u8>>();
     let tail = Arc::new(Mutex::new(Vec::<u8>::new()));
 
+    let out_link = link.clone();
     spawn_thread(format!("claude-out-{id}"), move || {
       let mut reader = BufReader::new(stdout);
       let mut buf = Vec::new();
@@ -226,7 +278,7 @@ impl ClaudeManager {
             let line = String::from_utf8_lossy(&buf);
             let line = line.trim_end_matches(['\n', '\r']);
             if !line.trim().is_empty() {
-              on_line(line.to_string());
+              lock(&out_link).line(line.to_string());
             }
           }
         }
@@ -273,7 +325,8 @@ impl ClaudeManager {
       let _ = out_done_rx.recv_timeout(DRAIN_GRACE);
       let _ = err_done_rx.recv_timeout(DRAIN_GRACE);
       let text = String::from_utf8_lossy(&lock(&tail)).into_owned();
-      on_exit(code, text);
+      // Отсоединён — выход ждёт `attach` (после накопленных строк).
+      lock(&link).exited(code, text);
     })?;
 
     Ok(id)
@@ -333,6 +386,8 @@ impl ClaudeManager {
   /// Просит процесс завершиться (SIGTERM), через `KILL_GRACE` — SIGKILL (отдельный поток-таймер).
   /// Неизвестная или уже завершённая сессия — не ошибка.
   pub fn stop(&self, id: &str) -> Result<(), String> {
+    // Отсоединённый процесс (даже вышедший) больше никто не подключит.
+    lock(&self.detached).remove(id);
     let Some((pid, proc_)) = lock(&self.sessions).get(id).map(|s| (s.pid, s.proc_.clone())) else {
       return Ok(());
     };
@@ -344,7 +399,19 @@ impl ClaudeManager {
   /// `SHUTDOWN_GRACE` оставшимся — SIGKILL вместе с потомками. Только сессии, бывшие на момент
   /// вызова: запущенные после (новой страницей) не трогаются.
   pub fn stop_all(&self) {
-    let procs: Vec<(u32, Arc<Mutex<Proc>>)> = lock(&self.sessions).values().map(|s| (s.pid, s.proc_.clone())).collect();
+    lock(&self.detached).clear();
+    self.stop_where(|_| true);
+  }
+
+  /// Остановить процессы окна `owner` (его страница перезагрузилась или окно закрыто) — как
+  /// `stop_all`, но только его. Отсоединённые (владельца нет) не трогаются.
+  pub fn stop_owner(&self, owner: &str) {
+    self.stop_where(|l| l.owner.as_deref() == Some(owner));
+  }
+
+  fn stop_where(&self, pick: impl Fn(&Link) -> bool) {
+    let procs: Vec<(u32, Arc<Mutex<Proc>>)> =
+      lock(&self.sessions).values().filter(|s| pick(&lock(&s.link))).map(|s| (s.pid, s.proc_.clone())).collect();
     for (pid, p) in &procs {
       stop_proc(*pid, p);
     }
@@ -359,6 +426,65 @@ impl ClaudeManager {
         kill_group(*pid, libc::SIGKILL);
       }
     }
+  }
+}
+
+impl ClaudeManager {
+  /// Отсоединить процесс от окна (вкладка переезжает): строки копятся, владельца нет.
+  /// Возвращает номер отсоединения для `expire_orphan`.
+  pub fn detach(&self, id: &str) -> Result<u64, String> {
+    let link = lock(&self.sessions).get(id).map(|s| s.link.clone()).ok_or_else(|| no_session(id))?;
+    let generation = {
+      let mut l = lock(&link);
+      l.on_line = None;
+      l.on_exit = None;
+      l.owner = None;
+      l.generation += 1;
+      l.generation
+    };
+    lock(&self.detached).insert(id.to_string(), link);
+    Ok(generation)
+  }
+
+  /// Подключить отсоединённый процесс к окну `owner`: сначала накопленные строки по порядку,
+  /// затем живые; выход, случившийся без окна, — после строк. Неизвестный id — ошибка.
+  pub fn attach(
+    &self,
+    id: &str,
+    owner: Option<String>,
+    on_line: impl Fn(String) + Send + 'static,
+    on_exit: impl Fn(Option<i32>, String) + Send + 'static,
+  ) -> Result<(), String> {
+    let link = lock(&self.detached)
+      .remove(id)
+      .or_else(|| lock(&self.sessions).get(id).map(|s| s.link.clone()))
+      .ok_or_else(|| no_session(id))?;
+    // Под замком связи: читатель stdout ждёт, пока очередь не отдана и колбэк не поставлен.
+    let mut l = lock(&link);
+    for line in std::mem::take(&mut l.queue) {
+      on_line(line);
+    }
+    l.owner = owner;
+    l.on_line = Some(Box::new(on_line));
+    if let Some((code, stderr)) = l.exit.take() {
+      on_exit(code, stderr);
+    }
+    l.on_exit = Some(Box::new(on_exit));
+    Ok(())
+  }
+
+  /// Таймер сироты: процесс так и не подключён с отсоединения `generation` — остановить.
+  /// true — остановлен.
+  pub fn expire_orphan(&self, id: &str, generation: u64) -> bool {
+    let stale = lock(&self.detached).get(id).is_some_and(|l| {
+      let l = lock(l);
+      l.generation == generation && l.on_line.is_none()
+    });
+    if stale {
+      log::warn!("отсоединённый claude {id} не подключён за {ORPHAN_TIMEOUT:?}: останавливаем");
+      let _ = self.stop(id);
+    }
+    stale
   }
 }
 
@@ -507,6 +633,7 @@ pub struct ClaudeExit {
 #[allow(clippy::too_many_arguments)] // параметры команды — поля JSON от фронта
 pub async fn claude_start(
   app: tauri::AppHandle,
+  window: tauri::WebviewWindow,
   manager: State<'_, ClaudeManager>,
   cwd: String,
   resume: Option<String>,
@@ -539,7 +666,42 @@ pub async fn claude_start(
       fork: fork.unwrap_or(false),
       prompt_suggestions: prompt_suggestions.unwrap_or(false),
       diagrams_hint: diagrams_hint.unwrap_or(false),
+      owner: Some(window.label().to_string()),
     },
+    move |line| {
+      let _ = on_line.send(line);
+    },
+    move |code, stderr| {
+      let _ = on_exit.send(ClaudeExit { code, stderr });
+    },
+  )
+}
+
+/// Отсоединить процесс claude от окна (вкладка переезжает). Не подключённый за `ORPHAN_TIMEOUT`
+/// — останавливается.
+#[tauri::command]
+pub fn claude_detach(manager: State<'_, ClaudeManager>, id: String) -> Result<(), String> {
+  let generation = manager.detach(&id)?;
+  let m = manager.inner().clone();
+  std::thread::spawn(move || {
+    std::thread::sleep(ORPHAN_TIMEOUT);
+    m.expire_orphan(&id, generation);
+  });
+  Ok(())
+}
+
+/// Подключить отсоединённый процесс claude к окну вызова с новыми каналами.
+#[tauri::command]
+pub fn claude_attach(
+  window: tauri::WebviewWindow,
+  manager: State<'_, ClaudeManager>,
+  id: String,
+  on_line: Channel<String>,
+  on_exit: Channel<ClaudeExit>,
+) -> Result<(), String> {
+  manager.attach(
+    &id,
+    Some(window.label().to_string()),
     move |line| {
       let _ = on_line.send(line);
     },
@@ -797,7 +959,7 @@ mod tests {
     let l = Launch { resume: Some("s-1".into()), resume_at: Some(String::new()), fork: false, ..Launch::default() };
     assert_eq!(launch_args(&l)[2..], ["--resume", "s-1"]);
     // Модель, усилие и режим при перезапуске сохраняются.
-    let l = Launch { resume: Some("s-1".into()), resume_at: Some("u-9".into()), fork: true, model: Some("fable".into()), effort: Some("high".into()), permission_mode: Some("default".into()), prompt_suggestions: false, diagrams_hint: false, path_env: None };
+    let l = Launch { resume: Some("s-1".into()), resume_at: Some("u-9".into()), fork: true, model: Some("fable".into()), effort: Some("high".into()), permission_mode: Some("default".into()), prompt_suggestions: false, diagrams_hint: false, path_env: None, owner: None };
     assert_eq!(launch_args(&l), ["--permission-mode", "default", "--model", "fable", "--effort", "high", "--resume", "s-1", "--resume-session-at", "u-9", "--fork-session"]);
   }
 
@@ -1032,5 +1194,119 @@ mod tests {
     };
     let v: serde_json::Value = serde_json::from_str(&lrx.recv_timeout(WAIT).unwrap()).unwrap();
     assert_eq!(v["v"], "none|none");
+  }
+
+  fn attach_rx(m: &ClaudeManager, id: &str) -> Result<(mpsc::Receiver<String>, mpsc::Receiver<Exit>), String> {
+    let (ltx, lrx) = mpsc::channel();
+    let (etx, erx) = mpsc::channel();
+    m.attach(
+      id,
+      Some("w-2".into()),
+      move |l| {
+        let _ = ltx.send(l);
+      },
+      move |c, e| {
+        let _ = etx.send((c, e));
+      },
+    )?;
+    Ok((lrx, erx))
+  }
+
+  /// Строки, пришедшие без окна, копятся и отдаются по порядку, затем — живые и выход.
+  #[test]
+  fn detach_queues_lines_in_order_and_attach_flushes_them() {
+    let m = ClaudeManager::default();
+    let (id, lrx, erx) = start(&m, &fake()).unwrap();
+    take(&lrx, 38);
+    m.detach(&id).unwrap();
+    for i in 0..3 {
+      m.send(&id, &format!("m{i}")).unwrap();
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(lrx.try_recv().is_err(), "строка ушла в старый колбэк");
+    let (lrx2, erx2) = attach_rx(&m, &id).unwrap();
+    let texts: Vec<String> = take(&lrx2, 3)
+      .iter()
+      .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["line"]["message"]["content"][0]["text"].as_str().unwrap().to_string())
+      .collect();
+    assert_eq!(texts, ["m0", "m1", "m2"]);
+    // Живые строки — в новый колбэк.
+    m.send(&id, "live").unwrap();
+    assert!(lrx2.recv_timeout(WAIT).unwrap().contains("live"));
+    m.stop(&id).unwrap();
+    erx2.recv_timeout(WAIT).expect("on_exit нового окна");
+    assert!(erx.try_recv().is_err());
+  }
+
+  /// Процесс вышел без окна — выход приходит при attach, после накопленных строк.
+  #[test]
+  fn exit_while_detached_comes_after_queued_lines() {
+    let (_d, p) = script("read _\necho '{\"a\":1}'\necho '{\"b\":2}'\necho 'конец' >&2\nexit 4");
+    let m = ClaudeManager::default();
+    let (id, _lrx, erx) = start(&m, &p).unwrap();
+    m.detach(&id).unwrap();
+    m.send(&id, "go").unwrap();
+    let deadline = Instant::now() + WAIT;
+    while m.send(&id, "x").is_ok() && Instant::now() < deadline {
+      std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(DRAIN_GRACE);
+    assert!(erx.try_recv().is_err(), "выход ушёл в старый колбэк");
+    let (lrx2, erx2) = attach_rx(&m, &id).unwrap();
+    assert_eq!(take(&lrx2, 2), [r#"{"a":1}"#, r#"{"b":2}"#]);
+    let (code, err) = erx2.recv_timeout(Duration::from_millis(100)).expect("on_exit при attach");
+    assert_eq!(code, Some(4));
+    assert!(err.contains("конец"));
+    assert!(attach_rx(&m, &id).is_err(), "повторно подключить нечего");
+  }
+
+  #[test]
+  fn attach_unknown_is_error_and_orphan_is_stopped() {
+    let m = ClaudeManager::default();
+    assert!(attach_rx(&m, "нет").is_err());
+    assert!(m.detach("нет").is_err());
+    let (id, lrx, _erx) = start(&m, &fake()).unwrap();
+    take(&lrx, 38);
+    let g1 = m.detach(&id).unwrap();
+    let (_l, erx2) = attach_rx(&m, &id).unwrap();
+    let g2 = m.detach(&id).unwrap();
+    assert!(!m.expire_orphan(&id, g1));
+    assert!(m.send(&id, "x").is_ok());
+    assert!(m.expire_orphan(&id, g2));
+    // Остановлен, выход некому отдать.
+    let deadline = Instant::now() + WAIT;
+    while m.send(&id, "x").is_ok() && Instant::now() < deadline {
+      std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(m.send(&id, "x").is_err());
+    assert!(erx2.try_recv().is_err());
+    assert!(attach_rx(&m, &id).is_err());
+  }
+
+  /// Перезагрузка/закрытие окна останавливает только его процессы.
+  #[test]
+  fn stop_owner_stops_only_that_window() {
+    let m = ClaudeManager::default();
+    let start_as = |owner: &str| {
+      let (etx, erx) = mpsc::channel::<Exit>();
+      let id = m
+        .start(&fake(), Path::new("/"), Launch { owner: Some(owner.into()), ..Launch::default() }, |_| {}, move |c, e| {
+          let _ = etx.send((c, e));
+        })
+        .unwrap();
+      (id, erx)
+    };
+    let (a, erxa) = start_as("main");
+    let (b, erxb) = start_as("w-1");
+    let (c, _erxc) = start_as("main");
+    m.detach(&c).unwrap();
+    m.stop_owner("main");
+    erxa.recv_timeout(WAIT).expect("процесс окна main остановлен");
+    assert!(m.send(&a, "x").is_err());
+    assert!(m.send(&b, "x").is_ok());
+    assert!(m.send(&c, "x").is_ok(), "отсоединённый процесс остановлен вместе с окном");
+    assert!(erxb.try_recv().is_err());
+    m.stop(&b).unwrap();
+    m.stop(&c).unwrap();
   }
 }

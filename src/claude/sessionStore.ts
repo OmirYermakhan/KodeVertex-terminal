@@ -13,6 +13,7 @@ import type { Attachment, Doc } from '../attach/types'
 import type { ClaudePermissionMode } from '../settings/settings'
 import { useSettings } from '../settings/store'
 import { emitClaudeEvent, finishedTools } from './toolEvents'
+import { isMoving } from '../windows/livePanes'
 
 export type { ModelChoice }
 
@@ -332,24 +333,14 @@ function noteRestored(paneId: string): void {
   }))
 }
 
-function start(paneId: string): Proc {
-  noteRestored(paneId)
-  const proc: Proc = { ready: Promise.resolve(null), id: null, interrupted: false, chain: Promise.resolve() }
+/**
+ * Обработчики строк и выхода процесса панели — для claude_start и claude_attach (перенос вкладки
+ * в другое окно: тот же процесс, новые каналы). resume — id сессии, с которым процесс запущен;
+ * gotLine — процесс уже что-то писал (принятый: ошибка выхода не значит «--resume не удался»).
+ */
+function procHandlers(paneId: string, proc: Proc, resume: string | null, gotLine0: boolean) {
   const alive = () => procs.get(paneId) === proc
-  const prev = get(paneId)
-  const resume = prev.state.sessionId
-  const { cwd, model, effort } = prev
-  // Перезапуск после правки сообщения: с точки перед ним, в новой сессии-ответвлении.
-  const rewindAt = resume !== null ? (prev.rewindAt ?? null) : null
-  // Режим — из настроек на момент запуска; Rust проверяет его по списку (неизвестный — acceptEdits).
-  // Перезапуск после правки сохраняет режим прежнего процесса.
-  const permissionMode = (prev.rewindAt ? prev.permissionMode : null) ?? useSettings.getState().settings.claudePermissionMode
-  // Подсказка следующего сообщения (`--prompt-suggestions`): из настроек на момент запуска.
-  const promptSuggestions = useSettings.getState().settings.claudePromptSuggestions
-  // Подсказка рисовать схемы mermaid (`--append-system-prompt`): из настроек на момент запуска.
-  const diagramsHint = useSettings.getState().settings.claudeDiagrams
-  patch(paneId, (p) => ({ ...p, permissionMode, rewindAt: null, state: newProcess(p.state, resume) }))
-  let gotLine = false
+  let gotLine = gotLine0
   const onLineMsg = (line: string) => {
     gotLine = true
     if (!alive()) return
@@ -401,6 +392,27 @@ function start(paneId: string): Proc {
     const tools = finishedTools(prevState, get(paneId).state)
     if (tools.length > 0) emitClaudeEvent({ kind: 'tools', tools })
   }
+  return { onLineMsg, onExitMsg }
+}
+
+function start(paneId: string): Proc {
+  noteRestored(paneId)
+  const proc: Proc = { ready: Promise.resolve(null), id: null, interrupted: false, chain: Promise.resolve() }
+  const alive = () => procs.get(paneId) === proc
+  const prev = get(paneId)
+  const resume = prev.state.sessionId
+  const { cwd, model, effort } = prev
+  // Перезапуск после правки сообщения: с точки перед ним, в новой сессии-ответвлении.
+  const rewindAt = resume !== null ? (prev.rewindAt ?? null) : null
+  // Режим — из настроек на момент запуска; Rust проверяет его по списку (неизвестный — acceptEdits).
+  // Перезапуск после правки сохраняет режим прежнего процесса.
+  const permissionMode = (prev.rewindAt ? prev.permissionMode : null) ?? useSettings.getState().settings.claudePermissionMode
+  // Подсказка следующего сообщения (`--prompt-suggestions`): из настроек на момент запуска.
+  const promptSuggestions = useSettings.getState().settings.claudePromptSuggestions
+  // Подсказка рисовать схемы mermaid (`--append-system-prompt`): из настроек на момент запуска.
+  const diagramsHint = useSettings.getState().settings.claudeDiagrams
+  patch(paneId, (p) => ({ ...p, permissionMode, rewindAt: null, state: newProcess(p.state, resume) }))
+  const { onLineMsg, onExitMsg } = procHandlers(paneId, proc, resume, false)
   const rewind = rewindAt ? { resumeAt: rewindAt, fork: true } : {}
   // Каналы — на каждый вызов claude_start (повтор после «Доверять» — с новыми).
   const launch = () =>
@@ -988,14 +1000,72 @@ export async function editClaude(paneId: string, index: number, text: string, to
   }
 }
 
-/** Панель закрыта: процесс остановить, состояние забыть. */
+/**
+ * Панель закрыта: процесс остановить, состояние забыть. Панель уезжает в другое окно — процесс
+ * не останавливается (он уже отсоединён, его подключит окно-приёмник), только забывается здесь.
+ */
 export function stopClaude(paneId: string): void {
-  dropProc(paneId)
+  if (isMoving(paneId)) procs.delete(paneId)
+  else dropProc(paneId)
   dropTrust(paneId)
   useClaudeSessions.setState((st) => {
     if (!(paneId in st.sessions)) return st
     const sessions = { ...st.sessions }
     delete sessions[paneId]
     return { sessions }
+  })
+}
+
+/** id сообщения очереди этого окна (принятые из другого окна получают свои — без совпадений). */
+export const nextQueueId = (): number => ++queueSeq
+
+/**
+ * Перенос вкладки: процесс панели отсоединяется от этого окна (строки копятся в Rust до
+ * claude_attach). Запуск ещё идёт — сначала дождаться его. Возвращает id процесса; null — процесса
+ * нет (или отсоединить не удалось: тогда он остановится вместе с панелью, а приёмник продолжит
+ * разговор новым процессом с `--resume`).
+ */
+export async function detachClaude(paneId: string): Promise<string | null> {
+  const proc = procs.get(paneId)
+  if (!proc) return null
+  const id = await proc.ready.catch(() => null)
+  if (id === null || procs.get(paneId) !== proc) return null
+  try {
+    await invoke('claude_detach', { id })
+    return id
+  } catch {
+    // Не отсоединился (старая сборка): процесс останавливается здесь, иначе пережил бы панель.
+    if (procs.get(paneId) === proc) dropProc(paneId)
+    return null
+  }
+}
+
+/**
+ * Окно-приёмник: сессия панели из другого окна — как есть (лента, агенты, очередь, идущий ход),
+ * с живым процессом procId: claude_attach с новыми каналами (сначала накопленные строки), без
+ * перезапуска. Не подключился — процесса нет, ход остановлен, дальше — `--resume`, как после выхода.
+ */
+export function adoptClaude(paneId: string, pc: PaneClaude, procId: string | null): void {
+  dropTrust(paneId)
+  procs.delete(paneId)
+  const queue = pc.queue.map((m) => ({ ...m, id: nextQueueId() }))
+  useClaudeSessions.setState((st) => ({ sessions: { ...st.sessions, [paneId]: { ...pc, procId, queue } } }))
+  if (procId === null) return
+  const proc: Proc = { ready: Promise.resolve(procId), id: procId, interrupted: false, chain: Promise.resolve() }
+  procs.set(paneId, proc)
+  const { onLineMsg, onExitMsg } = procHandlers(paneId, proc, pc.state.sessionId, true)
+  invoke('claude_attach', {
+    id: procId,
+    onLine: new Channel<string>(onLineMsg),
+    onExit: new Channel<ClaudeExit>(onExitMsg),
+  }).catch((err: unknown) => {
+    if (procs.get(paneId) !== proc) return
+    procs.delete(paneId)
+    patch(paneId, (p) => ({
+      ...p,
+      procId: null,
+      state: cancelPrompts(failed(p.state, `Claude не переподключился в новом окне: ${errText(err)}`, Date.now()), undefined, 'exit'),
+      ...pause(p),
+    }))
   })
 }

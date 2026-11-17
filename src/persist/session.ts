@@ -62,8 +62,11 @@ export interface PaneFeed {
 
 /** Лента смонтированных панелей: читается в момент снимка. */
 const feeds = new Map<string, () => PaneFeed>()
-/** Восстановленное для панелей, ещё не отдавших свою ленту (не смонтированных). */
-const restored = new Map<string, Omit<SavedPane, 'claude'>>()
+/**
+ * Восстановленное для панелей, ещё не отдавших свою ленту (не смонтированных). keep — лента принята
+ * из другого окна (перенос вкладки): блоки как есть, идущий остаётся идущим.
+ */
+const restored = new Map<string, Omit<SavedPane, 'claude'> & { keep?: boolean }>()
 
 /** Панель отдаёт свою ленту; восстановленное для неё больше не нужно. */
 export function setPaneFeed(paneId: string, f: () => PaneFeed): void {
@@ -86,6 +89,10 @@ export function restoredPane(paneId: string): PaneFeed | null {
   const feed: FeedItem[] = []
   for (const it of r.feed) {
     if (it.kind === 'shell') {
+      if (r.keep) {
+        feed.push(it)
+        continue
+      }
       // Файл подправлен руками: «создан в этом запуске» у восстановленного блока не бывает.
       const { live: _live, ...b } = it
       feed.push(b)
@@ -144,10 +151,14 @@ function saveClaude(p: PaneClaude, from: number): SavedClaude {
   }
 }
 
-export function snapshot(): SavedSession {
-  const { tabs, active } = useTabs.getState()
+/**
+ * Снимок панелей вкладок. live — для переноса вкладки в другое окно (не в файл): блоки оболочки
+ * как есть — идущий не становится «прервано», вывод не урезается.
+ */
+export function snapshotPanes(tabs: readonly Tab[], opts: { live?: boolean } = {}): Record<string, SavedPane> {
   const sessions = useClaudeSessions.getState().sessions
   const panes: Record<string, SavedPane> = {}
+  const block = opts.live ? (b: ShellBlock) => b : saveBlock
   for (const t of tabs) {
     for (const id of leaves(t.tree)) {
       const f = feeds.get(id)?.()
@@ -156,7 +167,7 @@ export function snapshot(): SavedSession {
       const claudeFrom = f?.claudeFrom ?? r?.claudeFrom ?? 0
       panes[id] = {
         feed: f
-          ? f.items.map((it): SavedFeedItem => (it.kind === 'shell' ? saveBlock(it) : { kind: 'claude', id: it.id }))
+          ? f.items.map((it): SavedFeedItem => (it.kind === 'shell' ? block(it) : { kind: 'claude', id: it.id }))
           : (r?.feed ?? []),
         claudeFrom,
         claudeMode: f?.claudeMode ?? r?.claudeMode ?? false,
@@ -164,8 +175,29 @@ export function snapshot(): SavedSession {
       }
     }
   }
-  return { version: SESSION_VERSION, tabs, active, panes }
+  return panes
 }
+
+export function snapshot(): SavedSession {
+  const { tabs, active } = useTabs.getState()
+  return { version: SESSION_VERSION, tabs, active, panes: snapshotPanes(tabs) }
+}
+
+/** Вкладка принята из другого окна: ленты её панелей ждут монтирования (как восстановленные). */
+export function stageTransferredPane(paneId: string, p: SavedPane): void {
+  restored.set(paneId, {
+    feed: Array.isArray(p.feed) ? p.feed : [],
+    claudeFrom: typeof p.claudeFrom === 'number' ? p.claudeFrom : 0,
+    claudeMode: p.claudeMode === true,
+    keep: true,
+  })
+}
+
+/** Сессия Claude панели из файла или переноса (без процесса): как после перезапуска. */
+export function restoredClaude(c: SavedClaude): PaneClaude {
+  return restoreClaude(c)
+}
+
 
 /** Длина строки в UTF-8 (Rust мерит байты, не символы UTF-16) — без выделения буфера. */
 export function utf8Length(s: string): number {
@@ -244,6 +276,8 @@ let dueBy = 0
 let enabled = false
 /** Файл сессии другой версии: не перезаписывать ни автосохранением, ни при выходе. */
 let foreign = false
+/** Окно закрывается без вкладок (все уехали): его часть сессии не пишется, даже при beforeunload. */
+let closing = false
 
 export function scheduleSave(): void {
   if (!enabled) return
@@ -256,7 +290,7 @@ export function scheduleSave(): void {
 export function saveNow(): Promise<void> {
   clearTimeout(timer)
   timer = undefined
-  if (foreign) return Promise.resolve()
+  if (foreign || closing) return Promise.resolve()
   return invoke('session_save', { text: serializeCapped(snapshot()) }).then(
     () => {},
     () => {},
@@ -271,6 +305,31 @@ export function finalSave(): Promise<void> {
   const p = saveNow()
   enabled = false
   return p
+}
+
+/**
+ * Окно закрывается, отдав последнюю вкладку в другое окно: без записи (его часть сессии Rust
+ * забудет сам), дальше автосохранение выключено.
+ */
+export function stopAutosave(): void {
+  clearTimeout(timer)
+  timer = undefined
+  enabled = false
+  closing = true
+}
+
+/**
+ * Автосохранение этого окна: после restoreSession (main) или запуска другого окна. Повторный
+ * вызов ничего не делает.
+ */
+let subscribed = false
+export function enableAutosave(): void {
+  if (foreign) return
+  enabled = true
+  if (subscribed) return
+  subscribed = true
+  useTabs.subscribe(scheduleSave)
+  useClaudeSessions.subscribe(scheduleSave)
 }
 
 const isRec = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -443,9 +502,7 @@ export async function restoreSession(): Promise<void> {
       .catch(() => {})
     return
   }
-  enabled = true
-  useTabs.subscribe(scheduleSave)
-  useClaudeSessions.subscribe(scheduleSave)
+  enableAutosave()
 }
 
 /** Для тестов: начальное состояние модуля. */
@@ -454,6 +511,7 @@ export function resetPersistForTests(): void {
   timer = undefined
   enabled = false
   foreign = false
+  closing = false
   feeds.clear()
   restored.clear()
 }

@@ -467,3 +467,38 @@ describe('аудит: размер в байтах, maxWait, чужая верс
     expect(p.queue).toEqual([{ id: -4, text: 'ок', tokens: [{ id: 'y', kind: 'file', label: 'a.ts' }] }])
   })
 })
+
+const { snapshotPanes, stageTransferredPane, stopAutosave } = await import('./session')
+
+describe('перенос вкладки: снимок одной вкладки и приём', () => {
+  beforeEach(() => {
+    resetPersistForTests()
+    invoke.mockReset()
+    invoke.mockResolvedValue(undefined)
+    useClaudeSessions.setState({ sessions: {} })
+  })
+
+  it('snapshotPanes(live) — только панели вкладки, идущий блок остаётся идущим', () => {
+    const run = block('r', 5, { running: true, html: null, lines: 0, exitCode: null, durationMs: null, live: true })
+    setPaneFeed('a', () => ({ items: [run], claudeFrom: 0, claudeMode: false }))
+    setPaneFeed('b', () => ({ items: [block('x', 1)], claudeFrom: 0, claudeMode: false }))
+    const panes = snapshotPanes([tab('t1', ['a'])], { live: true })
+    expect(Object.keys(panes)).toEqual(['a'])
+    expect(panes.a.feed).toEqual([run])
+    // Для файла — как раньше: «прервано».
+    expect(snapshotPanes([tab('t1', ['a'])]).a.feed[0]).toMatchObject({ running: false, interrupted: true })
+  })
+
+  it('stageTransferredPane — лента для монтирования как есть (блок идёт, live сохранён)', () => {
+    const run = block('r', 5, { running: true, live: true })
+    stageTransferredPane('z', { feed: [run], claudeFrom: 2, claudeMode: true })
+    expect(restoredPane('z')).toEqual({ items: [run], claudeFrom: 2, claudeMode: true })
+  })
+
+  it('stopAutosave — окно закрывается: снимок больше не пишется', async () => {
+    stopAutosave()
+    await saveNow()
+    await finalSave()
+    expect(calls('session_save')).toHaveLength(0)
+  })
+})

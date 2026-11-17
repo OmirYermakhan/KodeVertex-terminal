@@ -17,6 +17,7 @@ mod settings;
 mod shell;
 mod slash_commands;
 mod traffic_lights;
+mod windows;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::webview::PageLoadEvent;
@@ -33,6 +34,8 @@ const SETTINGS_EVENT: &str = "menu://settings";
 /// Свой пункт «Завершить» вместо штатного: штатный (`terminate:`) выходит сразу, и фронт не
 /// успевает сохранить сессию. Свой — сначала `app://before-exit` (см. `exit`).
 const QUIT_MENU_ID: &str = "quit";
+/// «Новое окно» (⌘N): пустое окно с одной новой вкладкой.
+const NEW_WINDOW_MENU_ID: &str = "new-window";
 
 /// Минимальное меню приложения. Пунктов с ⌘W / ⌘T / ⌘D здесь нет намеренно:
 /// эти сочетания обрабатывает фронтенд.
@@ -51,6 +54,12 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
       &MenuItem::with_id(app, QUIT_MENU_ID, "Завершить KodeVertex Terminal", true, Some("CmdOrCtrl+Q"))?,
     ],
   )?;
+  let file_menu = Submenu::with_items(
+    app,
+    "Файл",
+    true,
+    &[&MenuItem::with_id(app, NEW_WINDOW_MENU_ID, "Новое окно", true, Some("CmdOrCtrl+N"))?],
+  )?;
   let edit_menu = Submenu::with_items(
     app,
     "Правка",
@@ -65,7 +74,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
       &PredefinedMenuItem::select_all(app, None)?,
     ],
   )?;
-  Menu::with_items(app, &[&app_menu, &edit_menu])
+  Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu])
 }
 
 /// Адрес — собственная страница приложения: `tauri://localhost` (macOS/Linux),
@@ -79,9 +88,10 @@ fn is_app_url(url: &Url, dev: Option<&Url>) -> bool {
   own || dev.is_some_and(|d| url.origin().is_tuple() && d.origin() == url.origin())
 }
 
-/// Страж навигации главного окна: уйти со страницы приложения нельзя (пункт «Открыть ссылку»
-/// контекстного меню WKWebView, перетащенная ссылка и т. п.). Иначе `PageLoadEvent::Started`
-/// убил бы все терминалы и claude, а в окне с доступом к командам оказалась бы чужая страница.
+/// Страж навигации окон (плагин — для всех webview, в том числе новых окон `w-*`): уйти со
+/// страницы приложения нельзя (пункт «Открыть ссылку» контекстного меню WKWebView, перетащенная
+/// ссылка и т. п.). Иначе `PageLoadEvent::Started` убил бы терминалы и claude окна, а в окне с
+/// доступом к командам оказалась бы чужая страница.
 /// http(s) открываем в браузере, остальное (file:, data:, about:) просто отменяем.
 fn nav_guard() -> tauri::plugin::TauriPlugin<Wry> {
   tauri::plugin::Builder::<Wry>::new("nav-guard")
@@ -93,7 +103,7 @@ fn nav_guard() -> tauri::plugin::TauriPlugin<Wry> {
       if matches!(url.scheme(), "http" | "https") {
         let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
       }
-      log::warn!("навигация главного окна отменена: {url}");
+      log::warn!("навигация окна {} отменена: {url}", webview.label());
       false
     })
     .build()
@@ -149,20 +159,27 @@ pub fn run() {
       diag::frontend_log,
       pty::pty_pause,
       pty::pty_resume,
+      pty::pty_detach,
+      pty::pty_attach,
+      claude::claude_detach,
+      claude::claude_attach,
+      windows::window_open,
+      windows::window_take_init,
+      windows::window_send_tab,
+      windows::window_at,
+      windows::window_count,
       exit::app_exit_ready
     ])
     .manage(pty::PtyManager::default())
     .manage(claude::ClaudeManager::default())
     .manage(exit::ExitFlow::default())
+    .manage(session::Pieces::default())
+    .manage(windows::WindowInits::default())
     .on_page_load(|webview, payload| {
-      // Перезагрузка страницы: прежние терминалы и процессы claude новой странице не принадлежат —
-      // без этого они остались бы сиротами до выхода из приложения.
+      // Перезагрузка страницы окна: прежние терминалы и процессы claude этого окна новой странице
+      // не принадлежат — без этого они остались бы сиротами до выхода. Чужие окна не трогаем.
       if payload.event() == PageLoadEvent::Started {
-        let app = webview.app_handle();
-        app.state::<pty::PtyManager>().kill_all();
-        let claude = app.state::<claude::ClaudeManager>().inner().clone();
-        // stop_all ждёт процессы до секунды — не в потоке webview.
-        std::thread::spawn(move || claude.stop_all());
+        close_owned(webview.app_handle(), webview.label());
       }
     })
     .menu(build_menu)
@@ -171,6 +188,15 @@ pub fn run() {
         let _ = app.emit(SETTINGS_EVENT, ());
       }
       QUIT_MENU_ID => exit::begin(app),
+      NEW_WINDOW_MENU_ID => {
+        // Создание окна ждёт главный поток — не из его обработчика.
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+          if let Err(e) = windows::open(&app, None, windows::focused_size(&app), None) {
+            log::warn!("не удалось открыть окно: {e}");
+          }
+        });
+      }
       _ => {}
     })
     .setup(|app| {
@@ -187,6 +213,8 @@ pub fn run() {
           .build(),
       )?;
       diag::install_panic_hook();
+      // Первое окно — первым в порядке окон файла сессии.
+      app.state::<session::Pieces>().register(session::MAIN_LABEL);
       #[cfg(target_os = "macos")]
       if let Some(w) = app.get_webview_window("main") {
         traffic_lights::apply(w.ns_window());
@@ -194,6 +222,16 @@ pub fn run() {
       Ok(())
     })
     .on_window_event(|window, event| {
+      // Окно закрыто: его процессы, payload и (если остались другие окна) часть сессии — долой.
+      if let tauri::WindowEvent::Destroyed = event {
+        let app = window.app_handle();
+        let label = window.label();
+        close_owned(app, label);
+        app.state::<windows::WindowInits>().take(label);
+        // Выход ждал ответа этого окна — ждать нечего.
+        app.state::<exit::ExitFlow>().mark_ready(label);
+        session::on_destroyed(app, label);
+      }
       // Закрытие последнего окна = выход: сначала даём фронту сохранить сессию.
       if let tauri::WindowEvent::CloseRequested { api, .. } = event {
         let app = window.app_handle();
@@ -237,6 +275,15 @@ pub fn run() {
       }
       _ => {}
     });
+}
+
+/// Закрыть терминалы и процессы claude окна `label` (перезагрузка страницы, закрытие окна).
+fn close_owned(app: &AppHandle, label: &str) {
+  app.state::<pty::PtyManager>().kill_owner(label);
+  let claude = app.state::<claude::ClaudeManager>().inner().clone();
+  let label = label.to_string();
+  // stop_owner ждёт процессы до секунды — не в потоке webview.
+  std::thread::spawn(move || claude.stop_owner(&label));
 }
 
 #[cfg(test)]

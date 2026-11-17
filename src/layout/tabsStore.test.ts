@@ -129,3 +129,25 @@ describe('tabsStore', () => {
     expect(active().cwd[active().focused]).toBe('/work')
   })
 })
+
+describe('tabsStore: перенос вкладки', () => {
+  beforeEach(() => useTabs.setState(initialTabsState()))
+
+  it('takeTab убирает вкладку без автосоздания новой; putTab — в конец и активная', () => {
+    const first = useTabs.getState().tabs[0]
+    const second = useTabs.getState().newTab()
+    useTabs.getState().activate(first.id)
+    expect(useTabs.getState().takeTab(first.id)).toBe(first)
+    expect(useTabs.getState().tabs.map((t) => t.id)).toEqual([second])
+    expect(useTabs.getState().active).toBe(second)
+    expect(useTabs.getState().takeTab(second)).not.toBeNull()
+    expect(useTabs.getState().tabs).toEqual([])
+    expect(useTabs.getState().active).toBe('')
+    expect(useTabs.getState().takeTab('nope')).toBeNull()
+    useTabs.getState().putTab(first)
+    expect(useTabs.getState().tabs).toEqual([first])
+    expect(useTabs.getState().active).toBe(first.id)
+    useTabs.getState().putTab(first)
+    expect(useTabs.getState().tabs).toHaveLength(1)
+  })
+})

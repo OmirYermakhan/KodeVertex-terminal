@@ -144,3 +144,49 @@ describe('spawnPty write ordering', () => {
     errSpy.mockRestore()
   })
 })
+
+describe('detachPty / attachPty', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    channels.length = 0
+  })
+
+  it('attach — новые каналы; вывод и выход приходят в новые обработчики', async () => {
+    invoke.mockResolvedValue(undefined)
+    const { attachPty } = await import('./ptyClient')
+    const onData = vi.fn()
+    const onExit = vi.fn()
+    const h = await attachPty({ id: 'sess-1', mark: 'm1', onData, onExit })
+    expect(invoke).toHaveBeenCalledWith('pty_attach', { id: 'sess-1', onData: channels[0], onExit: channels[1] })
+    expect(h.id).toBe('sess-1')
+    expect(h.mark).toBe('m1')
+    channels[0].onmessage(new Uint8Array([1, 2]).buffer)
+    expect(Array.from(onData.mock.calls[0][0] as Uint8Array)).toEqual([1, 2])
+    channels[1].onmessage(7)
+    expect(onExit).toHaveBeenCalledWith(7)
+    h.write('x')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(invoke).toHaveBeenCalledWith('pty_write', { id: 'sess-1', data: 'x' })
+  })
+
+  it('attach ждёт идущего detach той же сессии (порядок async-команд)', async () => {
+    const { attachPty, detachPty } = await import('./ptyClient')
+    let release!: () => void
+    invoke.mockImplementation((cmd: string) => (cmd === 'pty_detach' ? new Promise<void>((r) => (release = r)) : Promise.resolve()))
+    const d = detachPty('s9')
+    const a = attachPty({ id: 's9', mark: 'm', onData: () => {}, onExit: () => {} })
+    await Promise.resolve()
+    expect(invoke.mock.calls.map((c) => c[0])).toEqual(['pty_detach'])
+    release()
+    await d
+    await a
+    expect(invoke.mock.calls.map((c) => c[0])).toEqual(['pty_detach', 'pty_attach'])
+  })
+
+  it('attach неизвестной сессии — ошибка', async () => {
+    const { attachPty } = await import('./ptyClient')
+    invoke.mockRejectedValue('unknown pty')
+    await expect(attachPty({ id: 'zz', mark: 'm', onData: () => {}, onExit: () => {} })).rejects.toBe('unknown pty')
+  })
+})

@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { PtyHandle, SpawnOptions } from './ptyClient'
+import type { AttachOptions, PtyHandle, SpawnOptions } from './ptyClient'
 
 const terms: FakeTerminal[] = []
 
@@ -28,6 +28,7 @@ class FakeTerminal {
   clearTextureAtlas = vi.fn()
   reset = vi.fn()
   refresh = vi.fn()
+  resize = vi.fn()
   /** Строки активного буфера (для заморозки блока). */
   lines: string[] = []
   buffer = ((t: FakeTerminal) => ({
@@ -84,6 +85,7 @@ const serializeAsHTML = vi.fn(
 vi.mock('@xterm/addon-serialize', () => ({
   SerializeAddon: class extends FakeAddon {
     serializeAsHTML = serializeAsHTML
+    serialize = () => 'SCREEN'
   },
 }))
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn() }))
@@ -106,7 +108,23 @@ const spawns: PendingSpawn[] = []
 /** Метка маркеров, которую «выдаёт» pty_spawn. */
 const MARK = '0123456789abcdef0123456789abcdef'
 
+interface PendingAttach {
+  opts: AttachOptions
+  handle: { id: string; mark: string; write: ReturnType<typeof vi.fn>; resize: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn>; resume: ReturnType<typeof vi.fn> }
+  resolve: () => void
+}
+const attaches: PendingAttach[] = []
+const detachPty = vi.fn((_id: string) => Promise.resolve())
+const killPty = vi.fn((_id: string) => {})
+
 vi.mock('./ptyClient', () => ({
+  detachPty: (id: string) => detachPty(id),
+  killPty: (id: string) => killPty(id),
+  attachPty: (opts: AttachOptions) =>
+    new Promise<PtyHandle>((res) => {
+      const handle = { id: opts.id, mark: opts.mark, write: vi.fn(), resize: vi.fn(), kill: vi.fn(), resume: vi.fn() }
+      attaches.push({ opts, handle, resolve: () => res(handle) })
+    }),
   spawnPty: (opts: SpawnOptions) =>
     new Promise<PtyHandle>((res) => {
       const handle = { id: `s${spawns.length}`, mark: MARK, write: vi.fn(), resize: vi.fn(), kill: vi.fn() }
@@ -2037,5 +2055,134 @@ describe('replacesShell', () => {
     for (const c of ['exec', 'exec >log 2>&1', 'exec 3< file', 'exec > log', 'executor run', 'echo exec zsh', 'exec zsh; ls', 'cd x && exec zsh', 'exec {fd}>file', 'exec {log}>> /tmp/a', 'exec {fd}< in', 'FOO=1 exec >log', 'exec &>log', 'FOO=1 echo exec zsh']) {
       expect(replacesShell(c), c).toBe(false)
     }
+  })
+})
+
+const { offerLive, liveSource, markMoving, resetLivePanesForTests } = await import('../windows/livePanes')
+const { stageTransferredPane, resetPersistForTests } = await import('../persist/session')
+
+describe('TerminalPane: перенос вкладки между окнами', () => {
+  const live = {
+    ptyId: 'pty-9',
+    mark: MARK,
+    localHost: 'mac',
+    cwd: '/proj',
+    running: true,
+    raw: false,
+    rawCommand: '',
+    promptSeen: true,
+    alt: false,
+    altUsed: false,
+    cont: false,
+    sent: null,
+    accepted: null,
+    echoRow: null,
+    cols: 100,
+    rows: 30,
+    xterm: 'SCREEN-OF-SOURCE',
+  }
+  const runningBlock = {
+    kind: 'shell' as const,
+    id: 'sh-src-1',
+    command: 'ping x',
+    cwd: '/proj',
+    startedAt: Date.now() - 1000,
+    durationMs: null,
+    exitCode: null,
+    html: null,
+    lines: 0,
+    running: true,
+    live: true as const,
+  }
+
+  beforeEach(() => {
+    terms.length = 0
+    spawns.length = 0
+    attaches.length = 0
+    addons.length = 0
+    detachPty.mockClear()
+    killPty.mockClear()
+    invoke.mockReset()
+    resetLivePanesForTests()
+    resetPersistForTests()
+    useClaudeSessions.setState({ sessions: {} })
+    useSettings.setState({ settings: { ...DEFAULTS } })
+  })
+
+  it('принятая панель: экран источника в xterm, pty_attach вместо spawn, идущий блок идёт и заканчивается', async () => {
+    stageTransferredPane('p', { feed: [runningBlock], claudeFrom: 0, claudeMode: false })
+    offerLive('p', live)
+    const p = props()
+    render(<TerminalPane {...p} />)
+    const term = terms[0]
+    expect(spawns).toHaveLength(0)
+    expect(term.resize).toHaveBeenCalledWith(100, 30)
+    expect(term.write.mock.calls[0][0]).toBe('SCREEN-OF-SOURCE')
+    expect(attaches).toHaveLength(1)
+    expect(attaches[0].opts).toMatchObject({ id: 'pty-9', mark: MARK })
+    // Подгонка под это окно — после разбора снимка.
+    const fit = addons[0].fit
+    fit.mockClear()
+    act(() => (term.write.mock.calls[0][1] as () => void)())
+    expect(fit).toHaveBeenCalled()
+    attaches[0].resolve()
+    await flush()
+    expect(attaches[0].handle.resize).toHaveBeenCalledWith(80, 24)
+    expect(attaches[0].handle.resume).toHaveBeenCalled()
+    // Блок идёт, ввод — в xterm.
+    expect(document.querySelector('.blk.run .cmd')!.textContent).toBe('ping x')
+    // Вывод живого PTY — в xterm.
+    attaches[0].opts.onData(new Uint8Array([65]))
+    expect(term.write).toHaveBeenLastCalledWith(new Uint8Array([65]), expect.any(Function))
+    // Конец команды — блок закрыт (маркеры сверяются с перенесённой меткой).
+    act(() => void oscHandler(term, 133)('D;0'))
+    expect(document.querySelector('.blk.run')).toBeNull()
+    expect(document.querySelector('.blk')).not.toBeNull()
+  })
+
+  it('снимок живого состояния: метка, каталог, идущая команда и serialize() экрана', async () => {
+    const r = render(<TerminalPane {...props()} initialCwd="/w" />)
+    spawns[0].resolve()
+    await flush()
+    const term = terms[0]
+    term.write.mockImplementation((_d: unknown, cb?: () => void) => cb?.())
+    act(() => void oscHandler(term, 133)('C;' + btoa('sleep 9')))
+    expect(liveSource('p')!.ptyId()).toBe('s0')
+    const l = await liveSource('p')!.capture()
+    expect(l).toMatchObject({ ptyId: 's0', mark: MARK, running: true, promptSeen: false, cols: 80, rows: 24, xterm: 'SCREEN', cwd: '/w' })
+    r.unmount()
+    expect(liveSource('p')).toBeUndefined()
+  })
+
+  it('уезжающая панель при размонтировании не убивает PTY', async () => {
+    const r = render(<TerminalPane {...props()} />)
+    spawns[0].resolve()
+    await flush()
+    markMoving('p')
+    r.unmount()
+    expect(spawns[0].handle.kill).not.toHaveBeenCalled()
+  })
+
+  it('принятую панель закрыли — PTY отсоединён и через такт убит; StrictMode-перемонтирование забирает его снова', async () => {
+    offerLive('p', live)
+    const r = render(<TerminalPane {...props()} />)
+    r.unmount()
+    expect(detachPty).toHaveBeenCalledWith('pty-9')
+    // Повторное монтирование в том же такте (StrictMode) — снова подключается, не убивает.
+    render(<TerminalPane {...props()} />)
+    await flush()
+    expect(killPty).not.toHaveBeenCalled()
+    expect(attaches).toHaveLength(2)
+    expect(attaches[1].opts.id).toBe('pty-9')
+  })
+
+  it('принятую панель закрыли насовсем — PTY убит', async () => {
+    offerLive('p', live)
+    const r = render(<TerminalPane {...props()} />)
+    attaches[0].resolve()
+    await flush()
+    r.unmount()
+    await flush()
+    expect(killPty).toHaveBeenCalledWith('pty-9')
   })
 })

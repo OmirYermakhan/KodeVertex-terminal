@@ -23,6 +23,13 @@ interface TabsState {
   /** Возвращает id новой вкладки (он же id её единственной панели). */
   newTab(cwd?: string, launcher?: string): string
   closeTab(id: string): void
+  /**
+   * Вкладка уезжает в другое окно: убрать её без автосоздания новой (последняя — вкладок не
+   * остаётся, окно закроется). Возвращает убранную вкладку; null — такой нет.
+   */
+  takeTab(id: string): Tab | null
+  /** Вкладка из другого окна: в конец полосы и активная (уже есть — только активировать). */
+  putTab(tab: Tab): void
   activate(id: string): void
   activateIndex(i: number): void
   split(axis: 'row' | 'col'): void
@@ -91,6 +98,20 @@ export const useTabs = create<TabsState>((set) => ({
     return t.id
   },
   closeTab: (id) => set((s) => removeTab(s, id)),
+  takeTab: (id) => {
+    let taken: Tab | null = null
+    set((s) => {
+      const i = s.tabs.findIndex((t) => t.id === id)
+      if (i < 0) return {}
+      taken = s.tabs[i]
+      const tabs = s.tabs.filter((t) => t.id !== id)
+      if (tabs.length === 0) return { tabs, active: '' }
+      return { tabs, active: s.active === id ? tabs[Math.min(i, tabs.length - 1)].id : s.active }
+    })
+    return taken
+  },
+  putTab: (tab) =>
+    set((s) => (s.tabs.some((t) => t.id === tab.id) ? { active: tab.id } : { tabs: [...s.tabs, tab], active: tab.id })),
   activate: (id) => set((s) => (s.tabs.some((t) => t.id === id) ? { active: id } : {})),
   activateIndex: (i) =>
     set((s) => (i >= 0 && i < s.tabs.length ? { active: s.tabs[i].id } : {})),

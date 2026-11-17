@@ -18,7 +18,8 @@ import { ansiFromTokens, THEMES } from '../theme/themes'
 import { matchKey } from '../keys/keymap'
 import { isLocalHost, parseOsc7Url, unmark } from './osc'
 import { useHome } from '../status/useGitInfo'
-import { spawnPty, type PtyHandle } from './ptyClient'
+import { attachPty, detachPty, killPty, spawnPty, type PtyHandle } from './ptyClient'
+import { dropLiveSource, isMoving, reofferLive, setLiveSource, takeLive, type LiveSource } from '../windows/livePanes'
 import { notifyCommandEnd } from '../notify/notify'
 import { useProject } from '../project/store'
 import { applyShell, claudeIndex, claudeItemId, commandBytes, failurePrompt, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
@@ -67,6 +68,8 @@ const STICK_PX = 24
 const DRAG_MIN_PX = 4
 /** После ↵ строка ввода ждёт ответа оболочки (133;C или 133;A) не дольше этого. */
 const AWAIT_SHELL_MS = 2000
+/** Перенос вкладки: дольше этого снимок экрана не ждёт разбора уже полученного вывода. */
+const CAPTURE_WAIT_MS = 500
 
 export interface TerminalPaneProps {
   paneId: string
@@ -385,7 +388,11 @@ export function TerminalPane(p: TerminalPaneProps) {
     } catch (err) {
       console.warn('WebGL renderer unavailable, using DOM renderer:', err)
     }
-    fit.fit()
+    // Вкладка принята из другого окна: PTY панели живой — подключаемся к нему, а не запускаем новый.
+    const paneId = callbacks.current.paneId
+    const adopted = takeLive(paneId)
+    if (adopted) term.resize(adopted.cols, adopted.rows)
+    else fit.fit()
     termRef.current = term
     fitRef.current = fit
 
@@ -443,9 +450,9 @@ export function TerminalPane(p: TerminalPaneProps) {
 
     // Метка маркеров сессии (из pty_spawn): OSC 133/7 без неё напечатал не наш zsh — `cat` файла,
     // программа или удалённая оболочка; такие подделали бы блоки, код возврата и каталог.
-    let mark: string | null = null
+    let mark: string | null = adopted?.mark ?? null
     // Хост первого OSC 7 нашей оболочки (precmd до любой команды) — этот компьютер.
-    let localHost: string | null = null
+    let localHost: string | null = adopted?.localHost ?? null
     term.parser.registerOscHandler(7, (data) => {
       const payload = unmark(data, mark)
       const url = payload === null ? null : parseOsc7Url(payload)
@@ -475,7 +482,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       altOff()
     }
     /** Команда, после которой интеграция потеряна (`exec …`). */
-    let rawCommand = ''
+    let rawCommand = adopted?.rawCommand ?? ''
     /**
      * Маркер нашей оболочки: интеграция на месте (exec не удался) — обычный режим блоков. Что оболочка
      * напечатала после exec (`zsh: command not found`), — в блок этой команды, а не под reset.
@@ -616,39 +623,127 @@ export function TerminalPane(p: TerminalPaneProps) {
       if (runningRef.current) scheduleLive()
     })
 
-    spawnPty({
-      cwd: callbacks.current.initialCwd,
-      cols: term.cols,
-      rows: term.rows,
-      // After unmount (incl. our own kill in cleanup) the session's output and exit are ignored.
-      onData: (b) => {
-        if (!disposed) feedTerm(b)
-      },
-      onExit: () => {
-        exited = true
-        if (!disposed) callbacks.current.onExit()
-      },
-      // До первого вывода: маркеры первого приглашения уже сверяются с меткой.
-      onSpawn: (h) => {
-        mark = h.mark
-        pty = h
-      },
-    })
-      .then((h) => {
-        if (disposed) {
-          if (!exited) h.kill()
-          return
+    // Живое состояние для переноса вкладки в другое окно (снимается после pty_detach).
+    const live: LiveSource = {
+      ptyId: () => (exited || !handle ? null : handle.id),
+      capture: async () => {
+        const h = handle
+        if (!h || exited || disposed || mark === null) return null
+        // Уже полученный вывод — разобрать до снимка (не дольше CAPTURE_WAIT_MS).
+        await new Promise<void>((r) => {
+          const t = setTimeout(r, CAPTURE_WAIT_MS)
+          term.write('', () => {
+            clearTimeout(t)
+            r()
+          })
+        })
+        if (disposed) return null
+        return {
+          ptyId: h.id,
+          mark,
+          localHost,
+          cwd: cwdRef.current ?? null,
+          running: runningRef.current,
+          raw: rawRef.current,
+          rawCommand,
+          promptSeen: promptSeenRef.current,
+          alt: term.buffer.active.type === 'alternate',
+          altUsed: altUsedRef.current,
+          cont: contRef.current,
+          sent: sentRef.current,
+          accepted: acceptedRef.current,
+          echoRow: echoRowRef.current,
+          cols: term.cols,
+          rows: term.rows,
+          xterm: serializer.serialize(),
         }
-        handle = h
-        handleRef.current = h
-        // Resizes during the in-flight spawn were dropped; sync the current size.
-        h.resize(term.cols, term.rows)
-        if (promptSeenRef.current) runPendingRef.current()
+      },
+    }
+    setLiveSource(paneId, live)
+
+    const ready = (h: PtyHandle) => {
+      handle = h
+      handleRef.current = h
+      // Resizes during the in-flight spawn were dropped; sync the current size.
+      h.resize(term.cols, term.rows)
+      if (promptSeenRef.current) runPendingRef.current()
+    }
+
+    if (adopted) {
+      // Состояние оболочки — как было в окне-источнике: идущая команда остаётся идущей.
+      if (adopted.cwd) cwdRef.current = adopted.cwd
+      rawRef.current = adopted.raw
+      promptSeenRef.current = adopted.promptSeen
+      runningRef.current = adopted.running
+      altUsedRef.current = adopted.altUsed
+      sentRef.current = adopted.sent
+      acceptedRef.current = adopted.accepted
+      echoRowRef.current = adopted.echoRow
+      contRef.current = adopted.cont
+      setCont(adopted.cont)
+      setRunning(adopted.running)
+      setAlt(adopted.raw || adopted.alt)
+      // Экран и scrollback — в размере источника, затем подгонка под это окно (xterm перенесёт строки).
+      term.write(adopted.xterm, () => {
+        if (disposed) return
+        altUsedRef.current = adopted.altUsed
+        fit.fit()
+        if (runningRef.current) scheduleLive()
       })
-      .catch((err) => {
-        console.error('pty_spawn failed:', err)
-        if (!disposed) term.write(`\r\n\x1b[31mНе удалось запустить оболочку: ${String(err)}\x1b[0m\r\n`)
+      attachPty({
+        id: adopted.ptyId,
+        mark: adopted.mark,
+        onData: (b) => {
+          if (!disposed) feedTerm(b)
+        },
+        onExit: () => {
+          exited = true
+          if (!disposed) callbacks.current.onExit()
+        },
       })
+        .then((h) => {
+          // Размонтирована раньше: PTY уже отдан обратно (см. очистку).
+          if (disposed) return
+          pty = h
+          ready(h)
+          // Источник мог приостановить чтение (обратное давление) — здесь неразобранного нет.
+          h.resume?.()
+        })
+        .catch((err) => {
+          console.error('pty_attach failed:', err)
+          if (!disposed) term.write(`\r\n\x1b[31mНе удалось подключить оболочку в этом окне: ${String(err)}\x1b[0m\r\n`)
+        })
+    } else {
+      spawnPty({
+        cwd: callbacks.current.initialCwd,
+        cols: term.cols,
+        rows: term.rows,
+        // After unmount (incl. our own kill in cleanup) the session's output and exit are ignored.
+        onData: (b) => {
+          if (!disposed) feedTerm(b)
+        },
+        onExit: () => {
+          exited = true
+          if (!disposed) callbacks.current.onExit()
+        },
+        // До первого вывода: маркеры первого приглашения уже сверяются с меткой.
+        onSpawn: (h) => {
+          mark = h.mark
+          pty = h
+        },
+      })
+        .then((h) => {
+          if (disposed) {
+            if (!exited) h.kill()
+            return
+          }
+          ready(h)
+        })
+        .catch((err) => {
+          console.error('pty_spawn failed:', err)
+          if (!disposed) term.write(`\r\n\x1b[31mНе удалось запустить оболочку: ${String(err)}\x1b[0m\r\n`)
+        })
+    }
 
     let resizeTimer: ReturnType<typeof setTimeout> | undefined
     const ro = new ResizeObserver(() => {
@@ -667,7 +762,16 @@ export function TerminalPane(p: TerminalPaneProps) {
       ro.disconnect()
       feedRo.disconnect()
       host.removeEventListener('paste', onPaste, true)
-      if (!exited) handle?.kill()
+      dropLiveSource(paneId, live)
+      // Панель уезжает в другое окно: PTY уже отсоединён, его подключит окно-приёмник.
+      if (isMoving(paneId)) {
+        // ничего не убиваем
+      } else if (adopted && !exited) {
+        // Принятая панель: StrictMode перемонтирует её и заберёт PTY снова, иначе через такт он убит.
+        const id = adopted.ptyId
+        void detachPty(id).catch(() => {})
+        reofferLive(paneId, adopted, () => killPty(id))
+      } else if (!exited) handle?.kill()
       handleRef.current = null
       term.dispose()
       host.remove()
