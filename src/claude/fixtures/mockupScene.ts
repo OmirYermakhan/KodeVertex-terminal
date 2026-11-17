@@ -31,7 +31,7 @@ export function mockupScene(): ClaudeState {
       }),
       agent({ id: 'css', parentId: 'arch', name: 'Стили', model: 'claude-sonnet-5-5', now: 'Читает form.css', step: { n: 3, m: 7 }, startedAt: T0 - 41_000, tokens: 12_000 }),
       agent({ id: 'main', name: 'Главный', model: 'claude-opus-5-5', status: 'waiting', now: 'Ждёт вашего ответа: удалить старый API?', startedAt: T0 - 182_000, tokens: 84_000 }),
-      agent({ id: 'find', parentId: 'main', name: 'Поиск', model: 'claude-haiku-5-5', status: 'done', now: 'Готово', startedAt: T0 - 60_000, endedAt: T0 - 42_000, tokens: 6_000 }),
+      agent({ id: 'find', parentId: 'main', name: 'Поиск', model: 'claude-haiku-5-5', status: 'done', now: 'Готово', startedAt: T0 - 18_500, endedAt: T0 - 500, tokens: 6_000 }),
     ],
   }
 }

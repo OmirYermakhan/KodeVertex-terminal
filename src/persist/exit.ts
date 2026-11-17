@@ -20,7 +20,17 @@ export async function prepareExit(): Promise<void> {
   }
 }
 
-/** Подписка на событие выхода. Возвращает отписку. */
-export function installExitHandler(): Promise<() => void> {
-  return listen(BEFORE_EXIT_EVENT, () => void prepareExit())
+/**
+ * Подписка на событие выхода, затем `window_ready`: окно готово ответить на выход и принимать
+ * вкладки (слушатель `tab://receive` ставит bootWindow раньше). До этого Rust окно не ждёт при
+ * выходе и вкладок ему не передаёт. Возвращает отписку.
+ */
+export async function installExitHandler(): Promise<() => void> {
+  const off = await listen(BEFORE_EXIT_EVENT, () => void prepareExit())
+  try {
+    await invoke('window_ready')
+  } catch {
+    // вне Tauri
+  }
+  return off
 }

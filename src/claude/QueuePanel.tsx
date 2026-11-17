@@ -1,12 +1,13 @@
 // Очередь сообщений Claude над строкой ввода (в .dock, под запросами агента): набранное, пока ход
 // шёл, ждёт конца хода. Строки — приглушённые пузыри «Вы» (макет 04 .you), заголовок — как .dh.
+// «Отправить сейчас» (↵ на строке, кнопка ↑) — сообщение из очереди сразу в идущий ход.
 import { forwardRef, useImperativeHandle, useRef, useState, type KeyboardEvent } from 'react'
 import type { QueuedMessage } from './sessionStore'
 import { segments } from '../attach/doc'
 import { CLIP_PATH, Token } from '../attach/tokenView'
 import { usePresence } from '../ui/motion'
 
-export const QUEUE_KEYS = '↑ в пустой строке — изменить последнее · ⌫ убрать · esc к вводу'
+export const QUEUE_KEYS = '↵ отправить сейчас · ↑ в пустой строке — изменить последнее · ⌫ убрать · esc к вводу'
 export const PAUSE_HINT = 'пауза — ↵ отправить следующее'
 
 export interface QueuePanelProps {
@@ -14,6 +15,8 @@ export interface QueuePanelProps {
   /** Подсказка паузы (ход прерван или claude завершился). */
   paused: boolean
   onRemove(id: number): void
+  /** «Отправить сейчас»: из очереди сразу в Claude. false — сейчас нельзя, строка остаётся. */
+  onSendNow?(id: number): boolean
   /** esc: фокус обратно в строку ввода. */
   onExit(): void
 }
@@ -43,13 +46,21 @@ export const QueuePanel = forwardRef<QueuePanelHandle, QueuePanelProps>(function
     hasFocus: () => !!boxRef.current && boxRef.current.contains(document.activeElement),
   }))
 
-  const remove = (id: number) => {
+  // Строка ушла (убрана или отправлена): очередь опустела — назад к вводу; иначе выбор на соседнюю.
+  const gone = (id: number) => {
     const i = p.queue.findIndex((m) => m.id === id)
     const rest = p.queue.filter((m) => m.id !== id)
-    p.onRemove(id)
-    // Очередь опустела — назад к вводу; иначе выбор на соседнюю строку.
     if (rest.length === 0) p.onExit()
     else focusRow(rest[Math.min(i, rest.length - 1)].id)
+  }
+
+  const remove = (id: number) => {
+    p.onRemove(id)
+    gone(id)
+  }
+
+  const sendNow = (id: number) => {
+    if (p.onSendNow?.(id)) gone(id)
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -61,6 +72,8 @@ export const QueuePanel = forwardRef<QueuePanelHandle, QueuePanelProps>(function
         const j = i < 0 ? 0 : Math.min(p.queue.length - 1, Math.max(0, i + (e.key === 'ArrowDown' ? 1 : -1)))
         focusRow(p.queue[j].id)
       }
+    } else if (e.key === 'Enter' && !e.shiftKey) {
+      if (selected !== null) sendNow(selected)
     } else if (e.key === 'Backspace' || e.key === 'Delete') {
       if (selected !== null) remove(selected)
     } else if (e.key === 'Escape') {
@@ -125,6 +138,24 @@ export const QueuePanel = forwardRef<QueuePanelHandle, QueuePanelProps>(function
               </span>
             )}
             <span className="qu-tag">ждёт</span>
+            {p.onSendNow && (
+              <button
+                type="button"
+                className="qu-x qu-now"
+                aria-label="Отправить сейчас"
+                title="Отправить сейчас · ↵"
+                tabIndex={-1}
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  sendNow(m.id)
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            )}
             <button
               type="button"
               className="qu-x"

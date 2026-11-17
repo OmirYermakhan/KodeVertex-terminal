@@ -23,7 +23,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { leaves } from '../layout/paneTree'
 import { useTabs, type Tab } from '../layout/tabsStore'
 import { adoptClaude, detachClaude, useClaudeSessions, type PaneClaude } from '../claude/sessionStore'
-import { applySession, enableAutosave, restoreSession, restoredClaude, snapshotPanes, stageTransferredPane, stopAutosave, type SavedPane, type SavedSession } from '../persist/session'
+import { applySession, enableAutosave, restoreSession, restoredClaude, scheduleSave, snapshotPanes, stageTransferredPane, stopAutosave, type SavedPane, type SavedSession } from '../persist/session'
 import { detachPty, killPty } from '../terminal/ptyClient'
 import { clearMoving, liveSource, markMoving, offerLive, type LivePane } from './livePanes'
 import { logError } from '../diag/log'
@@ -71,7 +71,13 @@ export function windowLabel(): string {
   }
 }
 
-const tick = () => new Promise<void>((r) => setTimeout(r, 0))
+/** Вкладки, перенос которых идёт: повторный жест (или второй перенос) той же вкладки — ничего. */
+const transferring = new Set<string>()
+
+/** Перенос вкладки уже идёт (полоса вкладок не начинает её перетаскивание). */
+export function isTransferring(tabId: string): boolean {
+  return transferring.has(tabId)
+}
 
 /** Ждать размонтирования панелей (их источник живого состояния снят), не дольше ~1 с. */
 async function unmounted(ids: readonly string[]): Promise<void> {
@@ -86,51 +92,71 @@ export async function detachTab(tabId: string): Promise<TabTransfer> {
   const tab = useTabs.getState().tabs.find((t) => t.id === tabId)
   if (!tab) throw new Error(`нет вкладки ${tabId}`)
   const ids = leaves(tab.tree)
-  // Сначала отсоединить процессы: дальше их вывод копится в Rust и не потеряется между снимком и подключением.
-  const detached = await Promise.all(
-    ids.map(async (id) => {
-      const claudeProcId = await detachClaude(id)
-      const src = liveSource(id)
-      const ptyId = src?.ptyId() ?? null
-      let pty = false
-      if (ptyId !== null) {
+  // Что уже отсоединено (по панелям): при сбое дальше — подключается обратно к этому окну.
+  const claudeOf = new Map<string, string>()
+  const ptyOf = new Set<string>()
+  const rollback = async () => {
+    const sessions = useClaudeSessions.getState().sessions
+    for (const [id, procId] of claudeOf) {
+      const c = sessions[id]
+      if (c) adoptClaude(id, c, procId)
+    }
+    for (const id of ptyOf) {
+      await liveSource(id)
+        ?.reattach?.()
+        .catch((e: unknown) => logError('transfer', `откат pty: ${String(e)}`))
+    }
+  }
+  try {
+    // Сначала отсоединить процессы: дальше их вывод копится в Rust и не потеряется между снимком
+    // и подключением. Разрешаются, когда вывод до отсоединения уже разобран (маркер конца канала).
+    await Promise.all(
+      ids.map(async (id) => {
+        const claudeProcId = await detachClaude(id)
+        if (claudeProcId !== null) claudeOf.set(id, claudeProcId)
+        const ptyId = liveSource(id)?.ptyId() ?? null
+        if (ptyId === null) return
         try {
           await detachPty(ptyId)
-          pty = true
+          ptyOf.add(id)
         } catch (e) {
           // Старая сборка без detach: оболочка не переедет — в приёмнике будет новая.
           logError('transfer', `pty_detach: ${String(e)}`)
           killPty(ptyId)
         }
-      }
-      return { id, claudeProcId, pty }
-    }),
-  )
-  // Вывод, отправленный до отсоединения, ещё может быть в пути по каналам.
-  await tick()
-  const live = new Map<string, LivePane>()
-  for (const d of detached) {
-    if (!d.pty) continue
-    const l = await liveSource(d.id)?.capture()
-    if (l) live.set(d.id, l)
-  }
-  const saved = snapshotPanes([tab], { live: true })
-  const sessions = useClaudeSessions.getState().sessions
-  const panes: Record<string, TransferPane> = {}
-  for (const d of detached) {
-    const c = sessions[d.id]
-    const full = c && (d.claudeProcId !== null || !c.state.busy)
-    panes[d.id] = {
-      saved: saved[d.id] ?? { feed: [], claudeFrom: 0, claudeMode: false },
-      ...(live.has(d.id) ? { live: live.get(d.id) } : {}),
-      ...(d.claudeProcId !== null ? { claudeProcId: d.claudeProcId } : {}),
-      ...(full ? { claude: { ...c, procId: d.claudeProcId } } : {}),
+      }),
+    )
+    const live = new Map<string, LivePane>()
+    for (const id of ptyOf) {
+      const l = await liveSource(id)?.capture()
+      if (l) live.set(id, l)
     }
+    const saved = snapshotPanes([tab], { live: true })
+    const sessions = useClaudeSessions.getState().sessions
+    const panes: Record<string, TransferPane> = {}
+    for (const id of ids) {
+      const c = sessions[id]
+      const procId = claudeOf.get(id) ?? null
+      const full = c && (procId !== null || !c.state.busy)
+      panes[id] = {
+        saved: saved[id] ?? { feed: [], claudeFrom: 0, claudeMode: false },
+        ...(live.has(id) ? { live: live.get(id) } : {}),
+        ...(procId !== null ? { claudeProcId: procId } : {}),
+        ...(full ? { claude: { ...c, procId } } : {}),
+      }
+    }
+    // Размонтирование панелей (вкладка убрана) не убивает отсоединённое.
+    for (const id of ids) markMoving(id)
+    if (!useTabs.getState().takeTab(tabId)) {
+      // Вкладку закрыли, пока шло отсоединение: её процессы закрыты вместе с панелями.
+      for (const id of ids) clearMoving(id)
+      throw new Error(`вкладка ${tabId} закрыта во время переноса`)
+    }
+    return { tab, panes }
+  } catch (e) {
+    await rollback()
+    throw e
   }
-  // Размонтирование панелей (вкладка убрана) не убивает отсоединённое.
-  for (const id of ids) markMoving(id)
-  useTabs.getState().takeTab(tabId)
-  return { tab, panes }
 }
 
 /**
@@ -204,16 +230,29 @@ async function send(tabId: string, deliver: (payload: WindowInit) => Promise<unk
   return true
 }
 
+/** Перенос вкладки по одному: вкладка помечена синхронно, до первого await; повтор — false. */
+async function exclusive(tabId: string, f: () => Promise<boolean>): Promise<boolean> {
+  if (transferring.has(tabId)) return false
+  transferring.add(tabId)
+  try {
+    return await f()
+  } finally {
+    transferring.delete(tabId)
+  }
+}
+
 /** Вкладка — в новое окно, его полоса вкладок под курсором (x, y — экранные логические). */
-export async function moveTabToNewWindow(tabId: string, screenX: number, screenY: number): Promise<boolean> {
-  if (!(await canMoveToNewWindow())) return false
-  return send(tabId, (payload) => invoke<string>('window_open', { payload, x: screenX, y: screenY }))
+export function moveTabToNewWindow(tabId: string, screenX: number, screenY: number): Promise<boolean> {
+  return exclusive(tabId, async () => {
+    if (!(await canMoveToNewWindow())) return false
+    return send(tabId, (payload) => invoke<string>('window_open', { payload, x: screenX, y: screenY }))
+  })
 }
 
 /** Вкладка — в существующее окно targetLabel (оно станет активным и получит фокус). */
-export async function moveTabToWindow(tabId: string, targetLabel: string): Promise<boolean> {
-  if (targetLabel === windowLabel()) return false
-  return send(tabId, (payload) => invoke('window_send_tab', { target: targetLabel, payload }))
+export function moveTabToWindow(tabId: string, targetLabel: string): Promise<boolean> {
+  if (targetLabel === windowLabel()) return Promise.resolve(false)
+  return exclusive(tabId, () => send(tabId, (payload) => invoke('window_send_tab', { target: targetLabel, payload })))
 }
 
 /**
@@ -236,6 +275,8 @@ export async function bootWindow(): Promise<void> {
       adoptTab(init.tab)
     } else if (isRec(init) && init.kind === 'restore') applySession(init.session)
     enableAutosave()
+    // Сразу своя часть сессии: принятая вкладка не потеряется при выходе до первого изменения.
+    scheduleSave()
   }
   try {
     // Слушатель этого окна (не глобальный): событие адресовано метке окна-приёмника.

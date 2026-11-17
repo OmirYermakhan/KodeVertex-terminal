@@ -7,7 +7,7 @@ import { tabStatus, type ClaudeStatus } from './tabStatus'
 import ProjectButton from '../project/ProjectButton'
 import { useSettings } from '../settings/store'
 import { LauncherIcon } from '../launch/LauncherIcon'
-import { canMoveToNewWindow, moveTabToNewWindow, moveTabToWindow, windowAt } from '../windows/transfer'
+import { canMoveToNewWindow, isTransferring, moveTabToNewWindow, moveTabToWindow, windowAt } from '../windows/transfer'
 import { logError } from '../diag/log'
 
 /** Сдвиг курсора (px), после которого нажатие на вкладке становится перетаскиванием. */
@@ -47,14 +47,20 @@ interface DragView {
   offY: number
 }
 
-/** Вкладку отпустили не над полосой: в другое окно под курсором, в новое — или отмена. */
+/**
+ * Вкладку отпустили не над полосой: за пределами своего окна — в другое окно под курсором или в
+ * новое; внутри своего — ниже полосы на DETACH_BELOW+ в новое окно, иначе отмена. Другое окно,
+ * лежащее под своим, внутри своего окна не ищется: курсор над своим окном, а не над ним.
+ */
 async function dropOutside(id: string, e: { screenX: number; screenY: number; clientX: number; clientY: number }, barBottom: number) {
-  const label = await windowAt(e.screenX, e.screenY)
-  if (label) {
-    await moveTabToWindow(id, label)
-    return
-  }
   const outside = e.clientX < 0 || e.clientY < 0 || e.clientX > window.innerWidth || e.clientY > window.innerHeight
+  if (outside) {
+    const label = await windowAt(e.screenX, e.screenY)
+    if (label) {
+      await moveTabToWindow(id, label)
+      return
+    }
+  }
   if (!outside && e.clientY <= barBottom + DETACH_BELOW) return
   if (await canMoveToNewWindow()) await moveTabToNewWindow(id, e.screenX, e.screenY)
 }
@@ -141,6 +147,8 @@ export default function TabBar({ activeGit = null }: { activeGit?: GitInfo | nul
     skipClick.current = false
     if (e.button !== 0 || press.current) return
     if ((e.target as Element).closest('.tab-close')) return
+    // Вкладка уже переезжает в другое окно — второй перенос не начинаем.
+    if (isTransferring(id)) return
     const el = e.currentTarget
     try {
       el.setPointerCapture?.(e.pointerId)

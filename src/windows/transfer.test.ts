@@ -26,11 +26,11 @@ vi.mock('@tauri-apps/api/window', () => ({
   }),
 }))
 
-const { adoptTab, bootWindow, canMoveToNewWindow, detachTab, moveTabToNewWindow, moveTabToWindow, RECEIVE_EVENT } = await import('./transfer')
+const { adoptTab, bootWindow, canMoveToNewWindow, detachTab, isTransferring, moveTabToNewWindow, moveTabToWindow, RECEIVE_EVENT } = await import('./transfer')
 const { isMoving, liveSource, resetLivePanesForTests, setLiveSource, takeLive } = await import('./livePanes')
 const { useTabs } = await import('../layout/tabsStore')
 const { leaf } = await import('../layout/paneTree')
-const { enterClaude, resetTrustForTests, stopClaude, useClaudeSessions } = await import('../claude/sessionStore')
+const { DETACH_LAUNCH_WAIT_MS, enterClaude, resetTrustForTests, stopClaude, useClaudeSessions, useClaudeTrust } = await import('../claude/sessionStore')
 const { resetPersistForTests, restoredPane, setPaneFeed, SESSION_VERSION } = await import('../persist/session')
 const { initialClaude } = await import('../claude/reducer')
 
@@ -337,5 +337,173 @@ describe('detachClaude не удался', () => {
     const t = await detachTab('t1')
     expect(calls('claude_stop')).toEqual([['claude_stop', { id: 'proc-a' }]])
     expect(t.panes.a.claudeProcId).toBeUndefined()
+  })
+})
+
+type Ch = { onmessage: (m: unknown) => void }
+const lineCh = () => (calls('claude_start')[0][1] as { onLine: Ch }).onLine
+
+describe('маркер конца канала при отсоединении', () => {
+  it('claude: строка в пути после ответа claude_detach попадает в снимок; маркер не идёт в редьюсер', async () => {
+    await livePaneA()
+    let answered = false
+    backend({})
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === 'claude_detach') {
+        answered = true
+        return Promise.resolve(true)
+      }
+      return Promise.resolve(null)
+    })
+    const d = detachTab('t1')
+    await flush()
+    expect(answered).toBe(true)
+    // Ответ пришёл раньше длинной строки (её канал Tauri отдаёт отдельным запросом).
+    lineCh().onmessage(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'S-late' }))
+    lineCh().onmessage('')
+    const t = await d
+    expect(t.panes.a.claude?.state.sessionId).toBe('S-late')
+  })
+
+  it('pty: снимок — после маркера (pty_detach ответил раньше последнего вывода)', async () => {
+    const order: string[] = []
+    backend({ pty_detach: true })
+    // Канал панели a: зарегистрирован через attachPty реального ptyClient.
+    const { attachPty } = await import('../terminal/ptyClient')
+    await attachPty({ id: 'pty-a', mark: 'm', onData: () => order.push('data'), onExit: () => {} })
+    const ch = (calls('pty_attach')[0][1] as { onData: Ch }).onData
+    setLiveSource('a', {
+      ptyId: () => 'pty-a',
+      capture: () => {
+        order.push('capture')
+        return Promise.resolve(live)
+      },
+    })
+    const d = detachTab('t1')
+    await flush()
+    expect(order).toEqual([])
+    ch.onmessage(new Uint8Array([1]).buffer)
+    ch.onmessage(new ArrayBuffer(0))
+    const t = await d
+    expect(order).toEqual(['data', 'capture'])
+    expect(t.panes.a.live).toEqual(live)
+  })
+})
+
+describe('двойной перенос и откат', () => {
+  it('вкладка помечена «переезжает» синхронно: второй перенос той же вкладки — false', async () => {
+    const first = moveTabToWindow('t1', 'w-2')
+    expect(isTransferring('t1')).toBe(true)
+    expect(await moveTabToWindow('t1', 'w-3')).toBe(false)
+    expect(await moveTabToNewWindow('t1', 0, 0)).toBe(false)
+    expect(await first).toBe(true)
+    expect(isTransferring('t1')).toBe(false)
+    expect(calls('window_send_tab')).toHaveLength(1)
+    expect(calls('window_open')).toHaveLength(0)
+  })
+
+  it('вкладку закрыли во время отсоединения — ошибка, ничего не помечено «переезжает»', async () => {
+    let release!: () => void
+    invoke.mockImplementation((cmd: string) => (cmd === 'pty_detach' ? new Promise<void>((r) => (release = () => r())) : Promise.resolve(null)))
+    setLiveSource('a', { ptyId: () => 'pty-a', capture: () => Promise.resolve(live) })
+    const d = detachTab('t1')
+    await flush()
+    useTabs.setState({ tabs: [tab('t2', 'b')], active: 't2', respawns: [] })
+    release()
+    await expect(d).rejects.toThrow(/закрыта/)
+    expect(isMoving('a')).toBe(false)
+  })
+
+  it('сбой после отсоединения — PTY и claude подключаются обратно к этому окну', async () => {
+    await livePaneA()
+    const reattach = vi.fn(() => Promise.resolve())
+    setLiveSource('a', { ptyId: () => 'pty-a', capture: () => Promise.reject(new Error('serialize')), reattach })
+    invoke.mockClear()
+    await expect(detachTab('t1')).rejects.toThrow('serialize')
+    expect(reattach).toHaveBeenCalledTimes(1)
+    expect(calls('claude_attach').map((c) => (c[1] as { id: string }).id)).toEqual(['proc-a'])
+    expect(useTabs.getState().tabs.map((x) => x.id)).toEqual(['t1', 't2'])
+    expect(useClaudeSessions.getState().sessions.a.procId).toBe('proc-a')
+  })
+})
+
+describe('detachClaude не ждёт вечно', () => {
+  it('запуск ждёт «Доверять папке?» — не ждать: запуск отменён, процесса в переносе нет', async () => {
+    // Проверку доверия обошли, Rust отказал при запуске: запуск ждёт ответа на «Доверять?».
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === 'claude_trust_check') return Promise.resolve(true)
+      if (cmd === 'claude_start') return Promise.reject(new Error('UNTRUSTED_DIR'))
+      return Promise.resolve(null)
+    })
+    enterClaude('a', '/w')
+    await flush()
+    await flush()
+    expect(useClaudeTrust.getState().asks.a).toMatchObject({ cwd: '/w' })
+    const t = await detachTab('t1')
+    expect(calls('claude_detach')).toHaveLength(0)
+    expect(t.panes.a.claudeProcId).toBeUndefined()
+    // Вопрос снят, повторного запуска нет.
+    expect(useClaudeTrust.getState().asks.a).toBeUndefined()
+    await flush()
+    expect(calls('claude_start')).toHaveLength(1)
+  })
+
+  it('запуск не отвечает — не дольше DETACH_LAUNCH_WAIT_MS', async () => {
+    vi.useFakeTimers()
+    try {
+      let started!: (id: string) => void
+      invoke.mockImplementation((cmd: string) => {
+        if (cmd === 'claude_start') return new Promise((r) => (started = r))
+        if (cmd === 'claude_trust_check') return Promise.resolve(true)
+        return Promise.resolve(null)
+      })
+      enterClaude('a', '/w')
+      await vi.advanceTimersByTimeAsync(0)
+      const d = detachTab('t1')
+      await vi.advanceTimersByTimeAsync(DETACH_LAUNCH_WAIT_MS + 10)
+      const t = await d
+      expect(t.panes.a.claudeProcId).toBeUndefined()
+      // Поздний ответ запуска — процесс останавливается.
+      started('proc-late')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls('claude_stop')).toEqual([['claude_stop', { id: 'proc-late' }]])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('adoptClaude без процесса', () => {
+  it('ход шёл (или главный ждал фоновых) — остановлен, вкладка не «работает» вечно', () => {
+    const base = initialClaude()
+    const state = {
+      ...base,
+      busy: true,
+      pending: 1,
+      agents: base.agents.map((a) => ({ ...a, status: 'running' as const, startedAt: 1 })),
+    }
+    adoptTab({
+      tab: tab('t3', 'c'),
+      panes: { c: { saved: { feed: [], claudeFrom: 0, claudeMode: true }, claude: { state, procId: null, cwd: '/w', model: null, effort: null, permissionMode: null, queue: [], paused: false, pauseHint: false } } },
+    })
+    const s = useClaudeSessions.getState().sessions.c
+    expect(s.state.busy).toBe(false)
+    expect(s.state.agents.every((a) => a.status !== 'running')).toBe(true)
+  })
+})
+
+describe('bootWindow: принятое окно сохраняется сразу', () => {
+  it('w-* с переносом — session_save без изменений после запуска', async () => {
+    vi.useFakeTimers()
+    try {
+      win.label = 'w-1'
+      backend({ window_take_init: { kind: 'transfer', tab: { tab: tab('tx', 'px'), panes: { px: { saved: { feed: [], claudeFrom: 0, claudeMode: false } } } } } })
+      await bootWindow()
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(calls('session_save').length).toBeGreaterThanOrEqual(1)
+      expect(JSON.parse((calls('session_save')[0][1] as { text: string }).text).tabs[0].id).toBe('tx')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -1659,7 +1659,8 @@ describe('TerminalPane', () => {
       withSession()
       expect(panel()).not.toBeNull()
       expect(panel()!.nextElementSibling!.contains(textarea())).toBe(true)
-      expect(panel()!.querySelectorAll('.row')).toHaveLength(4)
+      // «Поиск» закончил давно (время сцены — T0, часы — настоящие): из панели он уже ушёл.
+      expect(Array.from(panel()!.querySelectorAll('.row')).map((r) => r.getAttribute('data-agent-id'))).toEqual(['arch', 'css', 'main'])
     })
 
     it('⌘↓ из строки ввода — фокус в панель, ↑↓ выбор, esc — назад к вводу', async () => {
@@ -2174,6 +2175,31 @@ describe('TerminalPane: перенос вкладки между окнами', 
     expect(killPty).not.toHaveBeenCalled()
     expect(attaches).toHaveLength(2)
     expect(attaches[1].opts.id).toBe('pty-9')
+  })
+
+  it('повторный перенос до ответа pty_attach: источник отдаёт принятый PTY (не «нет PTY»), снимок с его id', async () => {
+    offerLive('p', live)
+    render(<TerminalPane {...props()} />)
+    const term = terms[0]
+    term.write.mockImplementation((_d: unknown, cb?: () => void) => cb?.())
+    // pty_attach ещё не ответил.
+    expect(liveSource('p')!.ptyId()).toBe('pty-9')
+    const l = await liveSource('p')!.capture()
+    expect(l).toMatchObject({ ptyId: 'pty-9', mark: MARK })
+  })
+
+  it('reattach (откат переноса): тот же PTY — снова к панели, вывод в xterm', async () => {
+    render(<TerminalPane {...props()} />)
+    spawns[0].resolve()
+    await flush()
+    const term = terms[0]
+    const done = liveSource('p')!.reattach!()
+    expect(attaches).toHaveLength(1)
+    expect(attaches[0].opts).toMatchObject({ id: 's0', mark: MARK })
+    attaches[0].resolve()
+    await done
+    attaches[0].opts.onData(new Uint8Array([66]))
+    expect(term.write).toHaveBeenLastCalledWith(new Uint8Array([66]), expect.any(Function))
   })
 
   it('принятую панель закрыли насовсем — PTY убит', async () => {

@@ -184,6 +184,59 @@ describe('detachPty / attachPty', () => {
     expect(invoke.mock.calls.map((c) => c[0])).toEqual(['pty_detach', 'pty_attach'])
   })
 
+  it('detach ждёт маркер конца (пустой кусок) после ответа; маркер в onData не попадает', async () => {
+    const { attachPty, detachPty } = await import('./ptyClient')
+    invoke.mockImplementation((cmd: string) => Promise.resolve(cmd === 'pty_detach' ? true : undefined))
+    const onData = vi.fn()
+    await attachPty({ id: 's1', mark: 'm', onData, onExit: () => {} })
+    let done = false
+    const d = detachPty('s1').then(() => (done = true))
+    await new Promise((r) => setTimeout(r, 0))
+    // Ответ pty_detach пришёл, а большой кусок до отсоединения ещё в пути.
+    expect(done).toBe(false)
+    channels[0].onmessage(new Uint8Array([7]).buffer)
+    expect(done).toBe(false)
+    channels[0].onmessage(new ArrayBuffer(0))
+    await d
+    expect(onData.mock.calls.map((c) => Array.from(c[0] as Uint8Array))).toEqual([[7]])
+  })
+
+  it('маркер раньше ответа pty_detach тоже засчитывается; spawn-канал знает свой id', async () => {
+    const { detachPty } = await import('./ptyClient')
+    let answer!: (v: boolean) => void
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === 'pty_spawn') return Promise.resolve({ id: 's2', mark: 'm' })
+      if (cmd === 'pty_detach') return new Promise((r) => (answer = r))
+      return Promise.resolve()
+    })
+    const onData = vi.fn()
+    await spawnPty({ cols: 80, rows: 24, onData, onExit: () => {} })
+    const d = detachPty('s2')
+    await Promise.resolve()
+    channels[0].onmessage(new ArrayBuffer(0))
+    answer(true)
+    await d
+    expect(onData).not.toHaveBeenCalled()
+  })
+
+  it('маркера нет — не дольше DETACH_END_WAIT_MS; старая сборка (не true) — без ожидания', async () => {
+    const { detachPty, DETACH_END_WAIT_MS } = await import('./ptyClient')
+    vi.useFakeTimers()
+    try {
+      invoke.mockResolvedValue(true)
+      let done = false
+      const d = detachPty('s3').then(() => (done = true))
+      await vi.advanceTimersByTimeAsync(DETACH_END_WAIT_MS - 10)
+      expect(done).toBe(false)
+      await vi.advanceTimersByTimeAsync(20)
+      await d
+      invoke.mockResolvedValue(undefined)
+      await detachPty('s4')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('attach неизвестной сессии — ошибка', async () => {
     const { attachPty } = await import('./ptyClient')
     invoke.mockRejectedValue('unknown pty')

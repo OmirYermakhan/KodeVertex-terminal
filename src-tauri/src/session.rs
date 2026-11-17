@@ -30,6 +30,9 @@ struct PiecesState {
   pieces: HashMap<String, Arc<str>>,
   /// Окна из `windows[]` уже открыты (первый `session_load` окна main).
   restored: bool,
+  /// Окно main подтвердило версию файла (`session_confirm` или своё `session_save`): до этого
+  /// файл не пишется — файл более новой сборки не затрут окна `w-*` (⌘N, восстановленные).
+  confirmed: bool,
 }
 
 /// Части сессии окон и порядок окон.
@@ -57,10 +60,29 @@ impl Pieces {
     st.pieces.remove(label);
   }
 
-  /// Часть окна `label` (окно, не открытое через `register`, — в конец порядка).
-  pub fn set(&self, label: &str, text: &str) {
-    self.register(label);
-    lock(&self.state).pieces.insert(label.to_string(), Arc::from(text));
+  /// Часть окна `label`. Окно не из порядка (уже закрытое: запоздалая запись при закрытии) —
+  /// не принимается, иначе закрытое окно воскресло бы при следующем запуске. false — не принята.
+  pub fn set(&self, label: &str, text: &str) -> bool {
+    let mut st = lock(&self.state);
+    if !st.order.iter().any(|l| l == label) {
+      return false;
+    }
+    st.pieces.insert(label.to_string(), Arc::from(text));
+    true
+  }
+
+  /// Последняя часть окна (перезагрузка страницы `w-*` восстанавливает по ней свои вкладки).
+  pub fn piece(&self, label: &str) -> Option<Arc<str>> {
+    lock(&self.state).pieces.get(label).cloned()
+  }
+
+  /// Версия файла подтверждена окном main: дальше файл пишется.
+  pub fn confirm(&self) {
+    lock(&self.state).confirmed = true;
+  }
+
+  fn confirmed(&self) -> bool {
+    lock(&self.state).confirmed
   }
 
   /// Первый вызов — true (пора открывать окна из `windows[]`).
@@ -74,9 +96,13 @@ impl Pieces {
     st.order.iter().filter_map(|l| st.pieces.get(l).cloned()).collect()
   }
 
-  /// Собрать файл из частей и записать атомарно. Частей нет — файл не трогается.
+  /// Собрать файл из частей и записать атомарно. Частей нет или версия не подтверждена (`confirm`)
+  /// — файл не трогается.
   pub fn write_to(&self, path: &Path) -> Result<(), String> {
     let _w = lock(&self.write);
+    if !self.confirmed() {
+      return Ok(());
+    }
     let parts = self.snapshot();
     if parts.is_empty() {
       return Ok(());
@@ -185,7 +211,9 @@ pub async fn session_load(app: AppHandle, window: WebviewWindow) -> Option<Value
     for session in others {
       let text = session.to_string();
       match crate::windows::open(&app, Some(serde_json::json!({ "kind": "restore", "session": session })), size, None) {
-        Ok(label) => pieces.set(&label, &text),
+        Ok(label) => {
+          pieces.set(&label, &text);
+        }
         Err(e) => log::warn!("не удалось восстановить окно: {e}"),
       }
     }
@@ -193,13 +221,38 @@ pub async fn session_load(app: AppHandle, window: WebviewWindow) -> Option<Value
   Some(top)
 }
 
-/// Часть сессии окна-вызывателя; файл собирается из частей всех окон (см. `compose`).
+/// Часть сессии окна-вызывателя; файл собирается из частей всех окон (см. `compose`). Пока окно
+/// main не подтвердило версию файла, часть запоминается, но файл не пишется.
 #[tauri::command]
 pub async fn session_save(app: AppHandle, window: WebviewWindow, text: String) -> Result<(), String> {
   let path = session_path(&app).ok_or("не найдена папка данных приложения")?;
   check_piece(&text)?;
-  app.state::<Pieces>().set(window.label(), &text);
+  let pieces = app.state::<Pieces>();
+  if !pieces.set(window.label(), &text) {
+    return Err(format!("окно {} уже закрыто", window.label()));
+  }
+  // main пишет сессию, только если файл его версии (или его нет): версия подтверждена.
+  if window.label() == MAIN_LABEL {
+    pieces.confirm();
+  }
   crate::blocking(move || app.state::<Pieces>().write_to(&path)).await?
+}
+
+/// Окно main прочитало файл сессии, и он его версии (или файла нет): файл можно писать — в том
+/// числе частями других окон. Файл более новой сборки main не подтверждает, и окна `w-*` его не
+/// затрут. Другие окна подтвердить не могут.
+#[tauri::command]
+pub fn session_confirm(window: WebviewWindow, pieces: tauri::State<'_, Pieces>) {
+  if window.label() == MAIN_LABEL {
+    pieces.confirm();
+  }
+}
+
+/// Payload `window_take_init` для окна без своего payload (страница перезагружена): его последняя
+/// часть сессии — `{kind:'restore', session}`. Нет части или она не JSON — None (одна новая вкладка).
+pub fn restore_init(piece: Option<&str>) -> Option<Value> {
+  let session: Value = serde_json::from_str(piece?).ok().filter(Value::is_object)?;
+  Some(serde_json::json!({ "kind": "restore", "session": session }))
 }
 
 /// Окно `label` уничтожено. Другие окна живы и приложение не выходит — его часть забывается,
@@ -316,6 +369,7 @@ mod tests {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join(FILE);
     let s = Pieces::default();
+    s.confirm();
     s.register("main");
     s.register("w-1");
     s.register("w-2");
@@ -335,10 +389,42 @@ mod tests {
     s.forget("main");
     s.write_to(&p).unwrap();
     assert_eq!(load_from(&p).unwrap(), json!({"n":11,"windows":[{"n":2}]}));
-    // Окно без register — в конец.
-    s.set("w-9", r#"{"n":9}"#);
+    // Окно без register (уже закрытое) — не принимается.
+    assert!(!s.set("w-9", r#"{"n":9}"#));
+    assert!(!s.set("main", r#"{"n":0}"#), "закрытое main не воскресает");
     s.write_to(&p).unwrap();
-    assert_eq!(load_from(&p).unwrap(), json!({"n":11,"windows":[{"n":2},{"n":9}]}));
+    assert_eq!(load_from(&p).unwrap(), json!({"n":11,"windows":[{"n":2}]}));
+  }
+
+  /// До подтверждения версии окном main файл не пишется (файл более новой сборки цел).
+  #[test]
+  fn file_is_written_only_after_confirm() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join(FILE);
+    std::fs::write(&p, r#"{"version":99}"#).unwrap();
+    let s = Pieces::default();
+    s.register("main");
+    s.register("w-1");
+    assert!(s.set("w-1", r#"{"n":1}"#));
+    s.write_to(&p).unwrap();
+    assert_eq!(load_from(&p).unwrap(), json!({"version":99}));
+    s.confirm();
+    s.write_to(&p).unwrap();
+    assert_eq!(load_from(&p).unwrap(), json!({"n":1}));
+  }
+
+  #[test]
+  fn reload_restores_last_piece() {
+    let s = Pieces::default();
+    s.register("w-1");
+    assert_eq!(restore_init(s.piece("w-1").as_deref()), None);
+    s.set("w-1", r#"{"version":1,"tabs":[]}"#);
+    assert_eq!(
+      restore_init(s.piece("w-1").as_deref()),
+      Some(json!({"kind":"restore","session":{"version":1,"tabs":[]}}))
+    );
+    assert_eq!(restore_init(Some("nope")), None);
+    assert_eq!(restore_init(Some("[1]")), None);
   }
 
   #[test]

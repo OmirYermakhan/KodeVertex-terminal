@@ -431,23 +431,34 @@ impl ClaudeManager {
 
 impl ClaudeManager {
   /// Отсоединить процесс от окна (вкладка переезжает): строки копятся, владельца нет.
-  /// Возвращает номер отсоединения для `expire_orphan`.
-  pub fn detach(&self, id: &str) -> Result<u64, String> {
+  /// Последней строкой старого колбэка уходит маркер конца — пустая строка (настоящие строки
+  /// пустыми не бывают): длинные строки канал Tauri отдаёт отдельным запросом, и ответ
+  /// `claude_detach` может их обогнать — фронт ждёт маркер. Возвращает номер отсоединения для
+  /// `expire_orphan` и был ли маркер (процесс был подключён).
+  pub fn detach(&self, id: &str) -> Result<(u64, bool), String> {
     let link = lock(&self.sessions).get(id).map(|s| s.link.clone()).ok_or_else(|| no_session(id))?;
-    let generation = {
+    let res = {
       let mut l = lock(&link);
-      l.on_line = None;
+      // Под замком связи: строки до этого — у старого колбэка, после — в очереди.
+      let marked = match l.on_line.take() {
+        Some(f) => {
+          f(String::new());
+          true
+        }
+        None => false,
+      };
       l.on_exit = None;
       l.owner = None;
       l.generation += 1;
-      l.generation
+      (l.generation, marked)
     };
     lock(&self.detached).insert(id.to_string(), link);
-    Ok(generation)
+    Ok(res)
   }
 
   /// Подключить отсоединённый процесс к окну `owner`: сначала накопленные строки по порядку,
-  /// затем живые; выход, случившийся без окна, — после строк. Неизвестный id — ошибка.
+  /// затем живые; выход, случившийся без окна, — после строк. Только отсоединённый: подключённый
+  /// к окну (в том числе уже принятый другим переносом) и неизвестный id — ошибка.
   pub fn attach(
     &self,
     id: &str,
@@ -455,10 +466,7 @@ impl ClaudeManager {
     on_line: impl Fn(String) + Send + 'static,
     on_exit: impl Fn(Option<i32>, String) + Send + 'static,
   ) -> Result<(), String> {
-    let link = lock(&self.detached)
-      .remove(id)
-      .or_else(|| lock(&self.sessions).get(id).map(|s| s.link.clone()))
-      .ok_or_else(|| no_session(id))?;
+    let link = lock(&self.detached).remove(id).ok_or_else(|| no_session(id))?;
     // Под замком связи: читатель stdout ждёт, пока очередь не отдана и колбэк не поставлен.
     let mut l = lock(&link);
     for line in std::mem::take(&mut l.queue) {
@@ -678,16 +686,16 @@ pub async fn claude_start(
 }
 
 /// Отсоединить процесс claude от окна (вкладка переезжает). Не подключённый за `ORPHAN_TIMEOUT`
-/// — останавливается.
+/// — останавливается. true — в старый канал ушёл маркер конца (пустая строка).
 #[tauri::command]
-pub fn claude_detach(manager: State<'_, ClaudeManager>, id: String) -> Result<(), String> {
-  let generation = manager.detach(&id)?;
+pub fn claude_detach(manager: State<'_, ClaudeManager>, id: String) -> Result<bool, String> {
+  let (generation, marked) = manager.detach(&id)?;
   let m = manager.inner().clone();
   std::thread::spawn(move || {
     std::thread::sleep(ORPHAN_TIMEOUT);
     m.expire_orphan(&id, generation);
   });
-  Ok(())
+  Ok(marked)
 }
 
 /// Подключить отсоединённый процесс claude к окну вызова с новыми каналами.
@@ -1223,6 +1231,8 @@ mod tests {
       m.send(&id, &format!("m{i}")).unwrap();
     }
     std::thread::sleep(Duration::from_millis(300));
+    // В старый колбэк — только маркер конца.
+    assert_eq!(lrx.try_recv().unwrap(), "");
     assert!(lrx.try_recv().is_err(), "строка ушла в старый колбэк");
     let (lrx2, erx2) = attach_rx(&m, &id).unwrap();
     let texts: Vec<String> = take(&lrx2, 3)
@@ -1236,6 +1246,28 @@ mod tests {
     m.stop(&id).unwrap();
     erx2.recv_timeout(WAIT).expect("on_exit нового окна");
     assert!(erx.try_recv().is_err());
+  }
+
+  /// Маркер конца (пустая строка) — последней строкой старого колбэка; подключить можно только
+  /// отсоединённый процесс (второй перенос той же вкладки не перехватывает принятый).
+  #[test]
+  fn detach_sends_end_marker_and_attach_requires_detached() {
+    let m = ClaudeManager::default();
+    let (id, lrx, _erx) = start(&m, &fake()).unwrap();
+    take(&lrx, 38);
+    assert!(attach_rx(&m, &id).is_err(), "подключённый процесс");
+    let (_, marked) = m.detach(&id).unwrap();
+    assert!(marked);
+    assert_eq!(lrx.recv_timeout(WAIT).unwrap(), "");
+    m.send(&id, "after").unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(lrx.try_recv().is_err(), "после маркера в старый колбэк ничего");
+    let (_, again) = m.detach(&id).unwrap();
+    assert!(!again);
+    let (lrx2, _erx2) = attach_rx(&m, &id).unwrap();
+    assert!(lrx2.recv_timeout(WAIT).unwrap().contains("after"));
+    assert!(attach_rx(&m, &id).is_err(), "уже принят");
+    m.stop(&id).unwrap();
   }
 
   /// Процесс вышел без окна — выход приходит при attach, после накопленных строк.
@@ -1267,9 +1299,9 @@ mod tests {
     assert!(m.detach("нет").is_err());
     let (id, lrx, _erx) = start(&m, &fake()).unwrap();
     take(&lrx, 38);
-    let g1 = m.detach(&id).unwrap();
+    let (g1, _) = m.detach(&id).unwrap();
     let (_l, erx2) = attach_rx(&m, &id).unwrap();
-    let g2 = m.detach(&id).unwrap();
+    let (g2, _) = m.detach(&id).unwrap();
     assert!(!m.expire_orphan(&id, g1));
     assert!(m.send(&id, "x").is_ok());
     assert!(m.expire_orphan(&id, g2));

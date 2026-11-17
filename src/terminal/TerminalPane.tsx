@@ -24,7 +24,7 @@ import { notifyCommandEnd } from '../notify/notify'
 import { useProject } from '../project/store'
 import { applyShell, claudeIndex, claudeItemId, commandBytes, failurePrompt, firstUnfinished, moveSelection, parseOsc133, syncClaude, type FeedItem, type ShellBlock } from '../feed/feed'
 import type { FeedClaudeItem } from '../claude/reducer'
-import { editClaude, dismissQueueHint, dismissSuggestion, feedCleared, recallQueued, removeQueued, sendQueued, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, listSessions, resumeClaude, stopClaude, useClaudeSessions, type ModelChoice, answerTrust, useClaudeTrust } from '../claude/sessionStore'
+import { editClaude, dismissQueueHint, dismissSuggestion, feedCleared, recallQueued, removeQueued, sendQueued, sendQueuedNow, type QueuedMessage, answerPermission, answerQuestion, askClaude, chooseModel, questionStep, submitQuestion, claudeCwdKnown, claudeOpen, clearClaude, enterClaude, exitClaude, interruptClaude, listSessions, resumeClaude, stopClaude, useClaudeSessions, type ModelChoice, answerTrust, useClaudeTrust } from '../claude/sessionStore'
 import type { SessionInfo } from '../claude/resume'
 import { aliasOf } from '../claude/models'
 import { backgroundWait, canEdit, editInfo, lastEditable, pendingPrompt, thinkingSince, type PermissionDecision } from '../claude/reducer'
@@ -623,12 +623,22 @@ export function TerminalPane(p: TerminalPaneProps) {
       if (runningRef.current) scheduleLive()
     })
 
+    // Принятый PTY, пока pty_attach не ответил: повторный перенос отсоединит именно его (pty_detach
+    // встанет в очередь за pty_attach), а не запустит в приёмнике новую оболочку.
+    let attaching: string | null = null
+    const ptyOutput = (b: Uint8Array) => {
+      if (!disposed) feedTerm(b)
+    }
+    const ptyExit = () => {
+      exited = true
+      if (!disposed) callbacks.current.onExit()
+    }
     // Живое состояние для переноса вкладки в другое окно (снимается после pty_detach).
     const live: LiveSource = {
-      ptyId: () => (exited || !handle ? null : handle.id),
+      ptyId: () => (exited ? null : (handle?.id ?? attaching)),
       capture: async () => {
-        const h = handle
-        if (!h || exited || disposed || mark === null) return null
+        const id = handle?.id ?? attaching
+        if (id === null || exited || disposed || mark === null) return null
         // Уже полученный вывод — разобрать до снимка (не дольше CAPTURE_WAIT_MS).
         await new Promise<void>((r) => {
           const t = setTimeout(r, CAPTURE_WAIT_MS)
@@ -639,7 +649,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         })
         if (disposed) return null
         return {
-          ptyId: h.id,
+          ptyId: id,
           mark,
           localHost,
           cwd: cwdRef.current ?? null,
@@ -657,6 +667,16 @@ export function TerminalPane(p: TerminalPaneProps) {
           rows: term.rows,
           xterm: serializer.serialize(),
         }
+      },
+      reattach: async () => {
+        const id = handle?.id ?? attaching
+        if (id === null || exited || disposed || mark === null) return
+        const h = await attachPty({ id, mark, onData: ptyOutput, onExit: ptyExit })
+        if (disposed) return
+        attaching = null
+        pty = h
+        ready(h)
+        h.resume?.()
       },
     }
     setLiveSource(paneId, live)
@@ -690,26 +710,19 @@ export function TerminalPane(p: TerminalPaneProps) {
         fit.fit()
         if (runningRef.current) scheduleLive()
       })
-      attachPty({
-        id: adopted.ptyId,
-        mark: adopted.mark,
-        onData: (b) => {
-          if (!disposed) feedTerm(b)
-        },
-        onExit: () => {
-          exited = true
-          if (!disposed) callbacks.current.onExit()
-        },
-      })
+      attaching = adopted.ptyId
+      attachPty({ id: adopted.ptyId, mark: adopted.mark, onData: ptyOutput, onExit: ptyExit })
         .then((h) => {
           // Размонтирована раньше: PTY уже отдан обратно (см. очистку).
           if (disposed) return
+          attaching = null
           pty = h
           ready(h)
           // Источник мог приостановить чтение (обратное давление) — здесь неразобранного нет.
           h.resume?.()
         })
         .catch((err) => {
+          attaching = null
           console.error('pty_attach failed:', err)
           if (!disposed) term.write(`\r\n\x1b[31mНе удалось подключить оболочку в этом окне: ${String(err)}\x1b[0m\r\n`)
         })
@@ -860,6 +873,7 @@ export function TerminalPane(p: TerminalPaneProps) {
     [p.paneId],
   )
   const onRemoveQueued = useCallback((id: number) => removeQueued(p.paneId, id), [p.paneId])
+  const onSendQueuedNow = useCallback((id: number) => sendQueuedNow(p.paneId, id, cwdRef.current), [p.paneId])
 
   // Вопрос агента ждёт ответа — блок над строкой ввода (как «needs your input» в Warp).
   // Ждущий запрос агента (вопрос или разрешение) — блок над строкой ввода.
@@ -985,9 +999,9 @@ export function TerminalPane(p: TerminalPaneProps) {
   // ⌃D на пустой строке — EOF в оболочку, как в обычном терминале (zsh с ignoreeof его проигнорирует).
   const onEof = useCallback(() => handleRef.current?.write('\x04'), [])
   const onAsk = useCallback(
-    (text: string, tokens?: Attachment[]) => {
+    (text: string, tokens?: Attachment[], now?: boolean) => {
       setSelected(null)
-      void askClaude(p.paneId, cwdRef.current, text, tokens)
+      void askClaude(p.paneId, cwdRef.current, text, tokens, now)
     },
     [p.paneId],
   )
@@ -1590,6 +1604,7 @@ export function TerminalPane(p: TerminalPaneProps) {
             queue={queue}
             paused={!!claude?.pauseHint}
             onRemove={onRemoveQueued}
+            onSendNow={onSendQueuedNow}
             onExit={() => inputRef.current?.focus()}
           />
           </ErrorBoundary>
@@ -1615,6 +1630,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           home={home || null}
           onRun={onRun}
           onAsk={onAsk}
+          claudeBusy={!!claude?.state.busy}
           onTokens={onTokens}
           onAcceptsTokens={setAcceptsTokens}
           onClaudeMode={setInClaude}

@@ -114,10 +114,12 @@ export function actionKeys(action: Action): string[] {
 /**
  * Клавиши строки ввода — их обрабатывает InputBar, а не KEYMAP: ↵ — команда оболочке,
  * ⌘↵ — спросить Claude, ⌃R — поиск по истории команд (InputBar сверяет ⌃R с history).
+ * В режиме Claude ↵ — отправить (идёт ход — в очередь), ⌘↵ — «отправить сейчас»: сразу в идущий ход.
  */
 export const INPUT_BINDINGS = {
   run: { key: 'Enter' },
   ask: { key: 'Enter', meta: true },
+  sendNow: { key: 'Enter', meta: true },
   history: { key: 'KeyR', ctrl: true },
 } as const satisfies Record<string, Keys>
 

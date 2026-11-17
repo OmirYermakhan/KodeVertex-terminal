@@ -13,6 +13,7 @@ vi.mock('../windows/transfer', () => ({
   moveTabToNewWindow: vi.fn(async () => true),
   moveTabToWindow: vi.fn(async () => true),
   windowAt: vi.fn(async () => null),
+  isTransferring: vi.fn(() => false),
 }))
 
 describe('TabBar', () => {
@@ -196,7 +197,8 @@ describe('TabBar', () => {
       expect(tab.style.transform).toBe('')
       fireEvent.pointerUp(tab, pt(160, 200))
       await flush()
-      expect(transfer.windowAt).toHaveBeenCalledWith(1160, 700)
+      // Внутри своего окна другое окно под ним не ищется.
+      expect(transfer.windowAt).not.toHaveBeenCalled()
       expect(transfer.moveTabToNewWindow).toHaveBeenCalledWith(a, 1160, 700)
       expect(transfer.moveTabToWindow).not.toHaveBeenCalled()
       expect(screen.queryByTestId('tab-ghost')).toBeNull()
@@ -215,7 +217,21 @@ describe('TabBar', () => {
       expect(transfer.moveTabToNewWindow).toHaveBeenCalledWith(a, 950, 520)
     })
 
-    it('отпустили над другим окном — перенос туда', async () => {
+    it('отпустили над другим окном (за пределами своего) — перенос туда', async () => {
+      const [, b] = three()
+      vi.mocked(transfer.windowAt).mockResolvedValue('w2')
+      render(<TabBar />)
+      const tab = screen.getAllByRole('tab')[1]
+      fireEvent.pointerDown(tab, pt(250, 19))
+      fireEvent.pointerMove(tab, pt(250, 900))
+      fireEvent.pointerUp(tab, pt(250, 900))
+      await flush()
+      expect(transfer.windowAt).toHaveBeenCalledWith(1250, 1400)
+      expect(transfer.moveTabToWindow).toHaveBeenCalledWith(b, 'w2')
+      expect(transfer.moveTabToNewWindow).not.toHaveBeenCalled()
+    })
+
+    it('другое окно под своим (точка внутри своего окна) — не перенос туда', async () => {
       const [, b] = three()
       vi.mocked(transfer.windowAt).mockResolvedValue('w2')
       render(<TabBar />)
@@ -224,8 +240,26 @@ describe('TabBar', () => {
       fireEvent.pointerMove(tab, pt(250, 300))
       fireEvent.pointerUp(tab, pt(250, 300))
       await flush()
-      expect(transfer.moveTabToWindow).toHaveBeenCalledWith(b, 'w2')
-      expect(transfer.moveTabToNewWindow).not.toHaveBeenCalled()
+      expect(transfer.windowAt).not.toHaveBeenCalled()
+      expect(transfer.moveTabToWindow).not.toHaveBeenCalled()
+      expect(transfer.moveTabToNewWindow).toHaveBeenCalledWith(b, 1250, 800)
+    })
+
+    it('вкладка уже переезжает — перетаскивание не начинается', async () => {
+      const [a] = three()
+      vi.mocked(transfer.isTransferring).mockImplementation((id) => id === a)
+      try {
+        render(<TabBar />)
+        const tab = screen.getAllByRole('tab')[0]
+        fireEvent.pointerDown(tab, pt(150, 19))
+        fireEvent.pointerMove(tab, pt(150, 300))
+        expect(tab).not.toHaveClass('dragging')
+        fireEvent.pointerUp(tab, pt(150, 300))
+        await flush()
+        expect(transfer.moveTabToNewWindow).not.toHaveBeenCalled()
+      } finally {
+        vi.mocked(transfer.isTransferring).mockReturnValue(false)
+      }
     })
 
     it('чуть ниже полосы (меньше 40px) — отмена', async () => {

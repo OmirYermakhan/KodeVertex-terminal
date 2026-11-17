@@ -41,8 +41,13 @@ export interface LivePane {
 export type LiveSource = {
   /** Снимок после отсоединения PTY: дождаться разбора уже полученного вывода и сериализовать. */
   capture(): Promise<LivePane | null>
-  /** id сессии PTY (для pty_detach до снимка); null — PTY нет. */
+  /** id сессии PTY (для pty_detach до снимка; принятый PTY — и пока pty_attach идёт); null — PTY нет. */
   ptyId(): string | null
+  /**
+   * Откат неудавшегося переноса: отсоединённый PTY — снова к этой (всё ещё смонтированной) панели,
+   * с новыми каналами.
+   */
+  reattach?(): Promise<void>
 }
 
 const sources = new Map<string, LiveSource>()

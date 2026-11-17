@@ -109,8 +109,11 @@ pub fn begin<R: Runtime>(app: &AppHandle<R>) {
   if !flow.start() {
     return;
   }
-  // Ответа ждём от каждого окна, открытого сейчас (закрытое по пути — вычёркивается в `Destroyed`).
-  flow.expect(app.webview_windows().into_keys());
+  // Ответа ждём от каждого окна, открытого сейчас и готового ответить (`window_ready`): ещё
+  // грузящееся окно слушателя не поставило — его ждать нечего. Закрытое по пути — вычёркивается в
+  // `Destroyed`.
+  let ready = app.state::<crate::windows::ReadyWindows>();
+  flow.expect(app.webview_windows().into_keys().filter(|l| ready.is_ready(l)));
   if app.emit(BEFORE_EXIT_EVENT, ()).is_err() {
     // Фронту не отправить — ждать нечего.
     flow.mark_all_ready();

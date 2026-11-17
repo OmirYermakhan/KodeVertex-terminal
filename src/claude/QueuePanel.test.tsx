@@ -18,6 +18,33 @@ describe('QueuePanel', () => {
     ])
   })
 
+  it('«Отправить сейчас»: кнопка на строке и ↵ на выбранной; не вышло — строка остаётся', () => {
+    const ref = createRef<QueuePanelHandle>()
+    const onSendNow = vi.fn(() => true)
+    const onExit = vi.fn()
+    const { container } = render(<QueuePanel ref={ref} queue={queue} paused={false} onRemove={vi.fn()} onSendNow={onSendNow} onExit={onExit} />)
+    expect(QUEUE_KEYS).toBe('↵ отправить сейчас · ↑ в пустой строке — изменить последнее · ⌫ убрать · esc к вводу')
+    fireEvent.mouseDown(screen.getAllByRole('button', { name: 'Отправить сейчас' })[1])
+    expect(onSendNow).toHaveBeenLastCalledWith(2)
+    act(() => ref.current!.focus())
+    const box = container.querySelector('.queue') as HTMLElement
+    fireEvent.keyDown(box, { key: 'ArrowDown' })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(onSendNow).toHaveBeenLastCalledWith(2)
+    // Выбор — на соседнюю строку.
+    expect(container.querySelector('.qu-row.focus')!.textContent).toContain('добавь тесты')
+    onSendNow.mockReturnValue(false)
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(onSendNow).toHaveBeenLastCalledWith(1)
+    expect(container.querySelector('.qu-row.focus')!.textContent).toContain('добавь тесты')
+    expect(onExit).not.toHaveBeenCalled()
+  })
+
+  it('без onSendNow кнопки нет', () => {
+    render(<QueuePanel queue={queue} paused={false} onRemove={vi.fn()} onExit={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: 'Отправить сейчас' })).toBeNull()
+  })
+
   it('пауза — подсказка в заголовке', () => {
     const { container } = render(<QueuePanel queue={queue} paused onRemove={vi.fn()} onExit={vi.fn()} />)
     expect(container.querySelector('.qu-pause')!.textContent).toBe(` · ${PAUSE_HINT}`)

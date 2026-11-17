@@ -4,7 +4,7 @@
 //! Payload нового окна (`WindowInit` фронта) хранится под его меткой, пока окно не заберёт его
 //! `window_take_init`. Порядок открытия окон — в `session::Pieces` (там же части сессии).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use serde_json::Value;
@@ -30,6 +30,30 @@ impl WindowInits {
 
   pub fn take(&self, label: &str) -> Option<Value> {
     self.0.lock().unwrap_or_else(|e| e.into_inner()).remove(label)
+  }
+}
+
+/// Окна, чей фронт запущен (`window_ready`): слушает `tab://receive` и `app://before-exit`.
+/// Окну, ещё грузящемуся (или перезагружающему страницу), вкладку не передаём, и выход его не ждёт.
+#[derive(Default)]
+pub struct ReadyWindows(Mutex<HashSet<String>>);
+
+impl ReadyWindows {
+  fn set(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
+    self.0.lock().unwrap_or_else(|e| e.into_inner())
+  }
+
+  pub fn mark(&self, label: &str) {
+    self.set().insert(label.to_string());
+  }
+
+  /// Окно закрыто или его страница перезагружается.
+  pub fn unmark(&self, label: &str) {
+    self.set().remove(label);
+  }
+
+  pub fn is_ready(&self, label: &str) -> bool {
+    self.set().contains(label)
   }
 }
 
@@ -128,16 +152,37 @@ pub async fn window_open(
   open(&app, payload, logical_size(&window), origin)
 }
 
-/// Payload своего окна (один раз): что показать при запуске.
+/// Payload своего окна (один раз): что показать при запуске. Payload нет, а часть сессии окна
+/// есть (страница окна перезагружена) — его вкладки из неё (`{kind:'restore', session}`).
 #[tauri::command]
-pub fn window_take_init(window: WebviewWindow, inits: tauri::State<'_, WindowInits>) -> Option<Value> {
-  inits.take(window.label())
+pub fn window_take_init(
+  window: WebviewWindow,
+  inits: tauri::State<'_, WindowInits>,
+  pieces: tauri::State<'_, crate::session::Pieces>,
+) -> Option<Value> {
+  let label = window.label();
+  inits.take(label).or_else(|| crate::session::restore_init(pieces.piece(label).as_deref()))
 }
 
-/// Передать вкладку окну `target` (событие `tab://receive`) и дать ему фокус.
+/// Фронт окна запущен: слушает передачу вкладок и выход (см. `ReadyWindows`).
 #[tauri::command]
-pub fn window_send_tab(app: AppHandle, target: String, payload: Value) -> Result<(), String> {
+pub fn window_ready(window: WebviewWindow, ready: tauri::State<'_, ReadyWindows>) {
+  ready.mark(window.label());
+}
+
+/// Передать вкладку окну `target` (событие `tab://receive`) и дать ему фокус. Окно ещё не готово
+/// (грузится, перезагружается) или уже закрыто — ошибка: источник оставит вкладку у себя.
+#[tauri::command]
+pub fn window_send_tab(
+  app: AppHandle,
+  ready: tauri::State<'_, ReadyWindows>,
+  target: String,
+  payload: Value,
+) -> Result<(), String> {
   let w = app.get_webview_window(&target).ok_or_else(|| format!("нет окна {target}"))?;
+  if !ready.is_ready(&target) {
+    return Err(format!("окно {target} ещё не готово"));
+  }
   app.emit_to(target.as_str(), RECEIVE_EVENT, payload).map_err(|e| e.to_string())?;
   let _ = w.set_focus();
   Ok(())
@@ -199,6 +244,17 @@ mod tests {
     assert!(!contains(r, 99.0, 60.0));
     // Второй монитор слева — отрицательные координаты.
     assert!(contains((-1440.0, 0.0, 1440.0, 900.0), -10.0, 10.0));
+  }
+
+  #[test]
+  fn ready_windows_mark_and_unmark() {
+    let r = ReadyWindows::default();
+    assert!(!r.is_ready("w-1"));
+    r.mark("w-1");
+    r.mark("w-1");
+    assert!(r.is_ready("w-1"));
+    r.unmark("w-1");
+    assert!(!r.is_ready("w-1"));
   }
 
   #[test]

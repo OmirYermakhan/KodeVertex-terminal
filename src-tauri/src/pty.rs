@@ -404,25 +404,36 @@ impl PtyManager {
   }
 
   /// Отсоединить сессию от окна (переезд вкладки): пауза чтения, колбэки сняты, владельца нет.
-  /// Возвращает номер отсоединения для `expire_orphan`.
-  pub fn detach(&self, id: &str) -> Result<u64, String> {
+  /// Последним сообщением старого колбэка уходит маркер конца — пустой кусок (настоящий вывод
+  /// пустым не бывает): канал Tauri отдаёт большие куски отдельным запросом, и ответ `pty_detach`
+  /// может обогнать их — фронт ждёт маркер, а не ответ. Возвращает номер отсоединения для
+  /// `expire_orphan` и был ли маркер (сессия была подключена).
+  pub fn detach(&self, id: &str) -> Result<(u64, bool), String> {
     let link = lock(&self.sessions).get(id).map(|s| s.link.clone()).ok_or_else(|| no_session(id))?;
-    let generation = {
+    let res = {
       let mut l = lock(&link);
       // Пауза до снятия колбэка: дочитанное до паузы читатель отдаст в `pending`.
       l.gate.set_detached(true);
-      l.on_data = None;
+      // Под замком связи: всё прочитанное раньше уже отдано этому колбэку, позже — в `pending`.
+      let marked = match l.on_data.take() {
+        Some(f) => {
+          f(Vec::new());
+          true
+        }
+        None => false,
+      };
       l.on_exit = None;
       l.owner = None;
       l.generation += 1;
-      l.generation
+      (l.generation, marked)
     };
     lock(&self.detached).insert(id.to_string(), link);
-    Ok(generation)
+    Ok(res)
   }
 
   /// Подключить отсоединённую сессию к окну `owner`: сначала накопленный вывод, затем живой;
-  /// если оболочка уже вышла — сразу `on_exit`. Неизвестная сессия — ошибка.
+  /// если оболочка уже вышла — сразу `on_exit`. Только отсоединённую: подключённая к окну (в том
+  /// числе уже принятая другим окном при двойном переносе) и неизвестная — ошибка.
   pub fn attach(
     &self,
     id: &str,
@@ -430,10 +441,7 @@ impl PtyManager {
     on_data: impl Fn(Vec<u8>) + Send + 'static,
     on_exit: impl Fn(Option<u32>) + Send + 'static,
   ) -> Result<(), String> {
-    let link = lock(&self.detached)
-      .remove(id)
-      .or_else(|| lock(&self.sessions).get(id).map(|s| s.link.clone()))
-      .ok_or_else(|| no_session(id))?;
+    let link = lock(&self.detached).remove(id).ok_or_else(|| no_session(id))?;
     let mut l = lock(&link);
     let pending = std::mem::take(&mut l.pending);
     if !pending.is_empty() {
@@ -657,15 +665,16 @@ pub fn pty_resume(manager: State<'_, PtyManager>, id: String) -> Result<(), Stri
 }
 
 /// Отсоединить терминал от окна (вкладка переезжает). Вывод ждёт в ядре, выход запоминается.
-/// Не подключённый за `ORPHAN_TIMEOUT` — закрывается.
+/// Не подключённый за `ORPHAN_TIMEOUT` — закрывается. true — в старый канал ушёл маркер конца
+/// (пустой кусок): весь вывод до отсоединения — до него.
 #[tauri::command]
-pub fn pty_detach(app: AppHandle, manager: State<'_, PtyManager>, id: String) -> Result<(), String> {
-  let generation = manager.detach(&id)?;
+pub fn pty_detach(app: AppHandle, manager: State<'_, PtyManager>, id: String) -> Result<bool, String> {
+  let (generation, marked) = manager.detach(&id)?;
   std::thread::spawn(move || {
     std::thread::sleep(ORPHAN_TIMEOUT);
     app.state::<PtyManager>().expire_orphan(&id, generation);
   });
-  Ok(())
+  Ok(marked)
 }
 
 /// Подключить отсоединённый терминал к окну вызова с новыми каналами.
@@ -1416,6 +1425,62 @@ pub(crate) mod tests {
     assert!(rx.try_recv().is_err());
   }
 
+  /// Маркер конца (пустой кусок) — последнее сообщение старого колбэка; после него туда ничего.
+  /// Повторное отсоединение (колбэка уже нет) маркер не шлёт.
+  #[test]
+  fn pty_detach_sends_end_marker_last() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let chunks: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+    let c = chunks.clone();
+    let out = Output::default();
+    let sink = out.sink();
+    let Spawned { id, .. } = {
+      let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+      m.spawn(
+        opts(home.path(), &[]),
+        move |b| {
+          c.lock().unwrap().push(b.clone());
+          sink(b);
+        },
+        |_| {},
+      )
+      .expect("spawn")
+    };
+    assert!(out.wait_for(OSC7, 0));
+    // Поток вывода идёт во время отсоединения.
+    m.write(&id, b"for i in $(seq 1 2000); do echo line$i; done\n").unwrap();
+    std::thread::sleep(Duration::from_millis(30));
+    let (_, marked) = m.detach(&id).unwrap();
+    assert!(marked);
+    std::thread::sleep(Duration::from_millis(300));
+    {
+      let got = chunks.lock().unwrap();
+      assert_eq!(got.iter().filter(|b| b.is_empty()).count(), 1, "маркер один");
+      assert!(got.last().unwrap().is_empty(), "маркер — последним");
+    }
+    let (_, again) = m.detach(&id).unwrap();
+    assert!(!again, "колбэка нет — маркера нет");
+    m.kill(&id).unwrap();
+  }
+
+  /// Подключить можно только отсоединённую сессию: подключённая (её уже принял другой перенос) — ошибка.
+  #[test]
+  fn pty_attach_requires_detached_session() {
+    let home = temp_home();
+    let m = PtyManager::default();
+    let (id, _out, _rx, _mk) = start(&m, opts(home.path(), &[]));
+    let (tx, _r) = mpsc::channel();
+    assert!(m.attach(&id, Some("w-1".into()), |_| {}, exit_sink(tx)).is_err(), "живая подключённая сессия");
+    m.detach(&id).unwrap();
+    let (tx2, _r2) = mpsc::channel();
+    m.attach(&id, Some("w-1".into()), |_| {}, exit_sink(tx2)).unwrap();
+    // Второй перенос той же вкладки не перехватывает уже подключённую.
+    let (tx3, _r3) = mpsc::channel();
+    assert!(m.attach(&id, Some("w-2".into()), |_| {}, exit_sink(tx3)).is_err());
+    m.kill(&id).unwrap();
+  }
+
   /// Оболочка вышла во время отсоединения — код приходит сразу при attach.
   #[test]
   fn pty_exit_during_detach_is_delivered_on_attach() {
@@ -1451,11 +1516,11 @@ pub(crate) mod tests {
 
     let home = temp_home();
     let (id, _out, rx, _mk) = start(&m, opts(home.path(), &[]));
-    let g1 = m.detach(&id).unwrap();
+    let (g1, _) = m.detach(&id).unwrap();
     // Подключили и снова отсоединили: таймер первого отсоединения сессию не трогает.
     let (tx2, _rx2) = mpsc::channel();
     m.attach(&id, None, |_| {}, exit_sink(tx2)).unwrap();
-    let g2 = m.detach(&id).unwrap();
+    let (g2, _) = m.detach(&id).unwrap();
     assert!(!m.expire_orphan(&id, g1));
     assert!(m.write(&id, b"").is_ok());
     assert!(m.expire_orphan(&id, g2));

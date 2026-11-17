@@ -502,6 +502,9 @@ export async function restoreSession(): Promise<void> {
       .catch(() => {})
     return
   }
+  // Файл этой версии (или его нет): Rust может писать его — в том числе частями окон `w-*`. До
+  // этого (файл более новой сборки) их записи файл не трогают.
+  invoke('session_confirm').catch(() => {})
   enableAutosave()
 }
 

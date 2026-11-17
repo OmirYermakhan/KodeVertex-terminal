@@ -41,6 +41,18 @@ describe('выход из приложения', () => {
     expect(order().at(-1)).toBe('app_exit_ready')
   })
 
+  it('после подписки на выход — window_ready (Rust ждёт при выходе только готовые окна)', async () => {
+    invoke.mockResolvedValue(undefined)
+    await installExitHandler()
+    expect(listeners.has(BEFORE_EXIT_EVENT)).toBe(true)
+    expect(order()).toEqual(['window_ready'])
+    // Вне Tauri window_ready падает — подписка всё равно есть.
+    invoke.mockRejectedValue(new Error('нет tauri'))
+    listeners.clear()
+    await expect(installExitHandler()).resolves.toBeTypeOf('function')
+    expect(listeners.has(BEFORE_EXIT_EVENT)).toBe(true)
+  })
+
   it('app_exit_ready уходит, даже если запись упала', async () => {
     invoke.mockImplementation((cmd: string) => {
       if (cmd === 'settings_save') throw new Error('диск')

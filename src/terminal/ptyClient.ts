@@ -90,14 +90,53 @@ function after<T>(id: string, f: () => Promise<T>): Promise<T> {
   return next
 }
 
+/**
+ * Маркер конца при pty_detach: Rust шлёт в старый канал пустой кусок последним сообщением (настоящий
+ * вывод пустым не бывает). Большие куски канал Tauri отдаёт отдельным запросом, и ответ pty_detach
+ * может их обогнать — снимок экрана для переноса делается только после маркера.
+ */
+export const DETACH_END_WAIT_MS = 2000
+const endWaiters = new Map<string, () => void>()
+
+/** Кусок из канала вывода: пустой — маркер конца (не в onData). */
+function deliverChunk(id: string | null, b: Uint8Array, onData: (b: Uint8Array) => void): void {
+  if (b.length > 0) {
+    onData(b)
+    return
+  }
+  const f = id === null ? undefined : endWaiters.get(id)
+  if (f) {
+    endWaiters.delete(id!)
+    f()
+  }
+}
+
 /** Убить сессию по id (без дескриптора: принятая панель закрыта до pty_attach). */
 export function killPty(id: string): void {
   void after(id, () => invoke('pty_kill', { id })).catch(report('pty_kill'))
 }
 
-/** Отсоединить сессию от этого окна (перенос вкладки): вывод копится в Rust до pty_attach. */
+/**
+ * Отсоединить сессию от этого окна (перенос вкладки): вывод копится в Rust до pty_attach. Промис
+ * разрешается, когда весь вывод до отсоединения уже отдан onData (пришёл маркер конца; не дольше
+ * DETACH_END_WAIT_MS). Ждёт идущих pty_attach / pty_detach этой сессии.
+ */
 export function detachPty(id: string): Promise<void> {
-  return after(id, () => invoke<void>('pty_detach', { id }))
+  return after(id, async () => {
+    let done!: () => void
+    const ended = new Promise<void>((r) => (done = r))
+    // До invoke: маркер может прийти раньше ответа.
+    endWaiters.set(id, done)
+    try {
+      const marked = await invoke<boolean | null>('pty_detach', { id })
+      if (marked !== true) return
+      let t: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([ended, new Promise<void>((r) => (t = setTimeout(r, DETACH_END_WAIT_MS)))])
+      clearTimeout(t)
+    } finally {
+      if (endWaiters.get(id) === done) endWaiters.delete(id)
+    }
+  })
 }
 
 export interface AttachOptions {
@@ -112,7 +151,7 @@ export interface AttachOptions {
  * оболочка уже вышла — сразу onExit. Неизвестный id — ошибка.
  */
 export async function attachPty(o: AttachOptions): Promise<PtyHandle> {
-  const onData = new Channel<unknown>((m) => o.onData(toBytes(m)))
+  const onData = new Channel<unknown>((m) => deliverChunk(o.id, toBytes(m), o.onData))
   const onExit = new Channel<number | null>((code) => o.onExit(code ?? null))
   await after(o.id, () => invoke('pty_attach', { id: o.id, onData, onExit }))
   return makeHandle(o.id, o.mark)
@@ -122,9 +161,11 @@ export async function spawnPty(o: SpawnOptions): Promise<PtyHandle> {
   // До ответа pty_spawn вывод и выход копятся по порядку и отдаются после onSpawn.
   let pending: (() => void)[] | null = []
   const deliver = (f: () => void) => (pending ? pending.push(f) : f())
+  // id сессии — из ответа pty_spawn (маркер конца приходит только после него: pty_detach).
+  let sid: string | null = null
   const onData = new Channel<unknown>((m) => {
     const b = toBytes(m)
-    deliver(() => o.onData(b))
+    deliver(() => deliverChunk(sid, b, o.onData))
   })
   const onExit = new Channel<number | null>((code) => deliver(() => o.onExit(code ?? null)))
   let res: SpawnResult
@@ -140,6 +181,7 @@ export async function spawnPty(o: SpawnOptions): Promise<PtyHandle> {
     pending = null
     throw e
   }
+  sid = res.id
   const handle = makeHandle(res.id, res.mark)
   o.onSpawn?.(handle)
   const queued = pending

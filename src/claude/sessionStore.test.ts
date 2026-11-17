@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   },
 }))
 
-const { dismissSuggestion, claudeOpen, clearClaude, exitClaude, listSessions, resumeClaude, editClaude, recallQueued, removeQueued, sendQueued, dismissQueueHint, answerPermission, answerQuestion, interruptClaude, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD, answerTrust, resetTrustForTests, useClaudeTrust, UNTRUSTED_DIR, NOT_TRUSTED } = await import('./sessionStore')
+const { dismissSuggestion, claudeOpen, clearClaude, exitClaude, listSessions, resumeClaude, editClaude, recallQueued, removeQueued, sendQueued, sendQueuedNow, dismissQueueHint, answerPermission, answerQuestion, interruptClaude, submitQuestion, askClaude, chooseModel, claudeCwdKnown, enterClaude, stopClaude, useClaudeSessions, NO_CWD, answerTrust, resetTrustForTests, useClaudeTrust, UNTRUSTED_DIR, NOT_TRUSTED } = await import('./sessionStore')
 
 const { useSettings } = await import('../settings/store')
 
@@ -484,6 +484,117 @@ describe('очередь сообщений', () => {
     await flush()
     expect(calls('claude_control').some((c) => (c[1] as { request: { subtype: string } }).request.subtype === 'set_model')).toBe(true)
     expect(sess().queue).toEqual([])
+  })
+})
+
+describe('«отправить сейчас» (без очереди)', () => {
+  let ch: { onLine: { onmessage(m: string): void }; onExit: { onmessage(e: unknown): void } } | null = null
+  beforeEach(() => {
+    stopClaude('n')
+    invoke.mockReset()
+    ch = null
+    invoke.mockImplementation((cmd: string, a: Record<string, unknown>) => {
+      if (cmd === 'claude_start') ch = a as unknown as typeof ch
+      return Promise.resolve(cmd === 'claude_start' ? 'pn' : undefined)
+    })
+  })
+  const sess = () => useClaudeSessions.getState().sessions.n
+  const sent = () => calls('claude_send').map((c) => (c[1] as { text: string }).text)
+  const users = () => items('n').filter((i) => i.type === 'user').map((i) => (i as { text: string }).text)
+  const line = (o: object) => ch!.onLine.onmessage(JSON.stringify(o))
+  const result = (text = 'ok') => line({ type: 'result', subtype: 'success', result: text, session_id: 's1' })
+  const toolUse = (id: string) => line({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'ls' } }] }, parent_tool_use_id: null })
+  const toolResult = (id: string) => line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] }, parent_tool_use_id: null })
+  const answer = (text: string) => line({ type: 'assistant', message: { content: [{ type: 'text', text }] }, parent_tool_use_id: null })
+
+  it('⌘↵ во время хода — сразу в stdin, пузырь «Вы» сразу, очередь не трогается; CLI вставил в ход — один result его закрывает', async () => {
+    await askClaude('n', '/w', 'первое')
+    await askClaude('n', '/w', 'в очередь')
+    toolUse('t1')
+    await askClaude('n', '/w', 'сейчас', undefined, true)
+    expect(sent()).toEqual(['первое', 'сейчас'])
+    expect(users()).toEqual(['первое', 'сейчас'])
+    expect(items('n').at(-1)).toMatchObject({ type: 'user', text: 'сейчас', steer: true })
+    expect(sess().queue.map((m) => m.text)).toEqual(['в очередь'])
+    // Ход тот же: занятость прежняя, на правку не берётся.
+    expect(sess().state.pending).toBe(1)
+    const { canEdit } = await import('./reducer')
+    expect(canEdit(sess().state, items('n').length - 1)).toBe(false)
+    // tool_result главного — граница, на которой CLI вставляет сообщение в ход.
+    toolResult('t1')
+    expect(sess().state.steer).toBe(0)
+    answer('готово')
+    result()
+    await flush()
+    // Ход закончен — дальше очередь, как обычно; подвал хода — на ответе после «сейчас».
+    expect(sent()).toEqual(['первое', 'сейчас', 'в очередь'])
+    expect(items('n').find((i) => i.type === 'assistant' && i.text === 'готово')).toMatchObject({ turn: expect.anything() })
+  })
+
+  it('инструментов до конца хода больше не было — CLI сделает его следующим ходом: занятость остаётся, очередь ждёт', async () => {
+    await askClaude('n', '/w', 'первое')
+    await askClaude('n', '/w', 'в очередь')
+    answer('ответ на первое')
+    await askClaude('n', '/w', 'сейчас', undefined, true)
+    result('ответ на первое')
+    await flush()
+    expect(sess().state.busy).toBe(true)
+    expect(sent()).toEqual(['первое', 'сейчас'])
+    // Подвал первого хода — на его ответе (пузырь «сейчас» — не граница хода), без лишней карточки итога.
+    expect(items('n').find((i) => i.type === 'assistant' && i.text === 'ответ на первое')).toMatchObject({ turn: expect.anything() })
+    expect(items('n').some((i) => i.type === 'summary')).toBe(false)
+    answer('ответ на сейчас')
+    result()
+    await flush()
+    expect(sent()).toEqual(['первое', 'сейчас', 'в очередь'])
+  })
+
+  it('⌘↵ без хода — обычная отправка', async () => {
+    await askClaude('n', '/w', 'первое', undefined, true)
+    expect(sent()).toEqual(['первое'])
+    expect(items('n').at(-1)).toEqual({ type: 'user', text: 'первое' })
+    expect(sess().state.pending).toBe(1)
+  })
+
+  it('ход прерывается (⌃C) или другой каталог — ⌘↵ ставит в очередь, как ↵', async () => {
+    await askClaude('n', '/w', 'первое')
+    await askClaude('n', '/other', 'другой каталог', undefined, true)
+    expect(sess().queue.map((m) => m.text)).toEqual(['другой каталог'])
+    interruptClaude('n')
+    await askClaude('n', '/w', 'после ⌃C', undefined, true)
+    expect(sent()).toEqual(['первое'])
+    expect(sess().queue.map((m) => m.text)).toEqual(['другой каталог', 'после ⌃C'])
+  })
+
+  it('sendQueuedNow: сообщение из середины очереди — сразу в идущий ход, остальные ждут', async () => {
+    await askClaude('n', '/w', 'первое')
+    await askClaude('n', '/w', 'a')
+    await askClaude('n', '/w', 'b')
+    const b = sess().queue[1].id
+    expect(sendQueuedNow('n', b, '/w')).toBe(true)
+    await flush()
+    expect(sent()).toEqual(['первое', 'b'])
+    expect(sess().queue.map((m) => m.text)).toEqual(['a'])
+    expect(items('n').at(-1)).toMatchObject({ type: 'user', text: 'b', steer: true })
+    expect(sendQueuedNow('n', 999, '/w')).toBe(false)
+  })
+
+  it('sendQueuedNow на паузе (ход не идёт) — обычная отправка, пауза снята', async () => {
+    await askClaude('n', '/w', 'первое')
+    await askClaude('n', '/w', 'a')
+    await askClaude('n', '/w', 'b')
+    interruptClaude('n')
+    // Ход прерывается — вставить нельзя, строка остаётся.
+    expect(sendQueuedNow('n', sess().queue[1].id, '/w')).toBe(false)
+    result()
+    await flush()
+    expect(sess().paused).toBe(true)
+    expect(sendQueuedNow('n', sess().queue[1].id, '/w')).toBe(true)
+    await flush()
+    expect(sent()).toEqual(['первое', 'b'])
+    expect(sess().paused).toBe(false)
+    expect(sess().queue.map((m) => m.text)).toEqual(['a'])
+    expect(items('n').at(-1)).toEqual({ type: 'user', text: 'b' })
   })
 })
 

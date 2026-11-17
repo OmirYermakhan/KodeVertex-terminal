@@ -2,13 +2,13 @@
 // чтобы его читали лента панели, панель агентов и статус-бар.
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { create } from 'zustand'
-import { canEdit, cancelPrompts, closeUnfinished, freezeTodos, clearSession, dropSuggestion, decidePermission, finishQuestion, gotoStep, initialClaude, newProcess, newSession, questionSteps, recordAnswer, reduceClaude, replaceFrom, userSent, type ClaudeState } from './reducer'
+import { backgroundRunning, backgroundTasks, canEdit, cancelPrompts, closeUnfinished, freezeTodos, clearSession, dropSuggestion, decidePermission, finishQuestion, gotoStep, initialClaude, MAIN_IDLE_MS, mainStale, newProcess, newSession, questionSteps, recordAnswer, reduceClaude, replaceFrom, settleMain, stopBackground, userSent, userSteered, type ClaudeState } from './reducer'
 import { allowResponse, alwaysResponse, answerResponse, denyResponse, parsePermissionRequest } from './questions'
 import type { FeedClaudeItem, PermissionDecision } from './reducer'
 import { historyItems, type SessionHistory, type SessionInfo } from './resume'
 import { GET_SETTINGS, effortRequest, modelNote, persistedModel, setModelRequest, type ModelChoice } from './models'
 import { docOf } from '../attach/doc'
-import { serialize } from '../attach/serialize'
+import { serialize, type Serialized } from '../attach/serialize'
 import type { Attachment, Doc } from '../attach/types'
 import type { ClaudePermissionMode } from '../settings/settings'
 import { useSettings } from '../settings/store'
@@ -279,6 +279,7 @@ function failed(s: ClaudeState, text: string, now: number): ClaudeState {
     ...s,
     busy: false,
     pending: 0,
+    ...(s.steer ? { steer: 0 } : {}),
     currentAgentId: null,
     items: [...closeUnfinished(s.items), { type: 'error', text }],
     agents: s.agents.map((a) =>
@@ -295,11 +296,12 @@ function failed(s: ClaudeState, text: string, now: number): ClaudeState {
  */
 function stopped(s: ClaudeState, now: number, keepBackground = false): ClaudeState {
   // Ход не идёт, но фоновые агенты ещё работали (главный их ждёт) — процесс ушёл, они тоже.
-  if (!s.busy && !s.agents.some((a) => a.status === 'running')) return s
+  if (!s.busy && !s.agents.some((a) => a.status === 'running' || (a.status === 'waiting' && a.startedAt > 0))) return s
   return {
     ...s,
     busy: false,
     pending: 0,
+    ...(s.steer ? { steer: 0 } : {}),
     currentAgentId: null,
     items: closeUnfinished(s.items),
     agents: s.agents.map((a) =>
@@ -339,6 +341,48 @@ function noteRestored(paneId: string): void {
   }))
 }
 
+/** Таймеры «главный висит» по панелям (см. armIdle). */
+const idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function disarmIdle(paneId: string): void {
+  const t = idleTimers.get(paneId)
+  if (t !== undefined) clearTimeout(t)
+  idleTimers.delete(paneId)
+}
+
+/**
+ * Главный дождался фоновых агентов, а CLI свой ход не начинает (mainStale): MAIN_IDLE_MS без
+ * событий — главный готов, а не «Думает» бесконечно. Каждая строка CLI перезапускает отсчёт;
+ * таймер в сторе, редьюсер остаётся чистым (settleMain).
+ */
+function armIdle(paneId: string): void {
+  disarmIdle(paneId)
+  if (!mainStale(get(paneId).state)) return
+  idleTimers.set(
+    paneId,
+    setTimeout(() => {
+      idleTimers.delete(paneId)
+      patchState(paneId, (s) => settleMain(s, Date.now()))
+    }, MAIN_IDLE_MS),
+  )
+}
+
+/**
+ * Ожидание маркера конца claude_detach по процессу: Rust шлёт пустую строку в старый канал последней.
+ * Длинные строки канал Tauri отдаёт отдельным запросом — ответ claude_detach может их обогнать.
+ */
+const claudeEnds = new WeakMap<Proc, () => void>()
+/** Сколько ждать маркера конца при отсоединении. */
+export const DETACH_END_WAIT_MS = 2000
+/** Сколько отсоединение ждёт идущего запуска процесса (вопрос о доверии папке не ждёт вовсе). */
+export const DETACH_LAUNCH_WAIT_MS = 5000
+
+/** p или fallback через ms. */
+function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let t: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([p, new Promise<T>((r) => (t = setTimeout(() => r(fallback), ms)))]).finally(() => clearTimeout(t))
+}
+
 /**
  * Обработчики строк и выхода процесса панели — для claude_start и claude_attach (перенос вкладки
  * в другое окно: тот же процесс, новые каналы). resume — id сессии, с которым процесс запущен;
@@ -348,6 +392,11 @@ function procHandlers(paneId: string, proc: Proc, resume: string | null, gotLine
   const alive = () => procs.get(paneId) === proc
   let gotLine = gotLine0
   const onLineMsg = (line: string) => {
+    // Маркер конца claude_detach (пустая строка — настоящие не бывают пустыми): дальше строк в этот канал нет.
+    if (line === '') {
+      claudeEnds.get(proc)?.()
+      return
+    }
     gotLine = true
     if (!alive()) return
     if (line.includes('"control_response"')) settleControl(line)
@@ -363,6 +412,7 @@ function procHandlers(paneId: string, proc: Proc, resume: string | null, gotLine
     patchState(paneId, (s) => reduceClaude(s, line, Date.now(), proc.interrupted))
     // CLI сам начал ход (дождался фонового агента): прежнее ⌃C к нему не относится.
     if (before === 0 && get(paneId).state.pending > 0) proc.interrupted = false
+    armIdle(paneId)
     // Закончились правки файлов или команды — панель проекта обновляется. Действия закрывают только
     // tool_result и result: на остальных строках (токены ответа) ленту не просматриваем.
     if (line.includes('"tool_result"') || line.includes('"result"')) {
@@ -377,6 +427,7 @@ function procHandlers(paneId: string, proc: Proc, resume: string | null, gotLine
     if (proc.id) rejectControls(proc.id)
     if (!alive()) return
     procs.delete(paneId)
+    disarmIdle(paneId)
     const prevState = get(paneId).state
     const ok = e.code === 0 || proc.interrupted
     patch(paneId, (p) => {
@@ -623,6 +674,26 @@ function sendNextQueued(paneId: string, paneCwd: string | undefined): boolean {
   return true
 }
 
+/**
+ * «Отправить сейчас» (↵ / кнопка на строке очереди): сообщение id — из очереди сразу в Claude.
+ * Ход идёт — в идущий ход (как ⌘↵ в строке, см. steer); не идёт — обычной отправкой (снимает паузу).
+ * false — сообщения нет или сейчас его не вставить (ход прерывается, другой каталог): остаётся в очереди.
+ */
+export function sendQueuedNow(paneId: string, id: number, paneCwd: string | undefined): boolean {
+  const cur = get(paneId)
+  const msg = cur.queue.find((m) => m.id === id)
+  if (!msg) return false
+  const cwd = msg.cwd ?? paneCwd
+  if (cur.state.busy && !canSteer(paneId, cwd)) return false
+  patch(paneId, (p) => {
+    const queue = p.queue.filter((m) => m.id !== id)
+    return { ...p, queue, pauseHint: p.pauseHint && queue.length > 0 }
+  })
+  if (cur.state.busy) void steer(paneId, msg.text, msg.tokens)
+  else void askClaude(paneId, cwd, msg.text, msg.tokens)
+  return true
+}
+
 /** ↵ на пустой строке: следующее из очереди, если ход не идёт (после паузы). */
 export function sendQueued(paneId: string, paneCwd: string | undefined): boolean {
   const cur = get(paneId)
@@ -710,6 +781,7 @@ export function enterClaude(paneId: string, paneCwd: string | undefined): boolea
  */
 export function clearClaude(paneId: string): void {
   dropProc(paneId)
+  disarmIdle(paneId)
   patch(paneId, (p) => ({ ...p, procId: null, queue: [], paused: false, pauseHint: false, rewindAt: null, restored: false, state: clearSession(p.state) }))
   emitClaudeEvent({ kind: 'cleared' })
 }
@@ -803,7 +875,7 @@ export function claudeCwdKnown(paneId: string, paneCwd: string | undefined): boo
  * сообщении (и заново после выхода — с `--resume`, если id сессии известен). Если панель
  * с тех пор перешла в другой каталог — новая сессия там; начало новой сессии отмечается в ленте.
  */
-export async function askClaude(paneId: string, paneCwd: string | undefined, text: string, tokens?: Attachment[]): Promise<void> {
+export async function askClaude(paneId: string, paneCwd: string | undefined, text: string, tokens?: Attachment[], now = false): Promise<void> {
   const toks = tokens && tokens.length > 0 ? tokens : undefined
   // Ход не идёт — сообщение запустит claude (или пойдёт в процесс этой же папки): сначала доверие.
   // Пока ждёт ответа, сообщения нет ни в ленте, ни в очереди; «Нет» вернёт его в строку.
@@ -813,7 +885,9 @@ export async function askClaude(paneId: string, paneCwd: string | undefined, tex
     if (!trustGate(paneId, dir, w)) return
   }
   ensure(paneId)
-  // Ход идёт (в т. ч. ждёт ответа на вопрос или разрешение) — в очередь: в stdin посреди хода не пишем.
+  // Ход идёт (в т. ч. ждёт ответа на вопрос или разрешение): now (⌘↵) — сразу в идущий ход,
+  // иначе — в очередь приложения (уйдёт после конца хода).
+  if (now && get(paneId).state.busy && canSteer(paneId, paneCwd)) return steer(paneId, text, toks)
   if (get(paneId).state.busy) {
     const msg: QueuedMessage = { id: ++queueSeq, text, ...(toks ? { tokens: toks } : {}), ...(paneCwd ? { cwd: paneCwd } : {}) }
     patch(paneId, (p) => ({ ...p, queue: [...p.queue, msg], pauseHint: p.pauseHint || p.paused }))
@@ -841,6 +915,11 @@ async function send(paneId: string, paneCwd: string | undefined, text: string, t
   const out = toks ? serialize(docOf(text, toks), cwd) : { text, files: [] }
   const proc = procs.get(paneId) ?? start(paneId)
   proc.interrupted = false
+  return write(paneId, proc, out)
+}
+
+/** Сообщение — в stdin процесса (по очереди с прежними отправками); ошибка записи — ход оборван. */
+function write(paneId: string, proc: Proc, out: Serialized): Promise<void> {
   proc.chain = proc.chain.then(async () => {
     const id = await proc.ready
     if (id === null || procs.get(paneId) !== proc) return
@@ -861,6 +940,32 @@ async function send(paneId: string, paneCwd: string | undefined, text: string, t
     }
   })
   return proc.chain
+}
+
+/**
+ * Сообщение можно вставить в идущий ход: процесс есть, ход идёт и не прерывается (⌃C, правка),
+ * каталог тот же (иначе это новая сессия — только после хода, через очередь).
+ */
+function canSteer(paneId: string, paneCwd: string | undefined): boolean {
+  const proc = procs.get(paneId)
+  const cur = get(paneId)
+  if (!proc || proc.interrupted || editing.has(paneId) || !cur.state.busy) return false
+  return paneCwd === undefined || cur.cwd === null || paneCwd === cur.cwd
+}
+
+/**
+ * «Отправить сейчас»: сообщение посреди хода — сразу в stdin claude (без очереди приложения).
+ * CLI (stream-json) сам вставляет его в идущий ход после ближайшего tool_result — как сообщения,
+ * набранные посреди хода в интерактивном Claude Code; инструментов до конца хода больше нет —
+ * оно станет следующим ходом. Пузырь «Вы» — сразу (CLI его не повторяет: без --replay-user-messages).
+ */
+function steer(paneId: string, text: string, toks: Attachment[] | undefined): Promise<void> {
+  const proc = procs.get(paneId)
+  const cwd = get(paneId).cwd
+  if (!proc || cwd === null) return Promise.resolve()
+  patchState(paneId, (s) => userSteered(s, text, toks))
+  const out = toks ? serialize(docOf(text, toks), cwd) : { text, files: [] }
+  return write(paneId, proc, out)
 }
 
 const questionOf = (paneId: string, requestId: string) => {
@@ -920,10 +1025,23 @@ export async function answerPermission(paneId: string, requestId: string, decisi
   }
 }
 
-/** ⌃C: прервать текущий ход Claude. false — Claude не занят, прерывать нечего. */
+/**
+ * ⌃C: прервать текущий ход Claude. Ход не идёт, а главный ждёт фоновых агентов — остановить их
+ * (`stop_task` на каждую задачу; статусы — сразу, не дожидаясь ответа CLI). Ход идёт — прерывается
+ * только он: фоновые работают дальше, следующий ⌃C остановит и их. false — прерывать нечего.
+ */
 export function interruptClaude(paneId: string): boolean {
   const proc = procs.get(paneId)
-  if (!get(paneId).state.busy || !proc) return false
+  if (!proc) return false
+  const st = get(paneId).state
+  if (!st.busy) {
+    if (backgroundRunning(st) === 0) return false
+    const id = proc.id
+    if (id) for (const task of backgroundTasks(st)) control(id, { subtype: 'stop_task', task_id: task }).catch(() => {})
+    disarmIdle(paneId)
+    patchState(paneId, (s) => stopBackground(s, Date.now()))
+    return true
+  }
   proc.interrupted = true
   // Очередь остаётся, но сама не уходит: ↵ на пустой строке — следующее.
   patch(paneId, (p) => ({ ...p, ...pause(p) }))
@@ -1016,6 +1134,7 @@ export async function editClaude(paneId: string, index: number, text: string, to
 export function stopClaude(paneId: string): void {
   if (isMoving(paneId)) procs.delete(paneId)
   else dropProc(paneId)
+  disarmIdle(paneId)
   dropTrust(paneId)
   useClaudeSessions.setState((st) => {
     if (!(paneId in st.sessions)) return st
@@ -1030,22 +1149,44 @@ export const nextQueueId = (): number => ++queueSeq
 
 /**
  * Перенос вкладки: процесс панели отсоединяется от этого окна (строки копятся в Rust до
- * claude_attach). Запуск ещё идёт — сначала дождаться его. Возвращает id процесса; null — процесса
- * нет (или отсоединить не удалось: тогда он остановится вместе с панелью, а приёмник продолжит
- * разговор новым процессом с `--resume`).
+ * claude_attach). Запуск ещё идёт — сначала дождаться его (не дольше DETACH_LAUNCH_WAIT_MS); запуск
+ * ждёт ответа «Доверять папке?» — не ждать: запуск отменяется. Разрешается, когда все строки до
+ * отсоединения уже разобраны (маркер конца, не дольше DETACH_END_WAIT_MS). Возвращает id процесса;
+ * null — процесса нет (или отсоединить не удалось: тогда он остановится вместе с панелью, а
+ * приёмник продолжит разговор новым процессом с `--resume`).
  */
 export async function detachClaude(paneId: string): Promise<string | null> {
   const proc = procs.get(paneId)
   if (!proc) return null
-  const id = await proc.ready.catch(() => null)
-  if (id === null || procs.get(paneId) !== proc) return null
+  // Запуск не закончен: процесса нет — запуск отменяется (поздний ответ claude_start остановит процесс).
+  const cancelLaunch = () => {
+    if (procs.get(paneId) !== proc || proc.id !== null) return
+    dropProc(paneId)
+    dropTrust(paneId)
+  }
+  if (proc.id === null && trustWaits.has(paneId)) {
+    cancelLaunch()
+    return null
+  }
+  const id = proc.id ?? (await within(proc.ready.catch(() => null), DETACH_LAUNCH_WAIT_MS, null))
+  if (id === null || procs.get(paneId) !== proc) {
+    cancelLaunch()
+    return null
+  }
+  let done!: () => void
+  const ended = new Promise<void>((r) => (done = r))
+  // До invoke: маркер может прийти раньше ответа.
+  claudeEnds.set(proc, done)
   try {
-    await invoke('claude_detach', { id })
+    const marked = await invoke<boolean | null>('claude_detach', { id })
+    if (marked === true) await within(ended, DETACH_END_WAIT_MS, undefined)
     return id
   } catch {
     // Не отсоединился (старая сборка): процесс останавливается здесь, иначе пережил бы панель.
     if (procs.get(paneId) === proc) dropProc(paneId)
     return null
+  } finally {
+    claudeEnds.delete(proc)
   }
 }
 
@@ -1058,11 +1199,16 @@ export function adoptClaude(paneId: string, pc: PaneClaude, procId: string | nul
   dropTrust(paneId)
   procs.delete(paneId)
   const queue = pc.queue.map((m) => ({ ...m, id: nextQueueId() }))
-  useClaudeSessions.setState((st) => ({ sessions: { ...st.sessions, [paneId]: { ...pc, procId, queue } } }))
+  // Без процесса ход и фоновые агенты не доиграют: как после выхода процесса — остановлены,
+  // вопросы отменены (иначе вкладка «работала» бы вечно).
+  const state = procId === null ? cancelPrompts(stopped(pc.state, Date.now()), undefined, 'exit') : pc.state
+  useClaudeSessions.setState((st) => ({ sessions: { ...st.sessions, [paneId]: { ...pc, procId, queue, state } } }))
   if (procId === null) return
   const proc: Proc = { ready: Promise.resolve(procId), id: procId, interrupted: false, chain: Promise.resolve() }
   procs.set(paneId, proc)
   const { onLineMsg, onExitMsg } = procHandlers(paneId, proc, pc.state.sessionId, true)
+  // Главный мог уже ждать хода CLI в прежнем окне — отсчёт заново здесь.
+  armIdle(paneId)
   invoke('claude_attach', {
     id: procId,
     onLine: new Channel<string>(onLineMsg),

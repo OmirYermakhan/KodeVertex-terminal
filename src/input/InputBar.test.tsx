@@ -7,7 +7,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...
 const dialogOpen = vi.fn(() => Promise.resolve(null))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: () => dialogOpen() }))
 
-const { InputBar, EDIT_HINT, ASK_HINT, CLAUDE_HINT, CLAUDE_PLACEHOLDER, CONTINUATION_NOTE, PLACEHOLDER, PREVIEW_HINT, UNSUPPORTED_NOTE } = await import('./InputBar')
+const { InputBar, EDIT_HINT, ASK_HINT, CLAUDE_HINT, CLAUDE_BUSY_HINT, CLAUDE_PLACEHOLDER, CONTINUATION_NOTE, PLACEHOLDER, PREVIEW_HINT, UNSUPPORTED_NOTE } = await import('./InputBar')
 const { createPreview } = await import('../attach/preview/usePreview')
 const { AT_HINT } = await import('../completion/CompletionPopup')
 const { TOKEN_CHAR: T } = await import('../attach/types')
@@ -219,6 +219,30 @@ describe('InputBar', () => {
       expect(inMode(container)).toBe(false)
     })
 
+    it('в режиме ⌘↵ — «отправить сейчас» (now); подсказка, пока идёт ход', () => {
+      const { p, set, key, container, rerender } = setup()
+      set('claude')
+      key('Enter')
+      set('уточни')
+      key('Enter', { metaKey: true })
+      expect(p.onAsk).toHaveBeenLastCalledWith('уточни', undefined, true)
+      // ↵ — как прежде (пока идёт ход — в очередь).
+      set('потом')
+      key('Enter')
+      expect(p.onAsk).toHaveBeenLastCalledWith('потом')
+      expect(container.querySelector('.input .in-hint')!.textContent).toBe(CLAUDE_HINT)
+      rerender(<InputBar {...p} claudeBusy />)
+      expect(container.querySelector('.input .in-hint')!.textContent).toBe(CLAUDE_BUSY_HINT)
+      expect(CLAUDE_BUSY_HINT).toBe('↵ в очередь · ⌘↵ отправить сейчас')
+    })
+
+    it('в оболочке ⌘↵ — просто вопрос Claude (без now)', () => {
+      const { p, set, key } = setup({ claudeBusy: true })
+      set('почему?')
+      key('Enter', { metaKey: true })
+      expect(p.onAsk).toHaveBeenLastCalledWith('почему?')
+    })
+
     it('в режиме ↵ и ⌘↵ — вопрос Claude, не в оболочку', () => {
       const { p, ta, set, key } = setup()
       set('claude')
@@ -229,7 +253,7 @@ describe('InputBar', () => {
       expect(ta.value).toBe('')
       set('ещё')
       key('Enter', { metaKey: true })
-      expect(p.onAsk).toHaveBeenLastCalledWith('ещё')
+      expect(p.onAsk).toHaveBeenLastCalledWith('ещё', undefined, true)
       // Внутри режима `claude` — тоже вопрос, а не повторный вход.
       set('claude')
       key('Enter')

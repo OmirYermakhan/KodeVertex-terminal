@@ -43,6 +43,24 @@ export function agentsHeader(agents: Agent[]): { running: string; rest: string[]
   return { running: `${r} ${plural(r, 'работает', 'работают', 'работают')}`, rest }
 }
 
+/** Сколько закончивший субагент ещё виден в панели (мс): потом строка уходит. */
+export const FINISHED_VISIBLE_MS = 3000
+
+const isLive = (a: Agent) => a.status === 'running' || a.status === 'waiting'
+
+/**
+ * Агенты, видимые в панели на момент now: главный — всегда, работающие и ждущие — всегда,
+ * закончившие (готово, ошибка, остановлен) — ещё FINISHED_VISIBLE_MS после конца. В состоянии
+ * сессии они остаются (уведомления, лента, подписи карточек), уходят только из панели.
+ */
+export function visibleAgents(agents: Agent[], now: number): Agent[] {
+  const out = agents.filter((a) => a.id === 'main' || isLive(a) || (a.endedAt !== null && now - a.endedAt < FINISHED_VISIBLE_MS))
+  return out.length === agents.length ? agents : out
+}
+
+/** Кто-то из закончивших ещё виден — часы тикают, чтобы он ушёл вовремя. */
+const fading = (agents: Agent[], now: number) => agents.some((a) => a.id !== 'main' && !isLive(a) && a.endedAt !== null && now - a.endedAt < FINISHED_VISIBLE_MS)
+
 /** Порядок строк: дерево (дети сразу под родителем), корни — в порядке появления. */
 export function agentRows(agents: Agent[]): { agent: Agent; depth: number }[] {
   const ids = new Set(agents.map((a) => a.id))
@@ -185,26 +203,32 @@ export interface AgentsPanelHandle {
   select(id: string): void
 }
 
-function useTicker(fixed: number | undefined, live: boolean): number {
+/**
+ * Часы панели: тикают раз в секунду, пока кто-то работает (начальный «waiting» главного, startedAt 0,
+ * — не повод) или закончивший ещё виден (последний тик его и убирает). fixed — время для тестов.
+ */
+function useTicker(fixed: number | undefined, agents: Agent[]): number {
   const [now, setNow] = useState(() => Date.now())
+  const at = fixed ?? now
+  const live = agents.some((a) => isLive(a) && a.startedAt > 0) || fading(agents, at)
   useEffect(() => {
     if (fixed !== undefined || !live) return
     setNow(Date.now())
     const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
   }, [fixed, live])
-  return fixed ?? now
+  return at
 }
 
 const AgentsPanelView = forwardRef<AgentsPanelHandle, AgentsPanelProps>(function AgentsPanel(p, ref) {
-  const rows = useMemo(() => agentRows(p.state.agents), [p.state.agents])
   const [sel, setSel] = useState<string | null>(null)
   const [open, setOpen] = useState<string | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
-  // Начальный «waiting» главного агента (startedAt 0) — не повод тикать.
-  const live = p.state.agents.some((a) => (a.status === 'running' || a.status === 'waiting') && a.startedAt > 0)
-  const now = useTicker(p.now, live)
-  const selected = rows.some((r) => r.agent.id === sel) ? sel : null
+  const now = useTicker(p.now, p.state.agents)
+  const shown = useMemo(() => visibleAgents(p.state.agents, now), [p.state.agents, now])
+  const rows = useMemo(() => agentRows(shown), [shown])
+  // Выбранный агент ушёл из панели (закончил): выбор — на главном, ↑↓ и ↵ работают дальше.
+  const selected = rows.some((r) => r.agent.id === sel) ? sel : sel !== null ? (rows.find((r) => r.agent.id === 'main')?.agent.id ?? null) : null
 
   // Выбранная строка (и её подробности) — в видимой области прокручиваемой панели.
   useEffect(() => {
@@ -248,7 +272,8 @@ const AgentsPanelView = forwardRef<AgentsPanelHandle, AgentsPanelProps>(function
     }
   }
 
-  const h = agentsHeader(p.state.agents)
+  // Счётчики — по видимым строкам: ушедшие из панели в «готовы» не считаются.
+  const h = agentsHeader(shown)
   return (
     <div className="agents" ref={boxRef} tabIndex={-1} role="listbox" aria-label="Агенты" onKeyDown={onKeyDown}>
       <div className="dh">

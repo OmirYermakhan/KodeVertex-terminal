@@ -405,6 +405,12 @@ describe('аудит: размер в байтах, maxWait, чужая верс
     }
   })
 
+  it('файл своей версии или его нет — версия подтверждается (session_confirm)', async () => {
+    invoke.mockImplementation(() => Promise.resolve(null))
+    await restoreSession()
+    expect(calls('session_confirm')).toHaveLength(1)
+  })
+
   it('файл другой версии не перезаписывается ни автосохранением, ни при выходе', async () => {
     vi.useFakeTimers()
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -415,6 +421,8 @@ describe('аудит: размер в байтах, maxWait, чужая верс
       await vi.advanceTimersByTimeAsync(6000)
       await finalSave()
       expect(calls('session_save')).toHaveLength(0)
+      // Версия не подтверждена: Rust не даст окнам `w-*` переписать файл.
+      expect(calls('session_confirm')).toHaveLength(0)
       expect(err).toHaveBeenCalled()
       const { useToasts } = await import('../notify/notify')
       expect(useToasts.getState().toasts.map((t) => t.text)).toContain(FOREIGN_NOTICE)

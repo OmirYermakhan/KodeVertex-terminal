@@ -1,9 +1,10 @@
 // Фоновые агенты (Agent с run_in_background): фикстура настоящего CLI 2.1.326 и синтетические события.
-import { describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { act, createRef } from 'react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import raw from './fixtures/background-agent.jsonl?raw'
-import { backgroundRunning, backgroundWait, initialClaude, reduceClaude, userSent, type Agent, type ClaudeState } from './reducer'
-import { AgentsPanel, agentsHeader } from './AgentsPanel'
+import { backgroundRunning, backgroundTasks, backgroundWait, initialClaude, mainStale, reduceClaude, settleMain, stopBackground, userSent, type Agent, type ClaudeState } from './reducer'
+import { AgentsPanel, agentsHeader, FINISHED_VISIBLE_MS, visibleAgents, type AgentsPanelHandle } from './AgentsPanel'
 import { BackgroundWaitRow, bgWaitText } from './cards/ThinkingRow'
 import { agentEvents } from '../notify/notify'
 import { sessionStatus } from '../ui/tabStatus'
@@ -188,5 +189,202 @@ describe('панель агентов и лента', () => {
     const row = screen.getByRole('status')
     expect(row.className).toContain('thinking')
     expect(row.textContent).toContain('Ждём 2 фоновых агентов')
+  })
+})
+
+const tasksChanged = (ids: string[]) => ev({ type: 'system', subtype: 'background_tasks_changed', tasks: ids.map((task_id) => ({ task_id, task_type: 'local_agent' })) })
+const started = (toolUseId: string, taskId: string) => ev({ type: 'system', subtype: 'task_started', task_id: taskId, tool_use_id: toolUseId, is_backgrounded: true })
+
+/** Два фоновых агента с задачами CLI t1/t2, ход главного закончен. */
+function twoTasks(): ClaudeState {
+  let s = userSent(initialClaude(), 'go', 0)
+  s = reduceClaude(s, agentUse('a1', { description: 'Первый', prompt: 'p', run_in_background: true }), 1)
+  s = reduceClaude(s, agentUse('a2', { description: 'Второй', prompt: 'p', run_in_background: true }), 1)
+  s = reduceClaude(s, started('a1', 't1'), 2)
+  s = reduceClaude(s, started('a2', 't2'), 2)
+  s = reduceClaude(s, launchedResult('a1'), 3)
+  s = reduceClaude(s, launchedResult('a2'), 3)
+  return reduceClaude(s, result(), 5)
+}
+
+describe('сверка по background_tasks_changed', () => {
+  it('фоновый агент, которого нет в списке задач, закончил — даже без task_notification', () => {
+    let s = twoTasks()
+    s = reduceClaude(s, tasksChanged(['t1', 't2']), 6)
+    expect(backgroundRunning(s)).toBe(2)
+    s = reduceClaude(s, tasksChanged(['t2']), 7)
+    expect(agentOf(s, 'a1')).toMatchObject({ status: 'done', now: 'Готово', endedAt: 7 })
+    expect(agentOf(s, 'a2').status).toBe('running')
+    expect(main(s).now).toBe('Ждёт фоновых агентов: 1')
+    s = reduceClaude(s, tasksChanged([]), 8)
+    expect(agentOf(s, 'a2')).toMatchObject({ status: 'done', endedAt: 8 })
+    expect(main(s)).toMatchObject({ status: 'running', now: 'Думает' })
+    expect(mainStale(s)).toBe(true)
+  })
+
+  it('ошибку из task_notification сверка не перекрывает; лишний список ничего не меняет', () => {
+    let s = reduceClaude(twoTasks(), ev({ type: 'system', subtype: 'task_notification', task_id: 't1', status: 'failed' }), 6)
+    const before = s
+    s = reduceClaude(s, tasksChanged(['t2']), 7)
+    expect(s).toBe(before)
+    expect(agentOf(s, 'a1')).toMatchObject({ status: 'error', endedAt: 6 })
+  })
+
+  it('агент без id задачи (список пришёл раньше task_started) не закрывается', () => {
+    let s = userSent(initialClaude(), 'go', 0)
+    s = reduceClaude(s, agentUse('a1', { description: 'D', run_in_background: true }), 1)
+    s = reduceClaude(s, tasksChanged([]), 2)
+    expect(agentOf(s, 'a1').status).toBe('running')
+  })
+
+  it('id задачи берётся и из agentId запуска (task_started не пришёл)', () => {
+    let s = userSent(initialClaude(), 'go', 0)
+    s = reduceClaude(s, agentUse('a1', { description: 'D', run_in_background: true }), 1)
+    s = reduceClaude(s, ev({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'a1', content: 'Async agent launched' }] }, tool_use_result: { status: 'async_launched', agentId: 'tx' } }), 2)
+    expect(agentOf(s, 'a1').taskId).toBe('tx')
+    s = reduceClaude(reduceClaude(s, result(), 3), tasksChanged([]), 4)
+    expect(agentOf(s, 'a1')).toMatchObject({ status: 'done', endedAt: 4 })
+  })
+
+  it('фикстура: id задачи из запуска совпадает с task_started, финальный список пуст — все закончили', () => {
+    const s = upTo(lines.length)
+    expect(s.agents.every((a) => a.status === 'done')).toBe(true)
+  })
+
+  it('субагент фонового агента переживает result хода и закрывается вместе с ним', () => {
+    let s = userSent(initialClaude(), 'go', 0)
+    s = reduceClaude(s, agentUse('a1', { description: 'Фон', run_in_background: true }), 1)
+    s = reduceClaude(s, started('a1', 't1'), 1)
+    s = reduceClaude(s, launchedResult('a1'), 2)
+    s = reduceClaude(s, ev({ type: 'assistant', parent_tool_use_id: 'a1', message: { content: [{ type: 'tool_use', id: 'n1', name: 'Agent', input: { description: 'Вложенный' } }] } }), 3)
+    s = reduceClaude(s, result(), 4)
+    expect(agentOf(s, 'n1')).toMatchObject({ status: 'running', parentId: 'a1' })
+    expect(s.items.find((it) => it.type === 'action' && it.toolUseId === 'n1')).toMatchObject({ status: 'running' })
+    s = reduceClaude(s, tasksChanged([]), 5)
+    expect(agentOf(s, 'n1')).toMatchObject({ status: 'done', now: 'Остановлено', endedAt: 5 })
+    expect(s.items.find((it) => it.type === 'action' && it.toolUseId === 'n1')).toMatchObject({ status: 'done' })
+  })
+})
+
+describe('главный не висит после фоновых', () => {
+  it('result хода закрывает обычных субагентов, даже если tool_result не пришёл', () => {
+    let s = userSent(initialClaude(), 'go', 0)
+    s = reduceClaude(s, agentUse('a1', { description: 'Обычный' }), 1)
+    s = reduceClaude(s, agentUse('b1', { description: 'Фон', run_in_background: true }), 1)
+    s = reduceClaude(s, launchedResult('b1'), 2)
+    s = reduceClaude(s, result(), 3)
+    expect(agentOf(s, 'a1')).toMatchObject({ status: 'done', endedAt: 3 })
+    expect(agentOf(s, 'b1').status).toBe('running')
+  })
+
+  it('mainStale/settleMain: фоновые закончили, хода нет — главный готов (уведомление «закончил»)', () => {
+    let s = reduceClaude(reduceClaude(twoTasks(), notice('a1', 'completed'), 6), notice('a2', 'completed'), 7)
+    expect(mainStale(s)).toBe(true)
+    const done = settleMain(s, 20)
+    expect(main(done)).toMatchObject({ status: 'done', now: 'Готово', endedAt: 20 })
+    expect(sessionStatus(done)).toEqual({ status: 'done', doneAt: 20 })
+    expect(agentEvents(s.agents, done.agents).map((e) => [e.kind, e.agent.id])).toEqual([['done', 'main']])
+    // Пока фоновые работают или идёт ход — не трогаем.
+    expect(mainStale(twoTasks())).toBe(false)
+    expect(settleMain(twoTasks(), 20)).toEqual(twoTasks())
+    expect(mainStale(userSent(s, 'ещё', 8))).toBe(false)
+  })
+
+  it('init после фоновых — CLI начал свой ход: занят сразу, а не с первым токеном', () => {
+    let s = reduceClaude(reduceClaude(twoTasks(), notice('a1', 'completed'), 6), notice('a2', 'completed'), 7)
+    s = reduceClaude(s, ev({ type: 'system', subtype: 'init', session_id: 'x', model: 'claude-opus-5-5' }), 8)
+    expect(s).toMatchObject({ busy: true, pending: 1 })
+    expect(mainStale(s)).toBe(false)
+    // init на старте процесса (главный ещё не работал) хода не начинает.
+    const fresh = reduceClaude(initialClaude(), ev({ type: 'system', subtype: 'init', session_id: 'x' }), 1)
+    expect(fresh).toMatchObject({ busy: false, pending: 0 })
+  })
+})
+
+describe('⌃C, пока главный ждёт фоновых', () => {
+  it('stopBackground: фоновые и главный — «Остановлено», без уведомлений «закончил»; задачи для stop_task', () => {
+    const s0 = twoTasks()
+    expect(backgroundTasks(s0)).toEqual(['t1', 't2'])
+    const s = stopBackground(s0, 9)
+    expect(s.agents.map((a) => [a.id, a.status, a.now])).toEqual([
+      ['main', 'done', 'Остановлено'],
+      ['a1', 'done', 'Остановлено'],
+      ['a2', 'done', 'Остановлено'],
+    ])
+    expect(s.agents.every((a) => a.endedAt === 9)).toBe(true)
+    expect(agentEvents(s0.agents, s.agents)).toEqual([])
+    expect(sessionStatus(s)?.status).toBe('done')
+    expect(backgroundTasks(s)).toEqual([])
+    // Позднее уведомление CLI «stopped» ничего не меняет.
+    expect(reduceClaude(s, notice('a1', 'stopped'), 10).agents).toBe(s.agents)
+  })
+
+  it('ход идёт — stopBackground не трогает (ход прерывает interrupt)', () => {
+    const s = userSent(twoTasks(), 'ещё', 10)
+    expect(stopBackground(s, 11)).toBe(s)
+  })
+})
+
+describe('панель: закончившие уходят через FINISHED_VISIBLE_MS', () => {
+  const sub = (o: Partial<Agent>): Agent => ({ id: 'x', parentId: 'main', name: 'Саб', model: null, status: 'done', now: 'Готово', history: [], step: null, startedAt: 0, endedAt: 1000, tokens: 0, ...o })
+  const mainA = (o: Partial<Agent> = {}): Agent => ({ ...sub({ id: 'main', parentId: null, name: 'Главный', status: 'waiting', now: '', endedAt: null }), ...o })
+
+  it('visibleAgents: главный всегда, живые всегда, закончившие (готово/ошибка/остановлен) — 3 с', () => {
+    const agents = [mainA({ status: 'done', endedAt: 0 }), sub({ id: 'd' }), sub({ id: 'e', status: 'error' }), sub({ id: 's', now: 'Остановлено' }), sub({ id: 'r', status: 'running', endedAt: null }), sub({ id: 'w', status: 'waiting', endedAt: null })]
+    expect(visibleAgents(agents, 1000 + FINISHED_VISIBLE_MS - 1)).toBe(agents)
+    expect(visibleAgents(agents, 1000 + FINISHED_VISIBLE_MS).map((a) => a.id)).toEqual(['main', 'r', 'w'])
+  })
+
+  it('строка уходит сама (часы тикают, пока она видна), заголовок — по видимым', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(10_000)
+      const s = { ...initialClaude(), agents: [mainA({ status: 'running', startedAt: 1, endedAt: null }), sub({ id: 'd', endedAt: 9_500 })] }
+      render(<AgentsPanel state={s} onExit={() => {}} />)
+      const ids = () => Array.from(document.querySelectorAll('.row')).map((r) => r.getAttribute('data-agent-id'))
+      expect(ids()).toEqual(['main', 'd'])
+      expect(document.querySelector('.dh span')!.textContent).toContain('1 готов')
+      act(() => vi.advanceTimersByTime(3000))
+      expect(ids()).toEqual(['main'])
+      expect(document.querySelector('.dh span')!.textContent).toContain('0 готовы')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('часы тикают и без живых агентов, пока закончивший виден; потом останавливаются', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(10_000)
+      const s = { ...initialClaude(), agents: [mainA({ status: 'done', startedAt: 1, endedAt: 9_000 }), sub({ id: 'd', endedAt: 9_500 })] }
+      render(<AgentsPanel state={s} onExit={() => {}} />)
+      expect(document.querySelectorAll('.row')).toHaveLength(2)
+      act(() => vi.advanceTimersByTime(3000))
+      expect(document.querySelectorAll('.row')).toHaveLength(1)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('выбранная строка ушла: выбор на главном, подробности закрыты, ↑↓ работают', () => {
+    const agents = [mainA({ status: 'running', startedAt: 1, endedAt: null }), sub({ id: 'd', endedAt: 1000 }), sub({ id: 'r', status: 'running', endedAt: null, name: 'Живой' })]
+    const s = { ...initialClaude(), agents }
+    const ref = createRef<AgentsPanelHandle>()
+    const { rerender } = render(<AgentsPanel ref={ref} state={s} onExit={() => {}} now={1500} />)
+    act(() => ref.current!.select('d'))
+    const box = screen.getByRole('listbox')
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(screen.getByTestId('agent-detail')).toBeTruthy()
+    const focused = () => document.querySelector('.row.focus')?.getAttribute('data-agent-id')
+    expect(focused()).toBe('d')
+    rerender(<AgentsPanel ref={ref} state={s} onExit={() => {}} now={1000 + FINISHED_VISIBLE_MS} />)
+    expect(document.querySelector('[data-agent-id="d"]')).toBeNull()
+    expect(focused()).toBe('main')
+    expect(screen.queryByTestId('agent-detail')).toBeNull()
+    fireEvent.keyDown(box, { key: 'ArrowDown' })
+    expect(focused()).toBe('r')
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(screen.getByTestId('agent-detail')).toBeTruthy()
   })
 })

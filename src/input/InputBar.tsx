@@ -40,6 +40,8 @@ export const PLACEHOLDER = 'Команда или вопрос Claude…'
 export const ASK_HINT = '⌘↵ отправить агенту'
 export const CLAUDE_PLACEHOLDER = 'Вопрос Claude…'
 export const CLAUDE_HINT = '↵ отправить агенту · /exit выйти'
+/** Режим Claude, ход идёт: ↵ ставит в очередь, ⌘↵ — сразу в идущий ход. */
+export const CLAUDE_BUSY_HINT = '↵ в очередь · ⌘↵ отправить сейчас'
 /** Метка режима Claude слева в поле. */
 export const CLAUDE_MARK = '◆'
 export const EDIT_PLACEHOLDER = 'Исправленное сообщение…'
@@ -78,9 +80,12 @@ export interface InputBarProps {
   onRun(cmd: string): boolean
   /**
    * ⌘↵ (или ↵ в режиме Claude): вопрос в Claude-сессию панели. Со значками — text содержит
-   * TOKEN_CHAR на их местах, tokens — значки по порядку.
+   * TOKEN_CHAR на их местах, tokens — значки по порядку. now — ⌘↵ в режиме Claude: пока идёт ход,
+   * не в очередь, а сразу в идущий ход.
    */
-  onAsk(text: string, tokens?: Attachment[]): void
+  onAsk(text: string, tokens?: Attachment[], now?: boolean): void
+  /** Идёт ход Claude: подсказка справа — про очередь и ⌘↵. */
+  claudeBusy?: boolean
   /**
    * `claude [вопрос]` ↵: сессия запускается (вопрос — если есть). true — панель входит в режим Claude;
    * false — не удалось (каталог неизвестен, ошибка — карточкой), режим не включается.
@@ -426,7 +431,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     [setResumeState, setClaudeMode],
   )
 
-  const submit = useCallback((text: string, ask: boolean) => {
+  const submit = useCallback((text: string, ask: boolean, now = false) => {
     const q = props.current
     const tokens = docRef.current.tokens
     if (q.edit) {
@@ -465,7 +470,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         showNote(UNSUPPORTED_NOTE)
         return
       }
-      if (d.tokens.length > 0) props.current.onAsk(d.text, d.tokens)
+      if (now) props.current.onAsk(d.text, d.tokens.length > 0 ? d.tokens : undefined, true)
+      else if (d.tokens.length > 0) props.current.onAsk(d.text, d.tokens)
       else props.current.onAsk(d.text)
     } else {
       // Значки бывают только в режиме Claude; на всякий случай — читаемым видом.
@@ -1091,7 +1097,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
         return
       }
       if (only('meta')) {
-        if (v.trim()) submit(v, true)
+        // В режиме Claude ⌘↵ — «отправить сейчас» (пока идёт ход — без очереди); в оболочке — спросить Claude.
+        if (v.trim()) submit(v, true, claudeRef.current)
         return
       }
       if (only(null)) {
@@ -1467,7 +1474,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
           )}
           <span className="in-measure" ref={measureRef} aria-hidden="true" />
         </div>
-        <span className="in-hint">{nearTok && claudeMode ? PREVIEW_HINT : p.edit ? EDIT_HINT : claudeMode ? CLAUDE_HINT : ASK_HINT}</span>
+        <span className="in-hint">{nearTok && claudeMode ? PREVIEW_HINT : p.edit ? EDIT_HINT : claudeMode ? (p.claudeBusy ? CLAUDE_BUSY_HINT : CLAUDE_HINT) : ASK_HINT}</span>
       </div>
     </div>
   )

@@ -865,6 +865,9 @@ input.q-own::placeholder { color: var(--muted); font-style: italic; opacity: 1; 
 .qu-tag { flex: none; font-family: var(--font-code); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 .qu-x { flex: none; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 11px; line-height: 20px; cursor: pointer; }
 .qu-x:hover { color: var(--strong); background: color-mix(in srgb, var(--strong) 10%, transparent); }
+/* «Отправить сейчас» — как ✕, стрелка вместо крестика; при наведении — акцент. */
+.qu-now { display: inline-flex; align-items: center; justify-content: center; }
+.qu-now:hover { color: var(--accText); }
 
 /* Правка отправленного сообщения (над строкой ввода, как очередь): заголовок .dh, полоса --acc,
    строка «что сделает ↵» и предупреждение про файлы (--warn). */

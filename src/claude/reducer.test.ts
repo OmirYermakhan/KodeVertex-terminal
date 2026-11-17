@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import raw from './fixtures/bash-ls.jsonl?raw'
-import { canEdit, editInfo, lastEditable, messagesLabel, newSession, replaceFrom, actionTitle, cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaude, pendingPrompt, pendingQuestion, recordAnswer, modelLabel, nowLabel, reduceClaude, userSent, dropSuggestion, clearSession, newProcess, RESULT_MAX } from './reducer'
+import { canEdit, editInfo, lastEditable, messagesLabel, newSession, replaceFrom, actionTitle, cancelPrompts, decidePermission, finishQuestion, gotoStep, initialClaude, pendingPrompt, pendingQuestion, recordAnswer, modelLabel, nowLabel, reduceClaude, userSent, userSteered, dropSuggestion, clearSession, newProcess, RESULT_MAX } from './reducer'
 import type { ClaudeState } from './reducer'
 
 const lines = raw
@@ -620,5 +620,28 @@ describe('результат инструмента в состоянии — т
     s = reduceClaude(s, toolResult('t1', '\n\n  ' + 'x'.repeat(30000)), 2)
     const it = s.items.find((i) => i.type === 'action')
     expect(it?.type === 'action' && it.result).toBe('x'.repeat(RESULT_MAX))
+  })
+})
+
+describe('сообщение посреди хода (userSteered)', () => {
+  const res = { type: 'result', subtype: 'success', result: '', session_id: 's1' }
+  it('пузырь «Вы» без нового хода; tool_result субагента — не граница, главного — граница', () => {
+    let s = userSent(initialClaude(), 'первое', 0)
+    s = userSteered(s, 'сейчас')
+    expect(s.items.at(-1)).toEqual({ type: 'user', text: 'сейчас', steer: true })
+    expect(s).toMatchObject({ pending: 1, steer: 1, busy: true })
+    expect(canEdit(s, s.items.length - 1)).toBe(false)
+    s = run(s, [toolResult('x', 'ok', false, 'task1')])
+    expect(s.steer).toBe(1)
+    s = run(s, [toolResult('y', 'ok')])
+    expect(s.steer).toBe(0)
+    s = run(s, [res])
+    expect(s).toMatchObject({ pending: 0, busy: false })
+  })
+
+  it('не взят до конца хода — ход остаётся занятым; после ⌃C — нет', () => {
+    const s = userSteered(userSent(initialClaude(), 'первое', 0), 'сейчас')
+    expect(run(s, [res])).toMatchObject({ pending: 1, busy: true, steer: 0 })
+    expect(reduceClaude(s, res, 1000, true)).toMatchObject({ pending: 0, busy: false, steer: 0 })
   })
 })

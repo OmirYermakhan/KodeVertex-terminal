@@ -121,6 +121,7 @@ pub fn run() {
       settings::settings_save,
       session::session_load,
       session::session_save,
+      session::session_confirm,
       fonts::fonts_list,
       fs_complete::fs_list,
       fs_complete::fs_preview,
@@ -168,6 +169,7 @@ pub fn run() {
       windows::window_send_tab,
       windows::window_at,
       windows::window_count,
+      windows::window_ready,
       exit::app_exit_ready
     ])
     .manage(pty::PtyManager::default())
@@ -175,10 +177,13 @@ pub fn run() {
     .manage(exit::ExitFlow::default())
     .manage(session::Pieces::default())
     .manage(windows::WindowInits::default())
+    .manage(windows::ReadyWindows::default())
     .on_page_load(|webview, payload| {
       // Перезагрузка страницы окна: прежние терминалы и процессы claude этого окна новой странице
       // не принадлежат — без этого они остались бы сиротами до выхода. Чужие окна не трогаем.
       if payload.event() == PageLoadEvent::Started {
+        // Новая страница ещё не слушает ни передачу вкладок, ни выход (до её `window_ready`).
+        webview.app_handle().state::<windows::ReadyWindows>().unmark(webview.label());
         close_owned(webview.app_handle(), webview.label());
       }
     })
@@ -228,6 +233,7 @@ pub fn run() {
         let label = window.label();
         close_owned(app, label);
         app.state::<windows::WindowInits>().take(label);
+        app.state::<windows::ReadyWindows>().unmark(label);
         // Выход ждал ответа этого окна — ждать нечего.
         app.state::<exit::ExitFlow>().mark_ready(label);
         session::on_destroyed(app, label);
