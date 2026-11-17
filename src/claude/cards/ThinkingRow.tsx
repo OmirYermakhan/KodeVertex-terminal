@@ -23,3 +23,22 @@ export function ThinkingRow({ since }: { since: number }) {
     </div>
   )
 }
+
+/** «Ждём 1 фонового агента», «Ждём 3 фоновых агентов». */
+export function bgWaitText(n: number): string {
+  return `Ждём ${n} ${n % 10 === 1 && n % 100 !== 11 ? 'фонового агента' : 'фоновых агентов'}`
+}
+
+/**
+ * Строка в конце ленты, пока ход главного закончен, а фоновые агенты ещё работают (как «ждёт
+ * фоновых агентов» в CLI): вид строки «Думает», без таймера — время каждого агента в панели ⌘J.
+ */
+export function BackgroundWaitRow({ count }: { count: number }) {
+  return (
+    <div className="thinking bgwait" role="status" aria-live="polite">
+      <span className="spin" aria-hidden="true" />
+      <span className="th-l">{bgWaitText(count)}</span>
+      <span className="th-k">⌘J — агенты</span>
+    </div>
+  )
+}

@@ -1,11 +1,19 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { act, Profiler } from 'react'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useClaudeSessions } from '../claude/sessionStore'
 import { initialClaude, type ClaudeState } from '../claude/reducer'
 import { mockupScene } from '../claude/fixtures/mockupScene'
 import { initialTabsState, useTabs } from '../layout/tabsStore'
 import TabBar from './TabBar'
+import * as transfer from '../windows/transfer'
+
+vi.mock('../windows/transfer', () => ({
+  canMoveToNewWindow: vi.fn(async () => true),
+  moveTabToNewWindow: vi.fn(async () => true),
+  moveTabToWindow: vi.fn(async () => true),
+  windowAt: vi.fn(async () => null),
+}))
 
 describe('TabBar', () => {
   beforeEach(() => {
@@ -94,5 +102,177 @@ describe('TabBar', () => {
     setSession(a.focused, mockupScene())
     expect(renders).toBe(before + 1)
     expect(dots()).toEqual(['waiting'])
+  })
+
+  describe('перетаскивание', () => {
+    // Раскладка для jsdom: полоса 0..800 × 0..38, вкладки по 100px с шагом 104 (gap 4) от x=100.
+    const realRect = HTMLElement.prototype.getBoundingClientRect
+    const rect = (left: number, top: number, width: number, height: number) =>
+      ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) }) as DOMRect
+    beforeEach(() => {
+      vi.mocked(transfer.canMoveToNewWindow).mockResolvedValue(true)
+      vi.mocked(transfer.windowAt).mockResolvedValue(null)
+      vi.mocked(transfer.moveTabToNewWindow).mockClear()
+      vi.mocked(transfer.moveTabToWindow).mockClear()
+      HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+        if (this.dataset.testid === 'tabbar') return rect(0, 0, 800, 38)
+        if (this.getAttribute('role') === 'tab') {
+          const i = [...document.querySelectorAll('[role="tab"]')].indexOf(this)
+          return rect(100 + i * 104, 6, 100, 26)
+        }
+        return realRect.call(this)
+      }
+    })
+    afterEach(() => {
+      HTMLElement.prototype.getBoundingClientRect = realRect
+    })
+
+    const three = () => {
+      act(() => {
+        useTabs.getState().newTab()
+        useTabs.getState().newTab()
+      })
+      return useTabs.getState().tabs.map((t) => t.id)
+    }
+    const ids = () => useTabs.getState().tabs.map((t) => t.id)
+    const pt = (x: number, y: number, extra: Record<string, number> = {}) => ({ pointerId: 1, button: 0, clientX: x, clientY: y, screenX: x + 1000, screenY: y + 500, ...extra })
+    const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+
+    it('перестановка: вкладка идёт за курсором, соседи расступаются, порядок — при отпускании', () => {
+      const [a, b, c] = three()
+      render(<TabBar />)
+      const tab = screen.getAllByRole('tab')[0]
+      fireEvent.pointerDown(tab, pt(150, 19))
+      fireEvent.pointerMove(tab, pt(300, 19))
+      expect(tab).toHaveClass('dragging')
+      expect(tab.style.transform).toBe('translateX(150px)')
+      expect(screen.getAllByRole('tab')[1].style.transform).toBe('translateX(-104px)')
+      expect(screen.getAllByRole('tab')[2].style.transform).toBe('')
+      // Дальше конца полосы вкладка не уходит.
+      fireEvent.pointerMove(tab, pt(600, 19))
+      expect(tab.style.transform).toBe('translateX(208px)')
+      // Курсор за серединой обеих соседок — обе сдвинулись влево на ширину + gap.
+      expect(screen.getAllByRole('tab')[1].style.transform).toBe('translateX(-104px)')
+      expect(screen.getAllByRole('tab')[2].style.transform).toBe('translateX(-104px)')
+      expect(ids()).toEqual([a, b, c])
+      fireEvent.pointerUp(tab, pt(600, 19))
+      fireEvent.click(tab)
+      expect(ids()).toEqual([b, c, a])
+      // Клик после перетаскивания вкладку не активировал (активна последняя созданная).
+      expect(useTabs.getState().active).toBe(c)
+      expect(screen.getAllByRole('tab').every((t) => !t.style.transform && !t.classList.contains('dragging'))).toBe(true)
+    })
+
+    it('меньше 4px — не перетаскивание: клик активирует', () => {
+      const [a, b, c] = three()
+      render(<TabBar />)
+      const tab = screen.getAllByRole('tab')[0]
+      fireEvent.pointerDown(tab, pt(150, 19))
+      fireEvent.pointerMove(tab, pt(153, 19))
+      expect(tab).not.toHaveClass('dragging')
+      fireEvent.pointerUp(tab, pt(153, 19))
+      fireEvent.click(tab)
+      expect(ids()).toEqual([a, b, c])
+      expect(useTabs.getState().active).toBe(a)
+    })
+
+    it('нажатие на × перетаскивание не начинает', () => {
+      three()
+      render(<TabBar />)
+      const tab = screen.getAllByRole('tab')[0]
+      fireEvent.pointerDown(tab.querySelector('.tab-close')!, pt(195, 19))
+      fireEvent.pointerMove(tab, pt(400, 19))
+      expect(tab).not.toHaveClass('dragging')
+    })
+
+    it('вне полосы — «призрак» с названием; отпустили ниже полосы на 40px+ — новое окно в экранных координатах', async () => {
+      const [a] = three()
+      render(<TabBar />)
+      const tab = screen.getAllByRole('tab')[0]
+      fireEvent.pointerDown(tab, pt(150, 19))
+      fireEvent.pointerMove(tab, pt(160, 200))
+      expect(screen.getByTestId('tab-ghost')).toHaveTextContent('Терминал')
+      expect(tab).toHaveClass('dragging')
+      expect(tab.style.transform).toBe('')
+      fireEvent.pointerUp(tab, pt(160, 200))
+      await flush()
+      expect(transfer.windowAt).toHaveBeenCalledWith(1160, 700)
+      expect(transfer.moveTabToNewWindow).toHaveBeenCalledWith(a, 1160, 700)
+      expect(transfer.moveTabToWindow).not.toHaveBeenCalled()
+      expect(screen.queryByTestId('tab-ghost')).toBeNull()
+    })
+
+    it('за пределами окна — тоже новое окно', async () => {
+      const [a] = three()
+      render(<TabBar />)
+      const tab = screen.getAllByRole('tab')[0]
+      fireEvent.pointerDown(tab, pt(150, 19))
+      fireEvent.pointerUp(tab, pt(150, 19)) // без движения — клик
+      fireEvent.pointerDown(tab, pt(150, 19))
+      fireEvent.pointerMove(tab, pt(-50, 20))
+      fireEvent.pointerUp(tab, pt(-50, 20))
+      await flush()
+      expect(transfer.moveTabToNewWindow).toHaveBeenCalledWith(a, 950, 520)
+    })
+
+    it('отпустили над другим окном — перенос туда', async () => {
+      const [, b] = three()
+      vi.mocked(transfer.windowAt).mockResolvedValue('w2')
+      render(<TabBar />)
+      const tab = screen.getAllByRole('tab')[1]
+      fireEvent.pointerDown(tab, pt(250, 19))
+      fireEvent.pointerMove(tab, pt(250, 300))
+      fireEvent.pointerUp(tab, pt(250, 300))
+      await flush()
+      expect(transfer.moveTabToWindow).toHaveBeenCalledWith(b, 'w2')
+      expect(transfer.moveTabToNewWindow).not.toHaveBeenCalled()
+    })
+
+    it('чуть ниже полосы (меньше 40px) — отмена', async () => {
+      const [a, b, c] = three()
+      render(<TabBar />)
+      const tab = screen.getAllByRole('tab')[0]
+      fireEvent.pointerDown(tab, pt(150, 19))
+      fireEvent.pointerMove(tab, pt(150, 60))
+      fireEvent.pointerUp(tab, pt(150, 60))
+      await flush()
+      expect(transfer.moveTabToNewWindow).not.toHaveBeenCalled()
+      expect(ids()).toEqual([a, b, c])
+    })
+
+    it('единственная вкладка единственного окна — жест ничего не делает', async () => {
+      vi.mocked(transfer.canMoveToNewWindow).mockResolvedValue(false)
+      const [a] = ids()
+      render(<TabBar />)
+      const tab = screen.getByRole('tab')
+      fireEvent.pointerDown(tab, pt(150, 19))
+      fireEvent.pointerMove(tab, pt(150, 300))
+      fireEvent.pointerUp(tab, pt(150, 300))
+      await flush()
+      expect(transfer.moveTabToNewWindow).not.toHaveBeenCalled()
+      expect(ids()).toEqual([a])
+      expect(screen.queryByTestId('tab-ghost')).toBeNull()
+    })
+
+    it('Escape и pointercancel отменяют перетаскивание', async () => {
+      const [a, b, c] = three()
+      render(<TabBar />)
+      const tab = screen.getAllByRole('tab')[0]
+      fireEvent.pointerDown(tab, pt(150, 19))
+      fireEvent.pointerMove(tab, pt(300, 19))
+      fireEvent.keyDown(window, { key: 'Escape' })
+      expect(tab).not.toHaveClass('dragging')
+      fireEvent.pointerUp(tab, pt(300, 19))
+      expect(ids()).toEqual([a, b, c])
+
+      fireEvent.pointerDown(tab, pt(150, 19))
+      fireEvent.pointerMove(tab, pt(150, 300))
+      fireEvent.pointerCancel(tab, pt(150, 300))
+      expect(screen.queryByTestId('tab-ghost')).toBeNull()
+      fireEvent.pointerUp(tab, pt(150, 300))
+      await flush()
+      expect(transfer.windowAt).not.toHaveBeenCalled()
+      expect(ids()).toEqual([a, b, c])
+    })
   })
 })

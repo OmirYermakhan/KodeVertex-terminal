@@ -150,6 +150,15 @@ export interface Agent {
   endedAt: number | null
   /** in + cache + out последнего ответа агента */
   tokens: number
+  /**
+   * Фоновый агент (Agent с `run_in_background`, `task_started` с `is_backgrounded`): tool_result
+   * приходит сразу («запущен»), а работает он дальше — до `task_notification`.
+   */
+  background?: boolean
+  /** id задачи CLI (`task_started`) — для сверки событий task_*. */
+  taskId?: string
+  /** Вызовов инструментов по `task_progress`. */
+  toolUses?: number
 }
 
 export interface ClaudeState {
@@ -340,6 +349,42 @@ function patchAgent(s: ClaudeState, id: string, patch: Partial<Agent> | ((a: Age
   }
 }
 
+/** Фоновый агент ещё работает (ждёт ответа — тоже работает). */
+const bgLive = (a: Agent) => a.background === true && (a.status === 'running' || a.status === 'waiting')
+
+/** Сколько фоновых агентов ещё работает. */
+export function backgroundRunning(s: Pick<ClaudeState, 'agents'>): number {
+  return s.agents.filter(bgLive).length
+}
+
+/**
+ * Ход главного агента закончен, а фоновые агенты ещё работают: их число (строка «Ждём N фоновых
+ * агентов» в ленте); 0 — не ждём. Как в CLI: главный не «готов», пока не дождался фоновых.
+ */
+export function backgroundWait(s: ClaudeState): number {
+  if (s.busy) return 0
+  const main = s.agents.find((a) => a.id === MAIN)
+  return main?.status === 'running' ? backgroundRunning(s) : 0
+}
+
+/** Подпись главного агента, пока он ждёт фоновых (как «ждёт фоновых агентов» в CLI). */
+export const bgWaitLabel = (n: number) => `Ждёт фоновых агентов: ${n}`
+
+/**
+ * Событие главного агента, когда ход не идёт (pending 0): CLI сам начал ход — доставил главному
+ * уведомление о завершении фонового агента (или фоновой команды). Ход считаем как обычный: занят,
+ * его result закроет этот ход, а не чужой.
+ */
+function autoTurn(s: ClaudeState, aid: string, now: number): ClaudeState {
+  if (aid !== MAIN || s.pending > 0 || s.busy) return s
+  return patchAgent({ ...s, busy: true, pending: 1, currentAgentId: MAIN, suggestion: null }, MAIN, {
+    status: 'running',
+    startedAt: now,
+    endedAt: null,
+    now: 'Думает',
+  })
+}
+
 function ensureAgent(s: ClaudeState, id: string, now: number): ClaudeState {
   if (s.agents.some((a) => a.id === id)) return s
   return { ...s, agents: [...s.agents, newAgent(id, MAIN, 'Агент', now)] }
@@ -495,10 +540,11 @@ function onToolUse(s: ClaudeState, aid: string, block: Rec, now: number): Claude
 
   if (tool === 'Task' || tool === 'Agent') {
     const name = strOr(input.description) || 'Агент'
+    const bg: Partial<Agent> = input.run_in_background === true ? { background: true } : {}
     if (next.agents.some((a) => a.id === id)) {
-      next = patchAgent(next, id, { name, parentId: aid })
+      next = patchAgent(next, id, { name, parentId: aid, ...bg })
     } else {
-      next = { ...next, agents: [...next.agents, newAgent(id, aid, name, now)] }
+      next = { ...next, agents: [...next.agents, { ...newAgent(id, aid, name, now), ...bg }] }
     }
   }
   return next
@@ -508,7 +554,7 @@ function onAssistant(s: ClaudeState, ev: Rec, now: number): ClaudeState {
   const aid = typeof ev.parent_tool_use_id === 'string' ? ev.parent_tool_use_id : MAIN
   const msg = ev.message
   if (!isRec(msg)) return s
-  let next = ensureAgent(s, aid, now)
+  let next = ensureAgent(autoTurn(s, aid, now), aid, now)
   next = { ...next, currentAgentId: aid }
   next = withModel(next, aid, strOr(msg.model))
   // Сообщения главного агента — цепочка сессии (у субагентов своя, по ней не перематываем).
@@ -552,7 +598,10 @@ function onUser(s: ClaudeState, ev: Rec, now: number): ClaudeState {
     if (!id) continue
     const isError = b.is_error === true
     const status = isError ? 'error' : 'done'
-    const result = shortResultText(resultText(b.content))
+    // Фоновый агент: tool_result — лишь «запущен» (служебный текст CLI не показываем), агент работает дальше.
+    const launch = ev.tool_use_result ?? ev.toolUseResult
+    const launched = !isError && (next.agents.find((a) => a.id === id)?.background === true || (single && isRec(launch) && launch.status === 'async_launched'))
+    const result = launched ? 'Запущен в фоне' : shortResultText(resultText(b.content))
     let actionAgent: string | null = null
     next = {
       ...next,
@@ -567,7 +616,10 @@ function onUser(s: ClaudeState, ev: Rec, now: number): ClaudeState {
         return it
       }),
     }
-    if (next.agents.some((a) => a.id === id)) {
+    if (launched && next.agents.some((a) => a.id === id)) {
+      const model = isRec(launch) ? strOr(launch.resolvedModel) : ''
+      next = withModel(patchAgent(next, id, { background: true }), id, model)
+    } else if (next.agents.some((a) => a.id === id)) {
       next = patchAgent(next, id, { status, endedAt: now, now: isError ? 'Ошибка' : 'Готово' })
     }
     if (actionAgent) {
@@ -645,9 +697,11 @@ function onResult(prev: ClaudeState, ev: Rec, now: number, interrupted = false):
   const text = repeatsAnswer(items, result) ? '' : result
   if (stopped) items.push({ type: 'summary', text, durationMs, ...price, isError: false, stopped: true })
   else if (isError || text || !shown) items.push({ type: 'summary', text, durationMs, ...price, isError })
-  // Ход закончен: его незавершённые действия и субагенты больше не идут.
+  // Ход закончен: его незавершённые действия и субагенты больше не идут. Кроме фоновых: они
+  // работают дальше (и их действия тоже), до своего task_notification.
+  const bg = new Set(s.agents.filter(bgLive).map((a) => a.id))
   const closed: FeedClaudeItem[] = items.map((it) =>
-    it.type === 'action' && it.status === 'running' ? { ...it, status: isError ? 'error' : 'done' } : it,
+    it.type === 'action' && it.status === 'running' && !bg.has(it.agentId) ? { ...it, status: isError ? 'error' : 'done' } : it,
   )
   const pending = Math.max(0, s.pending - 1)
   let next: ClaudeState = {
@@ -667,15 +721,91 @@ function onResult(prev: ClaudeState, ev: Rec, now: number, interrupted = false):
     sessionId,
     currentAgentId: pending > 0 ? MAIN : null,
     agents: s.agents.map((a) =>
-      a.id !== MAIN && (a.status === 'running' || a.status === 'waiting')
+      a.id !== MAIN && !bg.has(a.id) && (a.status === 'running' || a.status === 'waiting')
         ? { ...a, status: isError ? 'error' : 'done', endedAt: now, now: doneNow }
         : a,
     ),
   }
   // В очереди ещё сообщение — главный агент продолжает (следующий ход), «закончил» не наступает.
   if (pending > 0) return patchAgent(next, MAIN, { status: 'running', now: 'Думает' })
+  // Фоновые агенты ещё работают — главный их ждёт (CLI сам начнёт ход, когда они закончат):
+  // не «готово», уведомление «закончил» — после них. Ошибку хода не скрываем.
+  if (bg.size > 0 && !isError) return patchAgent(next, MAIN, { status: 'running', endedAt: null, now: bgWaitLabel(bg.size) })
   next = patchAgent(next, MAIN, { status: isError ? 'error' : 'done', endedAt: now, now: doneNow })
   return next
+}
+
+/** Агент задачи CLI: по tool_use_id (Agent/Task), иначе по запомненному task_id. */
+function taskAgent(s: ClaudeState, ev: Rec): Agent | undefined {
+  const tu = strOr(ev.tool_use_id)
+  const tid = strOr(ev.task_id)
+  return s.agents.find((a) => a.id !== MAIN && ((tu !== '' && a.id === tu) || (tid !== '' && a.taskId === tid)))
+}
+
+/** Статус task_notification → статус и подпись агента. */
+function taskEnd(status: string): Pick<Agent, 'status' | 'now'> {
+  if (status === 'failed') return { status: 'error', now: 'Ошибка' }
+  // Остановлен (TaskStop, ⌃C, выход): не «закончил» — уведомления нет (см. notify.agentEvents).
+  if (status === 'stopped' || status === 'killed') return { status: 'done', now: 'Остановлено' }
+  return { status: 'done', now: 'Готово' }
+}
+
+/**
+ * События задач CLI (`system` task_started / task_progress / task_updated / task_notification).
+ * Задачи без агента в панели (фоновые команды Bash, команды внутри субагента) пропускаем.
+ */
+function onTask(s: ClaudeState, ev: Rec, now: number): ClaudeState {
+  const a = taskAgent(s, ev)
+  if (!a) return s
+  const tid = strOr(ev.task_id)
+  switch (ev.subtype) {
+    case 'task_started':
+      return patchAgent(s, a.id, {
+        ...(tid ? { taskId: tid } : {}),
+        ...(ev.is_backgrounded === true ? { background: true } : {}),
+      })
+    case 'task_updated': {
+      // Агент ушёл в фон посреди работы (patch.is_backgrounded).
+      const p = isRec(ev.patch) ? ev.patch : {}
+      return p.is_backgrounded === true ? patchAgent(s, a.id, { background: true }) : s
+    }
+    case 'task_progress': {
+      if (a.status !== 'running' && a.status !== 'waiting') return s
+      const u = isRec(ev.usage) ? ev.usage : {}
+      const patch: Partial<Agent> = {}
+      if (num(u.total_tokens) > 0) patch.tokens = num(u.total_tokens)
+      if (num(u.tool_uses) > 0) patch.toolUses = num(u.tool_uses)
+      // Своё «сейчас» агент берёт из своих tool_use; пока их не видно — по последнему инструменту.
+      const tool = strOr(ev.last_tool_name)
+      if (!a.now && tool) patch.now = nowLabel(tool, {})
+      return Object.keys(patch).length > 0 ? patchAgent(s, a.id, patch) : s
+    }
+    case 'task_notification': {
+      if (a.status !== 'running' && a.status !== 'waiting') return s
+      const u = isRec(ev.usage) ? ev.usage : {}
+      const end = taskEnd(strOr(ev.status))
+      let next = patchAgent(s, a.id, {
+        ...end,
+        endedAt: now,
+        ...(num(u.total_tokens) > 0 ? { tokens: num(u.total_tokens) } : {}),
+        ...(num(u.tool_uses) > 0 ? { toolUses: num(u.tool_uses) } : {}),
+      })
+      // Его недоигранные действия больше не идут.
+      if (next.items.some((it) => it.type === 'action' && it.agentId === a.id && it.status === 'running')) {
+        const st = end.status === 'error' ? 'error' : 'done'
+        next = { ...next, items: next.items.map((it) => (it.type === 'action' && it.agentId === a.id && it.status === 'running' ? { ...it, status: st } : it)) }
+      }
+      // Главный ждал фоновых: подпись с новым числом; дождался — CLI сейчас начнёт ход с уведомлением.
+      const main = next.agents.find((x) => x.id === MAIN)
+      if (!next.busy && main?.status === 'running') {
+        const left = backgroundRunning(next)
+        next = patchAgent(next, MAIN, { now: left > 0 ? bgWaitLabel(left) : 'Думает' })
+      }
+      return next
+    }
+    default:
+      return s
+  }
 }
 
 /** Ответ на управляющий запрос: set_model → { model }, get_settings → { effective, applied }. */
@@ -920,13 +1050,14 @@ export function reduceClaude(s: ClaudeState, line: string | object, now: number,
           if (model) next = patchAgent(next, MAIN, { model })
           return next
         }
+        if (typeof ev.subtype === 'string' && ev.subtype.startsWith('task_')) return onTask(s, ev, now)
         return s
       case 'stream_event': {
         const e = ev.event
         if (!isRec(e)) return s
         const aid = typeof ev.parent_tool_use_id === 'string' ? ev.parent_tool_use_id : MAIN
         if (e.type === 'message_start' && isRec(e.message)) {
-          return withModel(ensureAgent(s, aid, now), aid, strOr(e.message.model))
+          return withModel(ensureAgent(autoTurn(s, aid, now), aid, now), aid, strOr(e.message.model))
         }
         if (e.type === 'content_block_delta' && isRec(e.delta) && e.delta.type === 'text_delta') {
           return onDelta(s, aid, strOr(e.delta.text), now)

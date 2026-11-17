@@ -37,6 +37,9 @@ export function agentsHeader(agents: Agent[]): { running: string; rest: string[]
   const e = count('error')
   const rest = [`${w} ${plural(w, 'ждёт', 'ждут', 'ждут')}`, `${d} ${plural(d, 'готов', 'готовы', 'готовы')}`]
   if (e > 0) rest.push(`${e} ${plural(e, 'ошибка', 'ошибки', 'ошибок')}`)
+  // Фоновые работающие уже среди «работают»; отдельно — сколько из них в фоне.
+  const bg = agents.filter((a) => a.background && (a.status === 'running' || a.status === 'waiting')).length
+  if (bg > 0) rest.push(`${bg} в фоне`)
   return { running: `${r} ${plural(r, 'работает', 'работают', 'работают')}`, rest }
 }
 
@@ -148,6 +151,11 @@ function Row(p: { agent: Agent; depth: number; now: number; focus: boolean; expa
       <span className={`s ${DOT[agent.status]}`} />
       <span className="n" style={depth > 1 ? ({ '--depth': depth } as CSSProperties) : undefined}>
         {agent.name}
+        {agent.background && (
+          <span className="bg" title="Фоновый агент: работает, пока главный отвечает">
+            фон
+          </span>
+        )}
       </span>
       {agent.model ? <span className={isFable(agent.model) ? 'm f' : 'm'}>{modelLabel(agent.model)}</span> : <span />}
       <span className={`w ${agent.status}`}>

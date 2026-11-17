@@ -289,9 +289,13 @@ function failed(s: ClaudeState, text: string, now: number): ClaudeState {
   }
 }
 
-/** Ход прерван (⌃C, смена каталога, правка): сессия не занята, недоигранное закрыто. */
-function stopped(s: ClaudeState, now: number): ClaudeState {
-  if (!s.busy) return s
+/**
+ * Ход прерван (⌃C, смена каталога, правка): сессия не занята, недоигранное закрыто.
+ * keepBackground — процесс жив: фоновые агенты не останавливаются.
+ */
+function stopped(s: ClaudeState, now: number, keepBackground = false): ClaudeState {
+  // Ход не идёт, но фоновые агенты ещё работали (главный их ждёт) — процесс ушёл, они тоже.
+  if (!s.busy && !s.agents.some((a) => a.status === 'running')) return s
   return {
     ...s,
     busy: false,
@@ -299,7 +303,9 @@ function stopped(s: ClaudeState, now: number): ClaudeState {
     currentAgentId: null,
     items: closeUnfinished(s.items),
     agents: s.agents.map((a) =>
-      a.status === 'running' || (a.status === 'waiting' && a.startedAt > 0) ? { ...a, status: 'done', now: 'Остановлено', endedAt: now } : a,
+      (a.status === 'running' || (a.status === 'waiting' && a.startedAt > 0)) && !(keepBackground && a.background)
+        ? { ...a, status: 'done', now: 'Остановлено', endedAt: now }
+        : a,
     ),
   }
 }
@@ -355,6 +361,8 @@ function procHandlers(paneId: string, proc: Proc, resume: string | null, gotLine
     const prevState = get(paneId).state
     const before = prevState.pending
     patchState(paneId, (s) => reduceClaude(s, line, Date.now(), proc.interrupted))
+    // CLI сам начал ход (дождался фонового агента): прежнее ⌃C к нему не относится.
+    if (before === 0 && get(paneId).state.pending > 0) proc.interrupted = false
     // Закончились правки файлов или команды — панель проекта обновляется. Действия закрывают только
     // tool_result и result: на остальных строках (токены ответа) ленту не просматриваем.
     if (line.includes('"tool_result"') || line.includes('"result"')) {
@@ -378,7 +386,7 @@ function procHandlers(paneId: string, proc: Proc, resume: string | null, gotLine
         : e.code === 0
           ? p.state.busy
             ? failed(p.state, EXITED_MID_TURN, now)
-            : p.state
+            : stopped(p.state, now)
           : failed(p.state, exitMessage(e), now)
       // --resume упал, не сказав ни строки (сессии нет или она из другого каталога) — дальше начинаем
       // новую сессию, а не повторяем тот же resume на каждый ⌘↵.
@@ -838,7 +846,8 @@ async function send(paneId: string, paneCwd: string | undefined, text: string, t
     if (id === null || procs.get(paneId) !== proc) return
     // ⌃C пришёл, пока процесс запускался: вопрос не отправляем.
     if (proc.interrupted) {
-      patchState(paneId, (s) => stopped(s, Date.now()))
+      // Процесс жив: его фоновые агенты работают дальше.
+      patchState(paneId, (s) => stopped(s, Date.now(), true))
       return
     }
     try {

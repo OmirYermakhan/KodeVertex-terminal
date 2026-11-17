@@ -12,7 +12,8 @@ export function sessionStatus(s: ClaudeState): { status: ClaudeStatus; doneAt: n
   if (main?.status === 'error') return { status: 'error', doneAt: main.endedAt ?? 0 }
   // Начальный «waiting» главного агента (startedAt 0) — не ожидание ответа.
   if (s.agents.some((a) => a.status === 'waiting' && a.startedAt > 0)) return { status: 'waiting', doneAt: 0 }
-  if (s.busy) return { status: 'running', doneAt: 0 }
+  // Ход закончен, но главный ждёт фоновых агентов — всё ещё работает.
+  if (s.busy || main?.status === 'running') return { status: 'running', doneAt: 0 }
   if (main?.status === 'done') return { status: 'done', doneAt: main.endedAt ?? 0 }
   return null
 }

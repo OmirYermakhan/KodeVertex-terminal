@@ -164,6 +164,12 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .tab.on .tab-close { background: var(--bg); }
 .tab:hover .tab-close { visibility: visible; }
 .tab-close:hover { color: var(--strong); }
+/* Перетаскивание вкладки: соседи расступаются плавно, взятая — полупрозрачна и поверх;
+   «призрак» с названием — за курсором, когда он вне полосы. Вне перетаскивания transition нет —
+   при отпускании вкладки встают на новые места без анимации назад. */
+.bar.tab-drag .tab[role="tab"] { transition: transform .15s ease; }
+.bar.tab-drag .tab.dragging { transition: none; opacity: .5; z-index: 1; }
+.tab-ghost { position: fixed; z-index: 1000; pointer-events: none; opacity: .9; box-shadow: 0 4px 14px rgba(0, 0, 0, .35); }
 
 /* Кнопка проекта слева вверху (макет 07 .proj): значок с двумя буквами, имя, ветка.
    margin-right 14 + gap 4 = 18 — как gap 8 + margin-left 10 у .tabs макета. */
@@ -1009,3 +1015,6 @@ input.q-own::placeholder { color: var(--muted); font-style: italic; opacity: 1; 
 .quote-btn { position: fixed; z-index: 40; display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-text); font-size: 12px; color: var(--strong); background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 3px 9px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); cursor: pointer; }
 .quote-btn:hover { border-color: var(--acc); }
 .quote-btn kbd { font-family: var(--font-code); font-size: 10.5px; color: var(--muted); }
+
+/* ── Фоновые агенты (Agent с run_in_background): метка «фон» в строке панели агентов — вид .row .m. ── */
+.row .n .bg { margin-left: 6px; font-size: 10px; color: var(--muted); border: 1px solid var(--rule); border-radius: 4px; padding: 0 4px; vertical-align: 1px; }

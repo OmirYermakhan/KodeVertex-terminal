@@ -30,6 +30,8 @@ interface TabsState {
   takeTab(id: string): Tab | null
   /** Вкладка из другого окна: в конец полосы и активная (уже есть — только активировать). */
   putTab(tab: Tab): void
+  /** Перестановка на полосе: вкладка с места fromIndex встаёт на место toIndex (активная — та же). */
+  move(fromIndex: number, toIndex: number): void
   activate(id: string): void
   activateIndex(i: number): void
   split(axis: 'row' | 'col'): void
@@ -112,6 +114,15 @@ export const useTabs = create<TabsState>((set) => ({
   },
   putTab: (tab) =>
     set((s) => (s.tabs.some((t) => t.id === tab.id) ? { active: tab.id } : { tabs: [...s.tabs, tab], active: tab.id })),
+  move: (from, to) =>
+    set((s) => {
+      const n = s.tabs.length
+      if (from === to || from < 0 || from >= n || to < 0 || to >= n) return {}
+      const tabs = [...s.tabs]
+      const [t] = tabs.splice(from, 1)
+      tabs.splice(to, 0, t)
+      return { tabs }
+    }),
   activate: (id) => set((s) => (s.tabs.some((t) => t.id === id) ? { active: id } : {})),
   activateIndex: (i) =>
     set((s) => (i >= 0 && i < s.tabs.length ? { active: s.tabs[i].id } : {})),

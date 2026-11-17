@@ -10,6 +10,23 @@ const active = () => {
 describe('tabsStore', () => {
   beforeEach(() => useTabs.setState(initialTabsState()))
 
+  it('move переставляет вкладку, активная не меняется; неверные индексы — без изменений', () => {
+    const st = useTabs.getState()
+    st.newTab()
+    st.newTab()
+    const [a, b, c] = useTabs.getState().tabs.map((t) => t.id)
+    useTabs.getState().move(0, 2)
+    expect(useTabs.getState().tabs.map((t) => t.id)).toEqual([b, c, a])
+    expect(useTabs.getState().active).toBe(c)
+    useTabs.getState().move(2, 0)
+    expect(useTabs.getState().tabs.map((t) => t.id)).toEqual([a, b, c])
+    const before = useTabs.getState().tabs
+    useTabs.getState().move(1, 1)
+    useTabs.getState().move(-1, 0)
+    useTabs.getState().move(0, 3)
+    expect(useTabs.getState().tabs).toBe(before)
+  })
+
   it('starts with one tab and one pane', () => {
     expect(useTabs.getState().tabs).toHaveLength(1)
     expect(leaves(active().tree)).toHaveLength(1)
