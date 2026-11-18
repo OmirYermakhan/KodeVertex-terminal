@@ -869,6 +869,16 @@ input.q-own::placeholder { color: var(--muted); font-style: italic; opacity: 1; 
 .qu-now { display: inline-flex; align-items: center; justify-content: center; }
 .qu-now:hover { color: var(--accText); }
 
+/* Побочный вопрос /btw (над очередью, как .editdock): полоса --acc, вопрос приглушённо, ответ
+   прокручивается, не вытесняя ленту. */
+.btw { border-top: 1px solid var(--rule); border-left: 2px solid var(--acc); }
+.btw.err { border-left-color: var(--warn); }
+.btw .bt-r { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.bt-q { padding: 0 16px 6px; font-family: var(--font-code); font-size: 11.5px; line-height: normal; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bt-a { padding: 0 16px 10px; max-height: min(40vh, 320px); overflow-y: auto; }
+.bt-a .thinking { margin: 0; }
+.bt-err { font-family: var(--font-code); font-size: 11.5px; color: var(--warn); white-space: pre-wrap; }
+
 /* Правка отправленного сообщения (над строкой ввода, как очередь): заголовок .dh, полоса --acc,
    строка «что сделает ↵» и предупреждение про файлы (--warn). */
 .editdock { border-top: 1px solid var(--rule); border-left: 2px solid var(--acc); }

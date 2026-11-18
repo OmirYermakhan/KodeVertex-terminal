@@ -1224,3 +1224,15 @@ export function adoptClaude(paneId: string, pc: PaneClaude, procId: string | nul
     }))
   })
 }
+
+/**
+ * Для `/btw`: где и с чем спрашивать. Есть сессия панели (не закрыта `/exit`) — её каталог,
+ * id (ответвление видит разговор до этого места), модель и усилие; нет — каталог панели, без контекста.
+ */
+export function btwContext(paneId: string, paneCwd: string | undefined): { cwd: string | null; resume: string | null; model: string | null; effort: string | null } {
+  const p = useClaudeSessions.getState().sessions[paneId]
+  if (p && !p.closed && p.state.sessionId !== null && p.cwd !== null) {
+    return { cwd: p.cwd, resume: p.state.sessionId, model: p.model, effort: p.effort }
+  }
+  return { cwd: paneCwd ?? p?.cwd ?? null, resume: null, model: p?.model ?? null, effort: p?.effort ?? null }
+}

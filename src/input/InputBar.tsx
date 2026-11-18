@@ -10,6 +10,7 @@ import { useHints } from '../completion/useHints'
 import { HintsPopup } from '../completion/HintsPopup'
 import { shellEscape } from '../completion/completion'
 import { isClaudeExit, isClearCommand, isModelCommand, isResumeCommand, isShellClear, parseClaudeCommand } from './claudeCommand'
+import { btwQuestion, NO_QUESTION } from '../claude/btw'
 import { ModelPicker } from '../claude/ModelPicker'
 import { initialPicker, pickerKey, type ModelChoice, type PickerState } from '../claude/models'
 import { ResumePicker } from '../claude/ResumePicker'
@@ -112,6 +113,10 @@ export interface InputBarProps {
   onExitClaude?(): void
   /** ⌃D на пустой строке: EOF в оболочку. */
   onEof?(): void
+  /** `/btw вопрос` (в любом режиме, и пока Claude работает): побочный вопрос, ход не прерывается. */
+  onBtw?(question: string): void
+  /** esc: закрыть ответ на `/btw`, если он открыт. true — закрыт (esc больше ничего не делает). */
+  onEscBtw?(): boolean
   /** `/model` (в любом режиме: в оболочке это не команда): выбор модели. Нет — `/model` уходит как набран. */
   onChooseModel?(choice: ModelChoice): void
   /** Текущие модель (псевдоним, null — по умолчанию) и усилие панели — для карточки выбора. */
@@ -447,6 +452,15 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       // Строку не чистим: родитель сразу возвращает в неё черновик (restore).
       q.edit.onSubmit(d.text, d.tokens.length > 0 ? d.tokens : undefined)
       return
+    } else if (!q.continuation && q.onBtw && btwQuestion(readable(docOf(text, tokens))) !== null) {
+      const question = btwQuestion(readable(docOf(text, tokens))) ?? ''
+      if (question === '') {
+        showNote(NO_QUESTION)
+        return
+      }
+      completionRef.current.close()
+      hintsRef.current.close()
+      q.onBtw(question)
     } else if (!q.continuation && isClearCommand(text) && q.onNewClaude) {
       completionRef.current.close()
       hintsRef.current.close()
@@ -1069,6 +1083,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
     if (e.key === 'Escape' && plain && props.current.edit) {
       e.preventDefault()
       props.current.edit.onCancel()
+      return
+    }
+    // Открыт ответ на /btw: esc сначала закрывает его (ход Claude не прерывается).
+    if (e.key === 'Escape' && plain && props.current.onEscBtw?.()) {
+      e.preventDefault()
       return
     }
     // Идёт ход Claude: esc прерывает его (пустая строка — последнее сообщение на правку).

@@ -37,6 +37,8 @@ import { answerLink, askOpenLink, useLinkAsk } from '../feed/linkAsk'
 import { dropPaneFeed, restoredPane, scheduleSave, setPaneFeed } from '../persist/session'
 import { InputBar, type InputBarHandle, type InputSnapshot } from '../input/InputBar'
 import { QueuePanel, type QueuePanelHandle } from '../claude/QueuePanel'
+import { BtwCard } from '../claude/BtwCard'
+import { askBtw, closeBtw, useBtw } from '../claude/btw'
 import { Collapse } from '../ui/motion'
 import { AgentsPanel, type AgentsPanelHandle } from '../claude/AgentsPanel'
 import { blockText, blockTextOf, cleanSerializedHtml } from '../feed/blockHtml'
@@ -998,6 +1000,11 @@ export function TerminalPane(p: TerminalPaneProps) {
   )
   // ⌃D на пустой строке — EOF в оболочку, как в обычном терминале (zsh с ignoreeof его проигнорирует).
   const onEof = useCallback(() => handleRef.current?.write('\x04'), [])
+  // `/btw`: побочный вопрос — ответ карточкой над очередью, разговор не меняется.
+  const btw = useBtw((s) => s.byPane[p.paneId])
+  const onBtw = useCallback((q: string) => askBtw(p.paneId, cwdRef.current, q), [p.paneId])
+  const onEscBtw = useCallback(() => closeBtw(p.paneId), [p.paneId])
+  useEffect(() => () => void closeBtw(p.paneId), [p.paneId])
   const onAsk = useCallback(
     (text: string, tokens?: Attachment[], now?: boolean) => {
       setSelected(null)
@@ -1596,6 +1603,14 @@ export function TerminalPane(p: TerminalPaneProps) {
           />
           </ErrorBoundary>
         )}
+        {btw && !alt && (
+          <ErrorBoundary name="побочный вопрос" resetKey={btw.seq}>
+            <BtwCard answer={btw} onClose={() => {
+              closeBtw(p.paneId)
+              inputRef.current?.focus()
+            }} />
+          </ErrorBoundary>
+        )}
         {/* Смонтирована и при пустой очереди: уход последней строки анимируется (QueuePanel рисует null). */}
         {!alt && (
           <ErrorBoundary name="очередь сообщений">
@@ -1644,6 +1659,8 @@ export function TerminalPane(p: TerminalPaneProps) {
           onInterrupt={onInterrupt}
           onEscInterrupt={onEscInterrupt}
           onEof={onEof}
+          onBtw={onBtw}
+          onEscBtw={onEscBtw}
           onClearFeed={onClearFeed}
           preview={preview.api}
           atFeed={atFeed}

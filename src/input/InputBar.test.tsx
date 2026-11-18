@@ -1433,3 +1433,48 @@ describe('подсказка следующего сообщения (режим
     expect(onDismissSuggestion).not.toHaveBeenCalled()
   })
 })
+
+describe('InputBar: /btw', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    invoke.mockResolvedValue([])
+    resetHistory()
+  })
+
+  it('`/btw вопрос` в режиме Claude, пока идёт ход, — побочный вопрос, не сообщение в разговор', () => {
+    const onBtw = vi.fn()
+    const s = setup({ onBtw, claudeBusy: true })
+    s.set('claude')
+    s.key('Enter')
+    s.set('/btw что ты сейчас делаешь?')
+    s.key('Enter')
+    expect(onBtw).toHaveBeenCalledWith('что ты сейчас делаешь?')
+    expect(s.p.onAsk).not.toHaveBeenCalled()
+    expect(s.ta.value).toBe('')
+  })
+
+  it('`/btw` в оболочке — тоже вопрос, в PTY не уходит; без текста — подсказка, строка остаётся', () => {
+    const onBtw = vi.fn()
+    const s = setup({ onBtw })
+    s.set('/btw')
+    s.key('Enter')
+    expect(onBtw).not.toHaveBeenCalled()
+    expect(s.p.onRun).not.toHaveBeenCalled()
+    expect(s.container.textContent).toContain('Напишите вопрос после /btw')
+    s.set('/btw где лежит конфиг?')
+    s.key('Enter')
+    expect(onBtw).toHaveBeenCalledWith('где лежит конфиг?')
+    expect(s.p.onRun).not.toHaveBeenCalled()
+  })
+
+  it('esc сначала закрывает ответ /btw и не прерывает ход', () => {
+    const onEscBtw = vi.fn(() => true)
+    const onEscInterrupt = vi.fn(() => true)
+    const s = setup({ onEscBtw, onEscInterrupt })
+    s.set('claude')
+    s.key('Enter')
+    s.key('Escape')
+    expect(onEscBtw).toHaveBeenCalledTimes(1)
+    expect(onEscInterrupt).not.toHaveBeenCalled()
+  })
+})

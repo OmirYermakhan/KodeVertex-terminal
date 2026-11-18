@@ -143,9 +143,15 @@ pub struct Launch {
   pub diagrams_hint: bool,
   /// Окно-владелец (метка): его перезагрузка или закрытие останавливает процесс.
   pub owner: Option<String>,
+  /// `/btw` — побочный вопрос: ответвление сессии без записи на диск (`--no-session-persistence`),
+  /// без инструментов (`--tools ""`, `--strict-mcp-config`), с подсказкой отвечать коротко. Разговор не меняется.
+  pub side: bool,
 }
 
 /// Подсказка claude про схемы: терминал рисует блоки ```mermaid картинкой.
+/// Подсказка побочному вопросу `/btw`: ответ из контекста разговора, без инструментов.
+pub const BTW_HINT: &str = "This is a quick side question (/btw) asked while the main conversation continues elsewhere. It is not part of the conversation and you have no tools. Answer briefly and directly from what you already know from the conversation context. Do not try to continue or resume the main task.";
+
 pub const DIAGRAMS_HINT: &str = "This terminal renders ```mermaid code blocks as diagrams. When a diagram genuinely helps explain something (architecture, flow, relationships, steps, timelines, simple charts), draw it as a mermaid block instead of ASCII art. Do not add diagrams when they don't help.";
 
 /// Аргументы `claude` после обязательных: `--permission-mode`, `--model`, `--effort`, `--resume`
@@ -170,6 +176,18 @@ pub fn launch_args(l: &Launch) -> Vec<String> {
     if l.fork {
       a.push("--fork-session".to_string());
     }
+  }
+  if l.side {
+    // Побочный вопрос: только ответ — ни файла сессии, ни инструментов (и MCP), ни подсказок.
+    a.extend([
+      "--no-session-persistence".to_string(),
+      "--tools".to_string(),
+      String::new(),
+      "--strict-mcp-config".to_string(),
+      "--append-system-prompt".to_string(),
+      BTW_HINT.to_string(),
+    ]);
+    return a;
   }
   if l.prompt_suggestions {
     a.extend(["--prompt-suggestions".to_string(), "true".to_string()]);
@@ -652,6 +670,7 @@ pub async fn claude_start(
   fork: Option<bool>,
   prompt_suggestions: Option<bool>,
   diagrams_hint: Option<bool>,
+  side: Option<bool>,
   on_line: Channel<String>,
   on_exit: Channel<ClaudeExit>,
 ) -> Result<String, String> {
@@ -675,6 +694,7 @@ pub async fn claude_start(
       prompt_suggestions: prompt_suggestions.unwrap_or(false),
       diagrams_hint: diagrams_hint.unwrap_or(false),
       owner: Some(window.label().to_string()),
+      side: side.unwrap_or(false),
     },
     move |line| {
       let _ = on_line.send(line);
@@ -964,10 +984,17 @@ mod tests {
     // Значение, похожее на флаг, или пустое — пропускается; --fork-session остаётся.
     let l = Launch { resume: Some("s-1".into()), resume_at: Some("--dangerously-skip-permissions".into()), fork: true, ..Launch::default() };
     assert_eq!(launch_args(&l)[2..], ["--resume", "s-1", "--fork-session"]);
+  }
+
+  #[test]
+  fn side_question_forks_without_persistence_or_tools() {
+    let l = Launch { resume: Some("s-1".into()), fork: true, side: true, prompt_suggestions: true, diagrams_hint: true, ..Default::default() };
+    let a = launch_args(&l);
+    assert_eq!(a[2..], ["--resume", "s-1", "--fork-session", "--no-session-persistence", "--tools", "", "--strict-mcp-config", "--append-system-prompt", BTW_HINT]);
     let l = Launch { resume: Some("s-1".into()), resume_at: Some(String::new()), fork: false, ..Launch::default() };
     assert_eq!(launch_args(&l)[2..], ["--resume", "s-1"]);
     // Модель, усилие и режим при перезапуске сохраняются.
-    let l = Launch { resume: Some("s-1".into()), resume_at: Some("u-9".into()), fork: true, model: Some("fable".into()), effort: Some("high".into()), permission_mode: Some("default".into()), prompt_suggestions: false, diagrams_hint: false, path_env: None, owner: None };
+    let l = Launch { resume: Some("s-1".into()), resume_at: Some("u-9".into()), fork: true, model: Some("fable".into()), effort: Some("high".into()), permission_mode: Some("default".into()), prompt_suggestions: false, diagrams_hint: false, path_env: None, owner: None, side: false };
     assert_eq!(launch_args(&l), ["--permission-mode", "default", "--model", "fable", "--effort", "high", "--resume", "s-1", "--resume-session-at", "u-9", "--fork-session"]);
   }
 
