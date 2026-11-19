@@ -3,6 +3,11 @@
 import { common, createLowlight } from 'lowlight'
 import { extOf } from '../classify'
 
+/**
+ * Один экземпляр на приложение — и для просмотра, и для ответов Claude (rehypeHljs ниже): языки
+ * регистрируются и грамматики компилируются один раз. rehype-highlight создавал свой lowlight
+ * (37 языков заново) на каждый рендер блока markdown — то есть на каждый токен ответа.
+ */
 const lowlight = createLowlight(common)
 const ALIAS: Record<string, string> = { htm: 'xml', vue: 'xml', svelte: 'xml', dart: 'dart', mdx: 'markdown', jsonc: 'json' }
 
@@ -65,4 +70,53 @@ export function highlightLinesIn(lines: string[], lang: string | null): Piece[][
   walk(tree, undefined)
   while (out.length < lines.length) out.push([])
   return out.slice(0, lines.length)
+}
+
+type HElement = { type: string; tagName?: string; properties?: Record<string, unknown>; children?: HElement[]; value?: string }
+
+/** Язык блока по классам code (`language-x`/`lang-x`); false — `no-highlight`. Как в rehype-highlight. */
+function codeLanguage(node: HElement): string | false | undefined {
+  const list = node.properties?.className
+  if (!Array.isArray(list)) return undefined
+  let name: string | undefined
+  for (const v of list) {
+    const value = String(v)
+    if (value === 'no-highlight' || value === 'nohighlight') return false
+    if (!name && value.slice(0, 5) === 'lang-') name = value.slice(5)
+    if (!name && value.slice(0, 9) === 'language-') name = value.slice(9)
+  }
+  return name
+}
+
+const textOf = (n: HElement): string => (n.type === 'text' ? (n.value ?? '') : (n.children ?? []).map(textOf).join(''))
+
+/**
+ * rehype-плагин: подсветка `pre > code.language-x` общим lowlight — то же, что rehype-highlight
+ * с настройками по умолчанию (без угадывания языка; неизвестный язык — блок как есть).
+ */
+export function rehypeHljs() {
+  return transform
+}
+
+function transform(tree: HElement): void {
+  const visit = (node: HElement, parent: HElement | null) => {
+    if (node.type === 'element' && node.tagName === 'code' && parent?.type === 'element' && parent.tagName === 'pre') {
+      highlightCode(node)
+      return
+    }
+    for (const c of node.children ?? []) visit(c, node)
+  }
+  visit(tree, null)
+}
+
+function highlightCode(node: HElement): void {
+  const lang = codeLanguage(node)
+  if (!lang) return
+  const props = (node.properties ??= {})
+  if (!Array.isArray(props.className)) props.className = []
+  const cls = props.className as unknown[]
+  if (!cls.includes('hljs')) cls.unshift('hljs')
+  if (!lowlight.registered(lang)) return
+  const result = lowlight.highlight(lang, textOf(node)) as unknown as HElement
+  if (result.children && result.children.length > 0) node.children = result.children
 }
