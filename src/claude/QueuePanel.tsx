@@ -1,7 +1,7 @@
 // Очередь сообщений Claude над строкой ввода (в .dock, под запросами агента): набранное, пока ход
 // шёл, ждёт конца хода. Строки — приглушённые пузыри «Вы» (макет 04 .you), заголовок — как .dh.
 // «Отправить сейчас» (↵ на строке, кнопка ↑) — сообщение из очереди сразу в идущий ход.
-import { forwardRef, useImperativeHandle, useRef, useState, type KeyboardEvent } from 'react'
+import { forwardRef, memo, useImperativeHandle, useRef, useState, type KeyboardEvent } from 'react'
 import type { QueuedMessage } from './sessionStore'
 import { segments } from '../attach/doc'
 import { CLIP_PATH, Token } from '../attach/tokenView'
@@ -27,7 +27,8 @@ export interface QueuePanelHandle {
   hasFocus(): boolean
 }
 
-export const QueuePanel = forwardRef<QueuePanelHandle, QueuePanelProps>(function QueuePanel(p, ref) {
+// memo: панель перерисовывается на каждый токен ответа Claude, очередь при этом та же.
+export const QueuePanel = memo(forwardRef<QueuePanelHandle, QueuePanelProps>(function QueuePanel(p, ref) {
   const boxRef = useRef<HTMLDivElement>(null)
   const [sel, setSel] = useState<number | null>(null)
   const selected = p.queue.some((m) => m.id === sel) ? sel : null
@@ -174,6 +175,6 @@ export const QueuePanel = forwardRef<QueuePanelHandle, QueuePanelProps>(function
       </div>
     </div>
   )
-})
+}))
 
 export default QueuePanel

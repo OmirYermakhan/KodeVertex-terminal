@@ -36,6 +36,23 @@ describe('Feed', () => {
     expect(screen.getByText('Привет')).toBeInTheDocument()
   })
 
+  it('те же пропсы — лента не перерисовывается, новый или изменённый элемент — только он', () => {
+    const items: FeedItem[] = [{ kind: 'claude', id: 'c1', item: { type: 'user', text: 'Привет' } }]
+    const renderLive = () => null
+    const renderClaude = vi.fn(() => null)
+    const { rerender } = render(<Feed items={items} selectedId={null} renderLive={renderLive} renderClaude={renderClaude} />)
+    expect(renderClaude).toHaveBeenCalledTimes(1)
+    rerender(<Feed items={items} selectedId={null} renderLive={renderLive} renderClaude={renderClaude} />)
+    expect(renderClaude).toHaveBeenCalledTimes(1)
+    // Новый элемент в конце (токен ответа): рисуется только он, готовые элементы не обходятся.
+    const next: FeedItem[] = [...items, { kind: 'claude', id: 'c2', item: { type: 'user', text: 'Ещё' } }]
+    rerender(<Feed items={next} selectedId={null} renderLive={renderLive} renderClaude={renderClaude} />)
+    expect(renderClaude).toHaveBeenCalledTimes(2)
+    // Изменённый элемент (новый объект) — перерисовывается.
+    rerender(<Feed items={[next[0], { ...next[1] }]} selectedId={null} renderLive={renderLive} renderClaude={renderClaude} />)
+    expect(renderClaude).toHaveBeenCalledTimes(3)
+  })
+
   it('карточку подписывает агент по agentId', () => {
     const ag = (id: string, name: string) => ({ id, parentId: null, name, model: 'claude-opus-5-5', status: 'running' as const, now: '', history: [], step: null, startedAt: 0, endedAt: null, tokens: 0 })
     const a1 = ag('main', 'Главный')

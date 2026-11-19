@@ -7,6 +7,8 @@ import { mockupScene } from '../claude/fixtures/mockupScene'
 import { initialTabsState, useTabs } from '../layout/tabsStore'
 import TabBar from './TabBar'
 import * as transfer from '../windows/transfer'
+import { DEFAULTS } from '../settings/settings'
+import { useSettings } from '../settings/store'
 
 vi.mock('../windows/transfer', () => ({
   canMoveToNewWindow: vi.fn(async () => true),
@@ -308,5 +310,22 @@ describe('TabBar', () => {
       expect(transfer.windowAt).not.toHaveBeenCalled()
       expect(ids()).toEqual([a, b, c])
     })
+  })
+
+  it('вкладка входа: своя картинка — маленькая аватарка вместо значка', () => {
+    const img = 'data:image/png;base64,AAAA'
+    const base = { name: 'Manaida', command: 'ssh m', icon: 'server' as const, color: '#3fb950' }
+    useSettings.setState({ settings: { ...DEFAULTS, launchers: [{ id: 'L1', ...base, image: img }, { id: 'L2', ...base }] } })
+    act(() => {
+      useTabs.getState().newTab(undefined, 'L1')
+      useTabs.getState().newTab(undefined, 'L2')
+    })
+    render(<TabBar />)
+    const tabs = screen.getAllByRole('tab')
+    expect(tabs[1].querySelector('img.tab-img')?.getAttribute('src')).toBe(img)
+    expect(tabs[1].querySelector('svg')).toBeNull()
+    expect(tabs[2].querySelector('img')).toBeNull()
+    expect(tabs[2].querySelector('.tab-li svg')).not.toBeNull()
+    useSettings.setState({ settings: DEFAULTS })
   })
 })

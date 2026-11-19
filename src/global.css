@@ -194,6 +194,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 /* Быстрые входы: значок цвета входа (--lc), открытая вкладка — плашка этого цвета, точка — сессия идёт. */
 .stripe { padding-bottom: 8px; }
 .tab-li { display: inline-flex; flex: none; margin-right: 6px; }
+.tab-img { width: 16px; height: 16px; border-radius: 4px; object-fit: cover; display: block; }
 .sb-sep { width: 26px; height: 1px; flex: none; background: var(--rule); margin: 4px 0; }
 .sb-launchers { flex: 1; min-height: 0; width: 100%; overflow-y: auto; scrollbar-width: none; display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .sb-launchers::-webkit-scrollbar { display: none; }

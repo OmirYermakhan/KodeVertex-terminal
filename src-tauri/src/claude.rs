@@ -104,6 +104,16 @@ fn trim_tail(buf: &mut Vec<u8>) {
   }
 }
 
+/// Строка stdout из буфера `read_until` без `\n`/`\r` в конце; None — пустая (одни пробелы).
+/// Буфер забирается: строка UTF-8 становится `String` без копирования (не-UTF-8 — с U+FFFD).
+fn take_line(buf: &mut Vec<u8>) -> Option<String> {
+  while matches!(buf.last(), Some(b'\n' | b'\r')) {
+    buf.pop();
+  }
+  let line = crate::git::lossy(std::mem::take(buf));
+  (!line.trim().is_empty()).then_some(line)
+}
+
 /// Уровни усилия, которые принимает `claude --effort`.
 pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
@@ -293,10 +303,8 @@ impl ClaudeManager {
         match reader.read_until(b'\n', &mut buf) {
           Ok(0) | Err(_) => break,
           Ok(_) => {
-            let line = String::from_utf8_lossy(&buf);
-            let line = line.trim_end_matches(['\n', '\r']);
-            if !line.trim().is_empty() {
-              lock(&out_link).line(line.to_string());
+            if let Some(line) = take_line(&mut buf) {
+              lock(&out_link).line(line);
             }
           }
         }
@@ -953,6 +961,17 @@ mod tests {
       a,
       "-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompt-tool stdio --allow-dangerously-skip-permissions --permission-mode default --model fable --effort high --resume abc-123 --prompt-suggestions true"
     );
+  }
+
+  #[test]
+  fn take_line_strips_newline_and_skips_blank() {
+    let mut b = b"{\"a\":\"\xd0\xbf\"}\r\n".to_vec();
+    assert_eq!(take_line(&mut b).as_deref(), Some("{\"a\":\"п\"}"));
+    assert!(b.is_empty());
+    assert_eq!(take_line(&mut b" \t\r\n".to_vec()), None);
+    assert_eq!(take_line(&mut b"x \xff\n".to_vec()).as_deref(), Some("x \u{FFFD}"));
+    // Пробелы в конце строки (не перевод строки) сохраняются, как раньше.
+    assert_eq!(take_line(&mut b"x \n".to_vec()).as_deref(), Some("x "));
   }
 
   #[test]
