@@ -29,7 +29,7 @@ export const ActionCard = memo(function ActionCard({ item, agent, id, cwd }: { i
   const long = detail.length > LONG || detail.includes('\n')
   const [open, setOpen] = useState(false)
   const clip = long && !open
-  const cls = ['act', running && 'run', item.status === 'error' && 'fail', long && 'long', clip && 'clip'].filter(Boolean).join(' ')
+  const cls = ['act', running && 'run', item.status === 'error' && 'fail', long && 'long', clip && 'act-clip'].filter(Boolean).join(' ')
   const toggle = () => {
     // Выделение текста мышью не должно сворачивать карточку.
     if (window.getSelection()?.toString()) return

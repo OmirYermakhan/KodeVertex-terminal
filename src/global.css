@@ -592,8 +592,8 @@ input.q-own::placeholder { color: var(--muted); font-style: italic; opacity: 1; 
 .act.long .who { display: flex; gap: 6px; }
 .act-tg { margin-left: auto; color: var(--muted); }
 .act.long:hover .act-tg { color: var(--strong); }
-.act.clip .act-body { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.act.long:not(.clip) .act-body b { white-space: pre-wrap; }
+.act.act-clip .act-body { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.act.long:not(.act-clip) .act-body b { white-space: pre-wrap; }
 .act-now { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .spin { width: 10px; height: 10px; box-sizing: border-box; border: 1.5px solid var(--rule); border-top-color: var(--acc); border-radius: 50%; animation: kv-spin 0.8s linear infinite; flex: none; }
 @keyframes kv-spin { to { transform: rotate(360deg); } }
