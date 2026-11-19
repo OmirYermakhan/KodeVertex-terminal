@@ -15,7 +15,6 @@
     "core:window:allow-inner-size",
     "opener:default",
     "core:window:allow-set-badge-count",
-    "notification:default",
-    "dialog:allow-open"
+    "notification:default"
   ]
 }

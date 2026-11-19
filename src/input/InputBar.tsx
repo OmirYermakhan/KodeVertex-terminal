@@ -570,8 +570,8 @@ export const InputBar = memo(forwardRef<InputBarHandle, InputBarProps>(function 
         insertPaths(paths)
         edRef.current?.focus()
       })
-      .catch(() => {})
-  }, [insertPaths])
+      .catch((e: unknown) => showNote(String(e)))
+  }, [insertPaths, showNote])
 
   const completion = useCompletion({
     cwd: () => props.current.cwd(),

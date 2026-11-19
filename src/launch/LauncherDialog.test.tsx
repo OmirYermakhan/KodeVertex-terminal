@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const dialogOpen = vi.fn()
 const invoke = vi.fn()
-vi.mock('@tauri-apps/plugin-dialog', () => ({ open: (...a: unknown[]) => dialogOpen(...a) }))
+vi.mock('../ui/pickPaths', () => ({ pickPaths: (...a: unknown[]) => dialogOpen(...a) }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 vi.mock('./runner', () => ({ openLauncher: vi.fn() }))
 
@@ -35,7 +35,7 @@ describe('LauncherDialog', () => {
   })
 
   it('папка без команды — вход сохраняется с именем папки', async () => {
-    dialogOpen.mockResolvedValue('/Users/x/proj')
+    dialogOpen.mockResolvedValue(['/Users/x/proj'])
     render(<LauncherDialog editId={null} onClose={() => {}} />)
     fireEvent.click(screen.getByRole('button', { name: 'Выбрать…' }))
     await waitFor(() => expect(saveBtn().disabled).toBe(false))
@@ -46,7 +46,7 @@ describe('LauncherDialog', () => {
   })
 
   it('своя картинка — сохраняется data-URL', async () => {
-    dialogOpen.mockResolvedValue('/i.png')
+    dialogOpen.mockResolvedValue(['/i.png'])
     invoke.mockResolvedValue('data:image/png;base64,AAA')
     render(<LauncherDialog editId={null} onClose={() => {}} />)
     const tile = screen.getByRole('radio', { name: 'Своя картинка' })
@@ -59,7 +59,7 @@ describe('LauncherDialog', () => {
   })
 
   it('картинка не прочиталась — показана ошибка, значок прежний', async () => {
-    dialogOpen.mockResolvedValue('/i.txt')
+    dialogOpen.mockResolvedValue(['/i.txt'])
     invoke.mockRejectedValue('не картинка')
     render(<LauncherDialog editId={null} onClose={() => {}} />)
     fireEvent.click(screen.getByRole('radio', { name: 'Своя картинка' }))
@@ -72,7 +72,7 @@ describe('LauncherDialog', () => {
   })
 
   it('в StrictMode выбор папки тоже работает', async () => {
-    dialogOpen.mockResolvedValue('/Users/x/proj')
+    dialogOpen.mockResolvedValue(['/Users/x/proj'])
     render(
       <StrictMode>
         <LauncherDialog editId={null} onClose={() => {}} />
@@ -99,7 +99,7 @@ describe('LauncherDialog', () => {
     const tile = screen.getByRole('radio', { name: 'Своя картинка' })
     fireEvent.click(tile)
     expect(await screen.findByText(/boom/)).toBeTruthy()
-    dialogOpen.mockResolvedValueOnce(null)
+    dialogOpen.mockResolvedValueOnce([])
     fireEvent.click(tile)
     await waitFor(() => expect(screen.queryByText(/boom/)).toBeNull())
   })
@@ -109,5 +109,12 @@ describe('LauncherDialog', () => {
     render(<LauncherDialog editId={null} onClose={() => {}} />)
     fireEvent.click(screen.getByRole('button', { name: 'Выбрать…' }))
     expect(await screen.findByText('Не удалось открыть выбор папки')).toBeTruthy()
+  })
+
+  it('macOS отказал в панели — показан текст из бэкенда', async () => {
+    dialogOpen.mockRejectedValue('перезапустите приложение')
+    render(<LauncherDialog editId={null} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Выбрать…' }))
+    expect(await screen.findByText('перезапустите приложение')).toBeTruthy()
   })
 })

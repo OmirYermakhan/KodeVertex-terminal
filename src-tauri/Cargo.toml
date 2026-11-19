@@ -34,7 +34,8 @@ tauri-plugin-notification = "2"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 base64 = "0.23.1"
 arboard = { version = "3.7.0", default-features = false, features = ["image-data"] }
-tauri-plugin-dialog = "2"
+# Системный диалог выбора файлов (см. pick.rs); версия та же, что была у tauri-plugin-dialog.
+rfd = { version = "0.17", default-features = false }
 # Уже есть в дереве зависимостей (serde_json): быстрый поиск подстрок в строках журналов.
 memchr = "2"
 

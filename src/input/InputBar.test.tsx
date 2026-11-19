@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
-const dialogOpen = vi.fn(() => Promise.resolve(null))
-vi.mock('@tauri-apps/plugin-dialog', () => ({ open: () => dialogOpen() }))
+const dialogOpen = vi.fn(() => Promise.resolve([] as string[]))
+vi.mock('../ui/pickPaths', () => ({ pickPaths: () => dialogOpen() }))
 
 const { InputBar, EDIT_HINT, ASK_HINT, CLAUDE_HINT, CLAUDE_BUSY_HINT, CLAUDE_PLACEHOLDER, CONTINUATION_NOTE, PLACEHOLDER, PREVIEW_HINT, UNSUPPORTED_NOTE } = await import('./InputBar')
 const { createPreview } = await import('../attach/preview/usePreview')

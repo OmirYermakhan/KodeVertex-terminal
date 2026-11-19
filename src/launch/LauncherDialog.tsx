@@ -1,7 +1,7 @@
 // Окно «Новый вход» / «Изменить вход»: команда, папка, имя, значок (или своя картинка), цвет. ↵ — сохранить и открыть, esc — закрыть.
 import { useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { open } from '@tauri-apps/plugin-dialog'
+import { pickPaths } from '../ui/pickPaths'
 import { useSettings } from '../settings/store'
 import { LAUNCHER_COLORS, LAUNCHER_ICONS, MAX_LAUNCHERS, folderName, suggestName, type Launcher, type LauncherIcon as IconId } from './launchers'
 import { ICON_LABELS, LauncherIcon } from './LauncherIcon'
@@ -55,23 +55,23 @@ export default function LauncherDialog({ editId, onClose }: LauncherDialogProps)
 
   const pickFolder = async () => {
     try {
-      const dir = await open({ directory: true, title: 'Папка проекта' })
+      const [dir] = await pickPaths({ directory: true, title: 'Папка проекта' })
       if (!alive.current) return
       setFolderError(null)
-      if (typeof dir === 'string') setCwd(dir)
-    } catch {
-      if (alive.current) setFolderError('Не удалось открыть выбор папки')
+      if (dir) setCwd(dir)
+    } catch (e) {
+      // invoke отклоняется строкой из pick.rs — она объясняет, что делать.
+      if (alive.current) setFolderError(typeof e === 'string' ? e : 'Не удалось открыть выбор папки')
     }
   }
 
   const pickImage = async () => {
     try {
-      const path = await open({
-        multiple: false,
+      const [path] = await pickPaths({
         filters: [{ name: 'Картинка', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }],
       })
       if (!alive.current) return
-      if (typeof path !== 'string') {
+      if (!path) {
         setImageError(null)
         return
       }

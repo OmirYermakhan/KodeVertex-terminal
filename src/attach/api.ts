@@ -1,7 +1,7 @@
 // Вложения ↔ Rust: что за путь (тип, размер, миниатюра), картинка из буфера, диалог файлов.
 // Сами файлы webview не читает: base64 и уменьшение картинок — в Rust при отправке.
 import { invoke } from '@tauri-apps/api/core'
-import { open } from '@tauri-apps/plugin-dialog'
+import { pickPaths } from '../ui/pickPaths'
 import { pathAttachment, type PathInfo } from './classify'
 import type { Attachment } from './types'
 
@@ -30,8 +30,6 @@ export function screenshotLabel(existing: readonly Attachment[]): string {
 }
 
 /** Скрепка / ⌘O: системный диалог выбора файлов (несколько). Отмена — []. */
-export async function pickFiles(): Promise<string[]> {
-  const r = await open({ multiple: true, directory: false, title: 'Вложить в сообщение' })
-  if (!r) return []
-  return Array.isArray(r) ? r : [r]
+export function pickFiles(): Promise<string[]> {
+  return pickPaths({ multiple: true, title: 'Вложить в сообщение' })
 }

@@ -9,6 +9,7 @@ mod fonts;
 mod fs_complete;
 mod git;
 mod history;
+mod pick;
 mod preview;
 mod project;
 mod pty;
@@ -115,7 +116,6 @@ pub fn run() {
     .plugin(tauri_plugin_opener::init())
     .plugin(nav_guard())
     .plugin(tauri_plugin_notification::init())
-    .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       settings::settings_load,
       settings::settings_save,
@@ -127,6 +127,7 @@ pub fn run() {
       fs_complete::fs_preview,
       git::git_info,
       history::shell_history,
+      pick::pick_paths,
       pty::pty_spawn,
       pty::pty_write,
       pty::pty_resize,
