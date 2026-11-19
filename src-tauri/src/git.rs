@@ -2,8 +2,7 @@ use serde::Serialize;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -41,7 +40,7 @@ pub(crate) const GIT_SAFE_CONFIG: &[&str] = &[
 /// Запускает `program args` в `cwd` с окружением `env`; убивает процесс по `deadline`.
 /// None при ошибке, таймауте или ненулевом коде. Вывод без хвостовых пробелов.
 pub(crate) fn run_cmd(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)], deadline: Instant) -> Option<String> {
-  run_cmd_capped(program, args, cwd, env, deadline, DEFAULT_OUT_MAX).map(|(s, _)| s.trim_end().to_string())
+  run_cmd_capped(program, args, cwd, env, deadline, DEFAULT_OUT_MAX).map(|(s, _)| trim_end_owned(s))
 }
 
 /// Общий потолок вывода: чужой репозиторий не должен раздуть память.
@@ -51,6 +50,24 @@ pub(crate) const DEFAULT_OUT_MAX: usize = 16 * 1024 * 1024;
 /// (контекстная строка diff « ») сохраняются. При превышении процесс убивается, вывод
 /// усечён до `max` байт, второй элемент — true. Не-UTF-8 заменяется на U+FFFD.
 pub(crate) fn run_cmd_capped(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)], deadline: Instant, max: usize) -> Option<(String, bool)> {
+  let c = capture(program, args, cwd, env, deadline, max)?;
+  (c.success || c.capped).then(|| (lossy(c.out), c.capped))
+}
+
+/// Вывод процесса, снятый `capture`.
+struct Captured {
+  out: Vec<u8>,
+  /// Вывод превысил потолок: усечён, процесс убит (кода нет).
+  capped: bool,
+  success: bool,
+  code: Option<i32>,
+}
+
+/// Общий запуск для `run_cmd*`: stdout читается в отдельном потоке (большой вывод не блокирует
+/// процесс), результат приходит по каналу — без опроса с шагом в несколько миллисекунд. Больше
+/// `max` байт — процесс убивается. None — не запустился или не успел к `deadline` (убит).
+/// Поток чтения при таймауте не ждём: он сам завершится на EOF после убийства процесса.
+fn capture(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)], deadline: Instant, max: usize) -> Option<Captured> {
   let mut child = Command::new(program)
     .args(args)
     .current_dir(cwd)
@@ -61,38 +78,58 @@ pub(crate) fn run_cmd_capped(program: &str, args: &[&str], cwd: &Path, env: &[(&
     .spawn()
     .ok()?;
   let out = child.stdout.take()?;
-  let capped = Arc::new(AtomicBool::new(false));
-  let flag = capped.clone();
-  // Читаем в отдельном потоке, чтобы большой вывод не блокировал процесс до таймаута.
-  let reader = std::thread::spawn(move || {
+  let (tx, rx) = mpsc::channel();
+  std::thread::spawn(move || {
     let mut buf = Vec::new();
     let _ = out.take(max as u64 + 1).read_to_end(&mut buf);
-    if buf.len() > max {
-      buf.truncate(max);
-      flag.store(true, Ordering::SeqCst);
-    }
-    buf
+    let capped = buf.len() > max;
+    buf.truncate(max);
+    let _ = tx.send((buf, capped));
   });
+  let kill = |child: &mut std::process::Child| {
+    let _ = child.kill();
+    let _ = child.wait();
+  };
+  let Ok((out, capped)) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) else {
+    kill(&mut child);
+    return None;
+  };
+  if capped {
+    kill(&mut child);
+    return Some(Captured { out, capped, success: false, code: None });
+  }
+  // stdout закрыт — процесс уже выходит; ждём код, но не дольше дедлайна.
   let status = loop {
-    if capped.load(Ordering::SeqCst) {
-      let _ = child.kill();
-      let _ = child.wait();
-      let buf = reader.join().ok()?;
-      return Some((String::from_utf8_lossy(&buf).into_owned(), true));
-    }
     match child.try_wait() {
       Ok(Some(st)) => break st,
-      Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+      Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(1)),
       _ => {
-        let _ = child.kill();
-        let _ = child.wait();
+        kill(&mut child);
         return None;
       }
     }
   };
-  let buf = reader.join().ok()?;
-  let truncated = capped.load(Ordering::SeqCst);
-  (status.success() || truncated).then(|| (String::from_utf8_lossy(&buf).into_owned(), truncated))
+  Some(Captured { out, capped, success: status.success(), code: status.code() })
+}
+
+/// Две независимые задачи (обычно два процесса git) параллельно: ответ — за время более долгой.
+pub(crate) fn both<A: Send, B: Send>(a: impl FnOnce() -> A + Send, b: impl FnOnce() -> B + Send) -> (A, B) {
+  std::thread::scope(|s| {
+    let hb = s.spawn(b);
+    let ra = a();
+    (ra, hb.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+  })
+}
+
+/// Байты в строку без копии, если это уже UTF-8; иначе — с заменой на U+FFFD.
+pub(crate) fn lossy(buf: Vec<u8>) -> String {
+  String::from_utf8(buf).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+}
+
+/// Срез хвостовых пробелов на месте, без новой строки.
+fn trim_end_owned(mut s: String) -> String {
+  s.truncate(s.trim_end().len());
+  s
 }
 
 /// Аргументы `git`: защитные `-c`, `-C <cwd>`, затем `args`. Перекрытия фильтров сюда не
@@ -180,34 +217,7 @@ fn filter_overrides_from(names: &str) -> Vec<String> {
 
 /// Как `run_cmd`, но отдаёт вывод и при ненулевом коде (вместе с кодом). None — не запустился или не успел.
 fn run_cmd_code(program: &str, args: &[&str], cwd: &Path, env: &[(&str, &str)], deadline: Instant) -> Option<(String, Option<i32>)> {
-  let mut child = Command::new(program)
-    .args(args)
-    .current_dir(cwd)
-    .envs(env.iter().copied())
-    .stdin(Stdio::null())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::null())
-    .spawn()
-    .ok()?;
-  let out = child.stdout.take()?;
-  let reader = std::thread::spawn(move || {
-    let mut buf = Vec::new();
-    let _ = out.take(DEFAULT_OUT_MAX as u64).read_to_end(&mut buf);
-    buf
-  });
-  let status = loop {
-    match child.try_wait() {
-      Ok(Some(st)) => break st,
-      Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
-      _ => {
-        let _ = child.kill();
-        let _ = child.wait();
-        return None;
-      }
-    }
-  };
-  let buf = reader.join().ok()?;
-  Some((String::from_utf8_lossy(&buf).trim_end().to_string(), status.code()))
+  capture(program, args, cwd, env, deadline, DEFAULT_OUT_MAX).map(|c| (trim_end_owned(lossy(c.out)), c.code))
 }
 
 /// Дедлайн подготовительных команд (корень, ветка, конфиг) — общий.
@@ -227,12 +237,18 @@ fn git_info_with(cwd: &Path, list_filters: FilterLister) -> GitInfo {
   let Some(root) = run_git(cwd, &["rev-parse", "--show-toplevel"], prep).filter(|s| !s.is_empty()) else {
     return GitInfo::default();
   };
-  let branch = run_git(cwd, &["branch", "--show-current"], prep)
-    .filter(|s| !s.is_empty())
-    .or_else(|| run_git(cwd, &["rev-parse", "--short", "HEAD"], prep).filter(|s| !s.is_empty()));
+  // Ветка и список фильтров независимы (чтение конфига ничего не запускает) — параллельно.
+  let (branch, filters) = both(
+    || {
+      run_git(cwd, &["branch", "--show-current"], prep)
+        .filter(|s| !s.is_empty())
+        .or_else(|| run_git(cwd, &["rev-parse", "--short", "HEAD"], prep).filter(|s| !s.is_empty()))
+    },
+    || list_filters(cwd, prep),
+  );
   // Список фильтров не получен — status не запускаем вовсе (fail closed): без перекрытий
   // `git status` выполнил бы clean-фильтр из чужого конфига.
-  let Some(filters) = list_filters(cwd, prep) else { return GitInfo { root: Some(root), branch, dirty: false } };
+  let Some(filters) = filters else { return GitInfo { root: Some(root), branch, dirty: false } };
   let Some(c) = cwd.to_str() else { return GitInfo { root: Some(root), branch, dirty: false } };
   let env = git_env(&filters, &[]);
   let env = env_refs(&env);
@@ -341,6 +357,37 @@ pub(crate) mod tests {
     let r = run_cmd("sleep", &["5"], Path::new("."), &[], start + Duration::from_millis(200));
     assert!(r.is_none());
     assert!(start.elapsed() < Duration::from_secs(2), "took {:?}", start.elapsed());
+  }
+
+  #[test]
+  fn capture_gives_code_trims_and_caps() {
+    let far = || Instant::now() + Duration::from_secs(5);
+    let sh = |script: &str| vec!["-c".to_string(), script.to_string()];
+    let a = sh("printf 'hi  \\n\\n'; exit 3");
+    let args: Vec<&str> = a.iter().map(String::as_str).collect();
+    // Код возвращается и при ошибке; хвостовые пробелы срезаны.
+    assert_eq!(run_cmd_code("sh", &args, Path::new("."), &[], far()), Some(("hi".to_string(), Some(3))));
+    // Ненулевой код — None у run_cmd и run_cmd_capped.
+    assert_eq!(run_cmd("sh", &args, Path::new("."), &[], far()), None);
+    assert_eq!(run_cmd_capped("sh", &args, Path::new("."), &[], far(), 100), None);
+    // Вывод больше потолка: усечён, процесс убит, успех не нужен.
+    let a = sh("while :; do echo yyyyyyyy; done");
+    let args: Vec<&str> = a.iter().map(String::as_str).collect();
+    let start = Instant::now();
+    assert_eq!(run_cmd_capped("sh", &args, Path::new("."), &[], far(), 10), Some(("yyyyyyyy\ny".to_string(), true)));
+    assert!(start.elapsed() < Duration::from_secs(2));
+    // Пробелы в конце у run_cmd_capped сохраняются; не-UTF-8 — U+FFFD.
+    let a = sh("printf 'a \\377\\n'");
+    let args: Vec<&str> = a.iter().map(String::as_str).collect();
+    assert_eq!(run_cmd_capped("sh", &args, Path::new("."), &[], far(), 100), Some(("a \u{FFFD}\n".to_string(), false)));
+  }
+
+  #[test]
+  fn both_runs_in_parallel() {
+    let start = Instant::now();
+    let nap = || std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(both(|| (nap(), 1).1, || (nap(), "b").1), (1, "b"));
+    assert!(start.elapsed() < Duration::from_millis(280), "took {:?}", start.elapsed());
   }
 
   #[test]

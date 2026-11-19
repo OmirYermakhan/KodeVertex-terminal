@@ -35,6 +35,8 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 base64 = "0.23.1"
 arboard = { version = "3.7.0", default-features = false, features = ["image-data"] }
 tauri-plugin-dialog = "2"
+# Уже есть в дереве зависимостей (serde_json): быстрый поиск подстрок в строках журналов.
+memchr = "2"
 
 [dev-dependencies]
 tempfile = "3.27.0"
@@ -55,3 +57,9 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.zune-jpeg]
 opt-level = 3
+
+# Release: меньше и быстрее бинарь. panic не трогаем: хук паники пишет журнал (diag).
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

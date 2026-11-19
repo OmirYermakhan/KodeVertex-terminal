@@ -158,7 +158,7 @@ fn each_line_ex(path: &Path, from: u64, max: u64, tail: bool, mut f: impl FnMut(
     }
     let take = buf.len().min((max - read) as usize);
     let chunk = &buf[..take];
-    let (part, end) = match chunk.iter().position(|&b| b == b'\n') {
+    let (part, end) = match memchr::memchr(b'\n', chunk) {
       Some(i) => (&chunk[..i], Some(i + 1)),
       None => (chunk, None),
     };
@@ -189,43 +189,39 @@ fn each_line_ex(path: &Path, from: u64, max: u64, tail: bool, mut f: impl FnMut(
 /// Сообщение разговора из строки файла; None — служебное, мета, субагент, результат инструмента.
 fn message_of(line: &[u8]) -> Option<HistoryMessage> {
   // Быстрый отсев без разбора JSON: в строке сообщения есть роль.
-  let has = |pat: &[u8]| line.windows(pat.len()).any(|w| w == pat);
+  let has = |pat: &[u8]| memchr::memmem::find(line, pat).is_some();
   if !has(b"\"user\"") && !has(b"\"assistant\"") {
     return None;
   }
-  let v: Value = serde_json::from_slice(line).ok()?;
-  let flag = |k: &str| v.get(k).and_then(Value::as_bool) == Some(true);
-  if flag("isSidechain") || flag("isMeta") || flag("isCompactSummary") || flag("isVisibleInTranscriptOnly") {
+  // Только нужные поля: результаты инструментов и прочее пропускаются без построения `Value`.
+  let v: raw::Line = serde_json::from_slice(line).ok()?;
+  if v.is_sidechain.is_true() || v.is_meta.is_true() || v.is_compact_summary.is_true() || v.is_visible_in_transcript_only.is_true() {
     return None;
   }
-  let msg = v.get("message")?;
-  let content = msg.get("content")?;
-  match v.get("type").and_then(Value::as_str)? {
+  let msg = v.message?;
+  let content = msg.content?;
+  match v.kind.as_str()? {
     "user" => {
       // Уведомления задач и прочее не от человека.
-      if let Some(kind) = v.get("origin").and_then(|o| o.get("kind")).and_then(Value::as_str)
+      if let Some(kind) = v.origin_kind.as_str()
         && kind != "human"
       {
         return None;
       }
       let text = match content {
-        Value::String(s) => s.clone(),
-        Value::Array(blocks) => {
-          if blocks.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result")) {
+        raw::Content::Text(s) => s,
+        raw::Content::Blocks(blocks) => {
+          if blocks.iter().any(|b| b.kind.as_str() == Some("tool_result")) {
             return None;
           }
-          let texts: Vec<&str> = blocks
-            .iter()
-            .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
-            .filter_map(|b| b.get("text").and_then(Value::as_str))
-            .collect();
-          if texts.is_empty() && blocks.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("image")) {
+          let t = texts(&blocks);
+          if t.is_empty() && blocks.iter().any(|b| b.kind.as_str() == Some("image")) {
             "[Изображение]".to_string()
           } else {
-            texts.join("\n")
+            t.join("\n")
           }
         }
-        _ => return None,
+        raw::Content::Other => return None,
       };
       let text = text.trim();
       if text.is_empty() || is_service(text) {
@@ -234,16 +230,11 @@ fn message_of(line: &[u8]) -> Option<HistoryMessage> {
       Some(HistoryMessage { role: "user", text: text.to_string() })
     }
     "assistant" => {
-      if msg.get("model").and_then(Value::as_str) == Some("<synthetic>") {
+      if msg.model.as_str() == Some("<synthetic>") {
         return None;
       }
-      let blocks = content.as_array()?;
-      let text = blocks
-        .iter()
-        .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
-        .filter_map(|b| b.get("text").and_then(Value::as_str))
-        .collect::<Vec<_>>()
-        .join("\n\n");
+      let raw::Content::Blocks(blocks) = content else { return None };
+      let text = texts(&blocks).join("\n\n");
       let text = text.trim();
       if text.is_empty() {
         return None;
@@ -254,11 +245,315 @@ fn message_of(line: &[u8]) -> Option<HistoryMessage> {
   }
 }
 
+/// Тексты блоков `{"type":"text"}`.
+fn texts(blocks: &[raw::Block]) -> Vec<&str> {
+  blocks.iter().filter(|b| b.kind.as_str() == Some("text")).filter_map(|b| b.text.as_str()).collect()
+}
+
+/// Строка разговора в том виде, в каком её читает `message_of`. Разбор снисходителен, как доступ
+/// к полям `serde_json::Value`: значение не того типа — «нет значения», а не ошибка; при повторе
+/// ключа побеждает последний; всё остальное пропускается (`IgnoredAny`) без выделения памяти.
+mod raw {
+  use serde::de::{Deserialize, Deserializer, Error, IgnoredAny, MapAccess, SeqAccess, Visitor};
+  use std::fmt;
+
+  /// Методы `Visitor`, которые отдают `$v` и пропускают значение. Перечисляются нужные.
+  macro_rules! skip {
+    ($v:expr; bool) => {
+      fn visit_bool<E: Error>(self, _: bool) -> Result<Self::Value, E> {
+        Ok($v)
+      }
+    };
+    ($v:expr; num) => {
+      fn visit_i64<E: Error>(self, _: i64) -> Result<Self::Value, E> {
+        Ok($v)
+      }
+      fn visit_u64<E: Error>(self, _: u64) -> Result<Self::Value, E> {
+        Ok($v)
+      }
+      fn visit_f64<E: Error>(self, _: f64) -> Result<Self::Value, E> {
+        Ok($v)
+      }
+      fn visit_unit<E: Error>(self) -> Result<Self::Value, E> {
+        Ok($v)
+      }
+    };
+    ($v:expr; str) => {
+      fn visit_str<E: Error>(self, _: &str) -> Result<Self::Value, E> {
+        Ok($v)
+      }
+    };
+    ($v:expr; seq) => {
+      fn visit_seq<A: SeqAccess<'de>>(self, mut a: A) -> Result<Self::Value, A::Error> {
+        while a.next_element::<IgnoredAny>()?.is_some() {}
+        Ok($v)
+      }
+    };
+    ($v:expr; map) => {
+      fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> Result<Self::Value, A::Error> {
+        while a.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        Ok($v)
+      }
+    };
+  }
+
+  /// `Deserialize` через `deserialize_any` с посетителем `$visitor`.
+  macro_rules! via_any {
+    ($t:ty, $visitor:ident) => {
+      impl<'de> Deserialize<'de> for $t {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+          d.deserialize_any($visitor)
+        }
+      }
+    };
+  }
+
+  fn expecting(f: &mut fmt::Formatter) -> fmt::Result {
+    f.write_str("значение JSON")
+  }
+
+  /// Нужный скаляр: строка или bool. Всё прочее — `Other`.
+  #[derive(Default, Debug, PartialEq)]
+  pub enum Scalar {
+    Str(String),
+    Bool(bool),
+    #[default]
+    Other,
+  }
+
+  impl Scalar {
+    pub fn as_str(&self) -> Option<&str> {
+      match self {
+        Scalar::Str(s) => Some(s),
+        _ => None,
+      }
+    }
+    pub fn is_true(&self) -> bool {
+      *self == Scalar::Bool(true)
+    }
+  }
+
+  struct ScalarV;
+  impl<'de> Visitor<'de> for ScalarV {
+    type Value = Scalar;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+      expecting(f)
+    }
+    fn visit_str<E: Error>(self, v: &str) -> Result<Scalar, E> {
+      Ok(Scalar::Str(v.to_owned()))
+    }
+    fn visit_string<E: Error>(self, v: String) -> Result<Scalar, E> {
+      Ok(Scalar::Str(v))
+    }
+    fn visit_bool<E: Error>(self, v: bool) -> Result<Scalar, E> {
+      Ok(Scalar::Bool(v))
+    }
+    skip!(Scalar::Other; num);
+    skip!(Scalar::Other; seq);
+    skip!(Scalar::Other; map);
+  }
+  via_any!(Scalar, ScalarV);
+
+  /// Ключ объекта: нужное имя или `None` (значение пропускается).
+  struct Key(Option<&'static str>);
+
+  const KEYS: [&str; 11] =
+    ["type", "isSidechain", "isMeta", "isCompactSummary", "isVisibleInTranscriptOnly", "origin", "kind", "message", "content", "model", "text"];
+
+  struct KeyV;
+  impl<'de> Visitor<'de> for KeyV {
+    type Value = Key;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+      expecting(f)
+    }
+    fn visit_str<E: Error>(self, v: &str) -> Result<Key, E> {
+      Ok(Key(KEYS.iter().copied().find(|k| *k == v)))
+    }
+  }
+  impl<'de> Deserialize<'de> for Key {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+      d.deserialize_str(KeyV)
+    }
+  }
+
+  /// Блок содержимого сообщения; не объект — пустой.
+  #[derive(Default, Debug)]
+  pub struct Block {
+    pub kind: Scalar,
+    pub text: Scalar,
+  }
+
+  struct BlockV;
+  impl<'de> Visitor<'de> for BlockV {
+    type Value = Block;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+      expecting(f)
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> Result<Block, A::Error> {
+      let mut b = Block::default();
+      while let Some(Key(k)) = a.next_key()? {
+        match k {
+          Some("type") => b.kind = a.next_value()?,
+          Some("text") => b.text = a.next_value()?,
+          _ => {
+            a.next_value::<IgnoredAny>()?;
+          }
+        }
+      }
+      Ok(b)
+    }
+    skip!(Block::default(); bool);
+    skip!(Block::default(); num);
+    skip!(Block::default(); str);
+    skip!(Block::default(); seq);
+  }
+  via_any!(Block, BlockV);
+
+  /// `message.content`: строка, массив блоков или что-то иное.
+  #[derive(Default, Debug)]
+  pub enum Content {
+    Text(String),
+    Blocks(Vec<Block>),
+    #[default]
+    Other,
+  }
+
+  struct ContentV;
+  impl<'de> Visitor<'de> for ContentV {
+    type Value = Content;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+      expecting(f)
+    }
+    fn visit_str<E: Error>(self, v: &str) -> Result<Content, E> {
+      Ok(Content::Text(v.to_owned()))
+    }
+    fn visit_string<E: Error>(self, v: String) -> Result<Content, E> {
+      Ok(Content::Text(v))
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut a: A) -> Result<Content, A::Error> {
+      let mut blocks = Vec::new();
+      while let Some(b) = a.next_element()? {
+        blocks.push(b);
+      }
+      Ok(Content::Blocks(blocks))
+    }
+    skip!(Content::Other; bool);
+    skip!(Content::Other; num);
+    skip!(Content::Other; map);
+  }
+  via_any!(Content, ContentV);
+
+  /// `message`; `content` — None, если ключа нет.
+  #[derive(Default, Debug)]
+  pub struct Message {
+    pub content: Option<Content>,
+    pub model: Scalar,
+  }
+
+  /// `message` любого вида: объект — Some, иное — None (у не-объекта полей нет).
+  struct MaybeMessage(Option<Message>);
+
+  struct MessageV;
+  impl<'de> Visitor<'de> for MessageV {
+    type Value = MaybeMessage;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+      expecting(f)
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> Result<MaybeMessage, A::Error> {
+      let mut m = Message::default();
+      while let Some(Key(k)) = a.next_key()? {
+        match k {
+          Some("content") => m.content = Some(a.next_value()?),
+          Some("model") => m.model = a.next_value()?,
+          _ => {
+            a.next_value::<IgnoredAny>()?;
+          }
+        }
+      }
+      Ok(MaybeMessage(Some(m)))
+    }
+    skip!(MaybeMessage(None); bool);
+    skip!(MaybeMessage(None); num);
+    skip!(MaybeMessage(None); str);
+    skip!(MaybeMessage(None); seq);
+  }
+  via_any!(MaybeMessage, MessageV);
+
+  /// `origin.kind`; `origin` не объект — `Other`.
+  struct OriginKind(Scalar);
+
+  struct OriginV;
+  impl<'de> Visitor<'de> for OriginV {
+    type Value = OriginKind;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+      expecting(f)
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> Result<OriginKind, A::Error> {
+      let mut kind = Scalar::Other;
+      while let Some(Key(k)) = a.next_key()? {
+        match k {
+          Some("kind") => kind = a.next_value()?,
+          _ => {
+            a.next_value::<IgnoredAny>()?;
+          }
+        }
+      }
+      Ok(OriginKind(kind))
+    }
+    skip!(OriginKind(Scalar::Other); bool);
+    skip!(OriginKind(Scalar::Other); num);
+    skip!(OriginKind(Scalar::Other); str);
+    skip!(OriginKind(Scalar::Other); seq);
+  }
+  via_any!(OriginKind, OriginV);
+
+  /// Строка файла разговора (объект верхнего уровня; иное — ошибка разбора).
+  #[derive(Default, Debug)]
+  pub struct Line {
+    pub kind: Scalar,
+    pub is_sidechain: Scalar,
+    pub is_meta: Scalar,
+    pub is_compact_summary: Scalar,
+    pub is_visible_in_transcript_only: Scalar,
+    pub origin_kind: Scalar,
+    pub message: Option<Message>,
+  }
+
+  struct LineV;
+  impl<'de> Visitor<'de> for LineV {
+    type Value = Line;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+      f.write_str("объект JSON")
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> Result<Line, A::Error> {
+      let mut l = Line::default();
+      while let Some(Key(k)) = a.next_key()? {
+        match k {
+          Some("type") => l.kind = a.next_value()?,
+          Some("isSidechain") => l.is_sidechain = a.next_value()?,
+          Some("isMeta") => l.is_meta = a.next_value()?,
+          Some("isCompactSummary") => l.is_compact_summary = a.next_value()?,
+          Some("isVisibleInTranscriptOnly") => l.is_visible_in_transcript_only = a.next_value()?,
+          Some("origin") => l.origin_kind = a.next_value::<OriginKind>()?.0,
+          Some("message") => l.message = a.next_value::<MaybeMessage>()?.0,
+          _ => {
+            a.next_value::<IgnoredAny>()?;
+          }
+        }
+      }
+      Ok(l)
+    }
+  }
+  impl<'de> Deserialize<'de> for Line {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+      d.deserialize_map(LineV)
+    }
+  }
+}
+
 /// `totalCostUSD` записи `cost-state` разговора id; None — строка не такая запись.
 fn cost_of(line: &[u8], id: &str) -> Option<f64> {
-  if !line.windows(12).any(|w| w == b"\"cost-state\"") {
-    return None;
-  }
+  memchr::memmem::find(line, b"\"cost-state\"")?;
   let v: Value = serde_json::from_slice(line).ok()?;
   if v.get("type").and_then(Value::as_str) != Some("cost-state") || v.get("sessionId").and_then(Value::as_str) != Some(id) {
     return None;
@@ -496,6 +791,124 @@ mod tests {
   }
   fn tool_result() -> String {
     json!({"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]}}).to_string()
+  }
+
+  /// Прежний разбор через `Value` — эталон для `message_of`.
+  fn message_of_value(line: &[u8]) -> Option<HistoryMessage> {
+    // Быстрый отсев без разбора JSON: в строке сообщения есть роль.
+    let has = |pat: &[u8]| line.windows(pat.len()).any(|w| w == pat);
+    if !has(b"\"user\"") && !has(b"\"assistant\"") {
+      return None;
+    }
+    let v: Value = serde_json::from_slice(line).ok()?;
+    let flag = |k: &str| v.get(k).and_then(Value::as_bool) == Some(true);
+    if flag("isSidechain") || flag("isMeta") || flag("isCompactSummary") || flag("isVisibleInTranscriptOnly") {
+      return None;
+    }
+    let msg = v.get("message")?;
+    let content = msg.get("content")?;
+    match v.get("type").and_then(Value::as_str)? {
+      "user" => {
+        // Уведомления задач и прочее не от человека.
+        if let Some(kind) = v.get("origin").and_then(|o| o.get("kind")).and_then(Value::as_str)
+          && kind != "human"
+        {
+          return None;
+        }
+        let text = match content {
+          Value::String(s) => s.clone(),
+          Value::Array(blocks) => {
+            if blocks.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result")) {
+              return None;
+            }
+            let texts: Vec<&str> = blocks
+              .iter()
+              .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+              .filter_map(|b| b.get("text").and_then(Value::as_str))
+              .collect();
+            if texts.is_empty() && blocks.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("image")) {
+              "[Изображение]".to_string()
+            } else {
+              texts.join("\n")
+            }
+          }
+          _ => return None,
+        };
+        let text = text.trim();
+        if text.is_empty() || is_service(text) {
+          return None;
+        }
+        Some(HistoryMessage { role: "user", text: text.to_string() })
+      }
+      "assistant" => {
+        if msg.get("model").and_then(Value::as_str) == Some("<synthetic>") {
+          return None;
+        }
+        let blocks = content.as_array()?;
+        let text = blocks
+          .iter()
+          .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+          .filter_map(|b| b.get("text").and_then(Value::as_str))
+          .collect::<Vec<_>>()
+          .join("\n\n");
+        let text = text.trim();
+        if text.is_empty() {
+          return None;
+        }
+        Some(HistoryMessage { role: "assistant", text: text.to_string() })
+      }
+      _ => None,
+    }
+  }
+
+  #[test]
+  fn typed_parse_matches_value_parse() {
+    let lines: Vec<String> = vec![
+      user("привет"),
+      user("  "),
+      user("<command-name>/x</command-name>"),
+      assistant("ответ"),
+      assistant(""),
+      tool_use(),
+      tool_result(),
+      json!({"type":"user","message":{"content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}}).to_string(),
+      json!({"type":"user","message":{"content":[{"type":"image","source":{}}]}}).to_string(),
+      json!({"type":"user","message":{"content":[{"type":"image"},{"type":"text","text":"подпись"}]}}).to_string(),
+      json!({"type":"user","message":{"content":["строка", 1, null, {"type":"text","text":"x"}]}}).to_string(),
+      json!({"type":"user","message":{"content":null}}).to_string(),
+      json!({"type":"user","message":{"content":{"type":"text"}}}).to_string(),
+      json!({"type":"user","message":"не объект"}).to_string(),
+      json!({"type":"user","message":{}}).to_string(),
+      json!({"type":"user"}).to_string(),
+      json!({"type":1,"message":{"content":"x"},"u":"user"}).to_string(),
+      json!({"type":"user","isMeta":true,"message":{"content":"x"}}).to_string(),
+      json!({"type":"user","isMeta":"true","message":{"content":"x"}}).to_string(),
+      json!({"type":"user","isSidechain":true,"message":{"content":"x"}}).to_string(),
+      json!({"type":"user","isCompactSummary":true,"message":{"content":"x"}}).to_string(),
+      json!({"type":"user","isVisibleInTranscriptOnly":true,"message":{"content":"x"}}).to_string(),
+      json!({"type":"user","origin":{"kind":"human"},"message":{"content":"x"}}).to_string(),
+      json!({"type":"user","origin":{"kind":"task"},"message":{"content":"x"}}).to_string(),
+      json!({"type":"user","origin":{"kind":5},"message":{"content":"x"}}).to_string(),
+      json!({"type":"user","origin":"task","message":{"content":"x"}}).to_string(),
+      json!({"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"x"}]}}).to_string(),
+      json!({"type":"assistant","message":{"model":7,"content":[{"type":"text","text":"x"},{"type":"tool_use","input":{"a":[1,{"b":"user"}]}},{"type":"text","text":"y"}]}}).to_string(),
+      json!({"type":"assistant","message":{"content":"строкой"}}).to_string(),
+      json!({"type":"assistant","message":{"content":[{"type":"text","text":5}]}}).to_string(),
+      json!({"type":"summary","message":{"content":"user"}}).to_string(),
+      // Повтор ключа: побеждает последний — как у `Value`.
+      r#"{"type":"assistant","type":"user","message":{"content":"x"},"message":{"content":"y"}}"#.to_string(),
+      r#"{"type":"user","message":{"content":[{"type":"tool_result"}],"content":"z"}}"#.to_string(),
+      r#"{"type":"user","isMeta":true,"isMeta":false,"message":{"content":"w"}}"#.to_string(),
+      // Экранированные ключи и значения.
+      r#"{"t\u0079pe":"user","message":{"content":"\u043f\u0440\u0438\"q\"\n"}}"#.to_string(),
+      r#"["user"]"#.to_string(),
+      r#""user""#.to_string(),
+      r#"{"type":"user","message":{"content":"x"}"#.to_string(),
+      r#"{"type":"user","message":{"content":"x"}} мусор"#.to_string(),
+    ];
+    for l in &lines {
+      assert_eq!(message_of(l.as_bytes()), message_of_value(l.as_bytes()), "{l}");
+    }
   }
 
   fn write(dir: &Path, id: &str, lines: &[String]) -> PathBuf {
