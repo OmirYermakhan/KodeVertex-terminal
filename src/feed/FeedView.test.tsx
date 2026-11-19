@@ -36,6 +36,18 @@ describe('Feed', () => {
     expect(screen.getByText('Привет')).toBeInTheDocument()
   })
 
+  it('те же пропсы — лента не перерисовывается (memo), новые элементы — перерисовывается', () => {
+    const items: FeedItem[] = [{ kind: 'claude', id: 'c1', item: { type: 'user', text: 'Привет' } }]
+    const renderLive = () => null
+    const renderClaude = vi.fn(() => null)
+    const { rerender } = render(<Feed items={items} selectedId={null} renderLive={renderLive} renderClaude={renderClaude} />)
+    expect(renderClaude).toHaveBeenCalledTimes(1)
+    rerender(<Feed items={items} selectedId={null} renderLive={renderLive} renderClaude={renderClaude} />)
+    expect(renderClaude).toHaveBeenCalledTimes(1)
+    rerender(<Feed items={[...items]} selectedId={null} renderLive={renderLive} renderClaude={renderClaude} />)
+    expect(renderClaude).toHaveBeenCalledTimes(2)
+  })
+
   it('карточку подписывает агент по agentId', () => {
     const ag = (id: string, name: string) => ({ id, parentId: null, name, model: 'claude-opus-5-5', status: 'running' as const, now: '', history: [], step: null, startedAt: 0, endedAt: null, tokens: 0 })
     const a1 = ag('main', 'Главный')

@@ -1,5 +1,5 @@
 // Файл не Feed.tsx: на регистронезависимой ФС macOS он конфликтует с feed.ts (модель ленты).
-import { forwardRef, Fragment, useCallback, useLayoutEffect, useRef, type ReactNode } from 'react'
+import { forwardRef, Fragment, memo, useCallback, useLayoutEffect, useRef, type ReactNode } from 'react'
 import { ClaudeCard } from '../claude/cards/ClaudeCard'
 import { ErrorBoundary } from '../diag/ErrorBoundary'
 import { agentOf, type Agent } from '../claude/reducer'
@@ -75,7 +75,11 @@ export function finishAppear(feed: HTMLElement | null): void {
   }
 }
 
-export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
+/**
+ * memo: панель перерисовывается и без изменений ленты (токен ответа Claude до переноса в ленту, кадр
+ * высоты живого блока, набор в строке ввода) — тогда ленту с сотнями элементов не обходим.
+ */
+export const Feed = memo(forwardRef<HTMLDivElement, FeedProps>(function Feed(
   { items, selectedId, renderLive, agents = NO_AGENTS, cwd, renderClaude, onScroll, park, onAttach, onCopy, onRepeat, repeatOff = false, onAsk, onRead, editable, onEdit, editingId, claudeMode = false, thinking = null, bgWait = 0 },
   ref,
 ) {
@@ -184,4 +188,4 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
       {park}
     </div>
   )
-})
+}))

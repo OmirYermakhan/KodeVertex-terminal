@@ -3,7 +3,7 @@
 // `claude` ↵ — режим Claude: ↵ шлёт вопросы агенту, `/exit` или `exit` — выход (esc из режима не выводит).
 // В режиме Claude в текст встают значки вложений (макет 06-attachments): поле — contenteditable,
 // модель — Doc (текст + значки), см. src/attach/doc.ts и richDom.ts.
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useCompletion } from '../completion/useCompletion'
 import { CompletionPopup, LIST_WIDTH, PREVIEW_WIDTH, popupHeight } from '../completion/CompletionPopup'
 import { useHints } from '../completion/useHints'
@@ -218,7 +218,12 @@ const onLastLine = (v: string, pos: number) => !v.slice(pos).includes('\n')
 /** Пути для оболочки: экранированные, через пробел (как Terminal.app при перетаскивании). */
 export const shellPaths = (paths: string[]) => paths.map((p) => shellEscape(p)).join(' ')
 
-export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function InputBar(p, ref) {
+/**
+ * memo: родитель (панель) перерисовывается на каждый токен ответа Claude и на каждый кадр вывода
+ * команды (высота живого блока) — строка ввода с её выборками от этого не перерисовывается. Колбэки
+ * родителя стабильны (useCallback), функции-«геттеры» (cwd, modelInfo, atFeed) читаются лениво.
+ */
+export const InputBar = memo(forwardRef<InputBarHandle, InputBarProps>(function InputBar(p, ref) {
   const edRef = useRef<HTMLDivElement>(null)
   const measureRef = useRef<HTMLSpanElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -1497,6 +1502,6 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
       </div>
     </div>
   )
-})
+}))
 
 export default InputBar
