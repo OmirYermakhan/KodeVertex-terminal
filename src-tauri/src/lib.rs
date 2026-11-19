@@ -143,6 +143,7 @@ pub fn run() {
       claude_sessions::claude_sessions,
       claude_sessions::claude_session_history,
       attach::attach_inspect,
+      attach::launcher_icon,
       attach::attach_clipboard_image,
       preview::preview_text,
       preview::preview_dir,
