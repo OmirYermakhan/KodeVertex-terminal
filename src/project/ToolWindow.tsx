@@ -84,7 +84,7 @@ export default function ToolWindow({ git }: { git: GitInfo | null }) {
       }}
     >
       <div className="twh">
-        {head.title} {head.sub(branch) && <span className="sub">{head.sub(branch)}</span>}
+        {head.title} {head.sub(branch) && <span className="sub" title={head.sub(branch)}>{head.sub(branch)}</span>}
         <div className="acts">
           {head.acts.map((a) =>
             // ↻ — перечитать git-статус (лог перечитается вслед за ним).
