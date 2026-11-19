@@ -2132,7 +2132,7 @@ dependencies = [
 
 [[package]]
 name = "kodevertex-terminal"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arboard",
  "base64 0.23.1",
