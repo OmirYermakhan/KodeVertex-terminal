@@ -3,12 +3,12 @@
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { memo, useRef, type MouseEvent, type ReactNode } from 'react'
 import ReactMarkdown, { type Components, type Options } from 'react-markdown'
-import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
 import { askOpenLink, linkHost, misleadingText, paneOf } from '../feed/linkAsk'
 import { useSettings } from '../settings/store'
 import { Diagram } from './diagram/Diagram'
 import { rehypeDiff } from './diffBlock'
+import { rehypeHljs } from '../attach/preview/highlight'
 import { useCopied } from './diagram/useCopied'
 
 // Минимальные типы hast: сам пакет типов — транзитивная зависимость.
@@ -141,10 +141,11 @@ function componentsFor(diagrams: boolean, streaming: boolean): Components {
 type PluggableList = NonNullable<Options['rehypePlugins']>
 
 const REMARK = [remarkGfm]
-// Сначала diff (свои строки с подсветкой языка файла, помечены no-highlight), потом остальной код.
-const REHYPE: PluggableList = [rehypeDiff, rehypeHighlight]
+// Сначала diff (свои строки с подсветкой языка файла, помечены no-highlight), потом остальной код —
+// общим lowlight (rehypeHljs): react-markdown вызывает плагины заново на каждый рендер блока.
+const REHYPE: PluggableList = [rehypeDiff, rehypeHljs]
 // Печатающийся хвост: язык diff без имени файла не угадываем на каждый токен; курсор в конце.
-const REHYPE_TAIL: PluggableList = [[rehypeDiff, { guess: false }], rehypeHighlight, rehypeCaret]
+const REHYPE_TAIL: PluggableList = [[rehypeDiff, { guess: false }], rehypeHljs, rehypeCaret]
 
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/
 const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})\s*$/

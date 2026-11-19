@@ -1,5 +1,5 @@
 // Файл не Feed.tsx: на регистронезависимой ФС macOS он конфликтует с feed.ts (модель ленты).
-import { forwardRef, Fragment, useCallback, useLayoutEffect, useRef, type ReactNode } from 'react'
+import { forwardRef, Fragment, memo, useCallback, useLayoutEffect, useRef, type ReactNode } from 'react'
 import { ClaudeCard } from '../claude/cards/ClaudeCard'
 import { ErrorBoundary } from '../diag/ErrorBoundary'
 import { agentOf, type Agent } from '../claude/reducer'
@@ -75,7 +75,48 @@ export function finishAppear(feed: HTMLElement | null): void {
   }
 }
 
-export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
+interface FeedRowProps {
+  it: FeedItem
+  selected: boolean
+  live: ReactNode
+  agent?: Agent
+  agents?: readonly Agent[]
+  cwd?: string | null
+  renderClaude?: (item: ClaudeItem) => ReactNode
+  onAttach?(id: string): void
+  onCopy?(id: string): void
+  onRepeat?(id: string): void
+  onAsk?(id: string): void
+  onRead?(id: string): void
+  onEdit?(id: string): void
+  editing: boolean
+}
+
+/**
+ * Элемент ленты. memo: пока печатается ответ, лента перерисовывается на каждый токен — готовые
+ * элементы (вместе с их ErrorBoundary) при этом не обходятся.
+ */
+const FeedRow = memo(function FeedRow({ it, selected, live, agent, agents, cwd, renderClaude, onAttach, onCopy, onRepeat, onAsk, onRead, onEdit, editing }: FeedRowProps) {
+  return (
+    // Сбой одной карточки (необычный ответ, вывод инструмента) не роняет ленту и окно.
+    // resetKey: обновлённый элемент (стрим ответа) пробует отрисоваться снова.
+    <ErrorBoundary name={it.kind === 'shell' ? 'блок' : 'карточку'} resetKey={it}>
+      {it.kind === 'shell' ? (
+        <ShellBlockView block={it} selected={selected} live={live} onAttach={onAttach} onCopy={onCopy} onRepeat={onRepeat} onAsk={onAsk} />
+      ) : renderClaude ? (
+        <Fragment>{renderClaude(it)}</Fragment>
+      ) : (
+        <ClaudeCard item={it} agent={agent} agents={agents} cwd={cwd} selected={selected} onAttach={onAttach} onCopy={onCopy} onRead={onRead} onEdit={onEdit} editing={editing} />
+      )}
+    </ErrorBoundary>
+  )
+})
+
+/**
+ * memo: панель перерисовывается и без изменений ленты (токен ответа Claude до переноса в ленту, кадр
+ * высоты живого блока, набор в строке ввода) — тогда ленту с сотнями элементов не обходим.
+ */
+export const Feed = memo(forwardRef<HTMLDivElement, FeedProps>(function Feed(
   { items, selectedId, renderLive, agents = NO_AGENTS, cwd, renderClaude, onScroll, park, onAttach, onCopy, onRepeat, repeatOff = false, onAsk, onRead, editable, onEdit, editingId, claudeMode = false, thinking = null, bgWait = 0 },
   ref,
 ) {
@@ -146,36 +187,23 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
   return (
     <div className={repeatOff ? 'feed no-repeat' : 'feed'} ref={setRef} onScroll={scrolled}>
       {items.map((it) => (
-        // Сбой одной карточки (необычный ответ, вывод инструмента) не роняет ленту и окно.
-        // resetKey: обновлённый элемент (стрим ответа) пробует отрисоваться снова.
-        <ErrorBoundary key={it.id} name={it.kind === 'shell' ? 'блок' : 'карточку'} resetKey={it}>
-          {it.kind === 'shell' ? (
-            <ShellBlockView
-              block={it}
-              selected={it.id === selectedId}
-              live={it.running ? renderLive(it) : undefined}
-              onAttach={onAttach}
-              onCopy={onCopy}
-              onRepeat={onRepeat}
-              onAsk={onAsk}
-            />
-          ) : renderClaude ? (
-            <Fragment>{renderClaude(it)}</Fragment>
-          ) : (
-            <ClaudeCard
-              item={it}
-              agent={agentOf(agents, it.item)}
-              agents={it.item.type === 'replaced' ? agents : undefined}
-              cwd={cwd}
-              selected={it.id === selectedId}
-              onAttach={onAttach}
-              onCopy={onCopy}
-              onRead={onRead}
-              onEdit={editable?.has(it.id) ? onEdit : undefined}
-              editing={it.id === editingId}
-            />
-          )}
-        </ErrorBoundary>
+        <FeedRow
+          key={it.id}
+          it={it}
+          selected={it.id === selectedId}
+          live={it.kind === 'shell' && it.running ? renderLive(it) : undefined}
+          agent={it.kind === 'claude' ? agentOf(agents, it.item) : undefined}
+          agents={it.kind === 'claude' && it.item.type === 'replaced' ? agents : undefined}
+          cwd={cwd}
+          renderClaude={renderClaude}
+          onAttach={onAttach}
+          onCopy={onCopy}
+          onRepeat={onRepeat}
+          onAsk={onAsk}
+          onRead={onRead}
+          onEdit={editable?.has(it.id) ? onEdit : undefined}
+          editing={it.id === editingId}
+        />
       ))}
       {/* Пустая лента — подсказка с клавишами; исчезает с первым блоком или карточкой. */}
       {items.length === 0 && <EmptyHint claude={claudeMode} />}
@@ -184,4 +212,4 @@ export const Feed = forwardRef<HTMLDivElement, FeedProps>(function Feed(
       {park}
     </div>
   )
-})
+}))

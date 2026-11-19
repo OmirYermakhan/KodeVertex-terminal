@@ -230,6 +230,9 @@ export function TerminalPane(p: TerminalPaneProps) {
   const queueRef = useRef<QueuePanelHandle>(null)
   // cwd панели (подсказки путей, Claude-сессия): initialCwd, затем OSC 7.
   const cwdRef = useRef(p.initialCwd)
+  /** Стабильные ссылки для memo-детей (строка ввода, очередь): иначе — новые на каждый рендер. */
+  const getCwd = useCallback(() => cwdRef.current, [])
+  const focusInput = useCallback(() => inputRef.current?.focus(), [])
   const home = useHome()
 
   const settings = useSettings((st) => st.settings)
@@ -1265,13 +1268,18 @@ export function TerminalPane(p: TerminalPaneProps) {
   )
   const onChooseModel = useCallback((c: ModelChoice) => void chooseModel(p.paneId, cwdRef.current, c), [p.paneId])
   // Текущая модель: выбранная в `/model` для панели, иначе из настроек Claude Code, иначе Default.
+  // Новая ссылка при смене модели или усилия: строка ввода (memo) перерисует открытый выбор модели.
+  const curModel = claude?.model
+  const defModel = claude?.state.defaultModel
+  const curEffort = claude?.state.effort
   const modelInfo = useCallback(() => {
     const s = useClaudeSessions.getState().sessions[p.paneId]
     return {
       current: s?.model ?? aliasOf(s?.state.defaultModel) ?? 'default',
       effort: s?.state.effort ?? null,
     }
-  }, [p.paneId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- значения — повод для новой ссылки, читаются из стора
+  }, [p.paneId, curModel, defModel, curEffort])
   const onInterrupt = useCallback(
     (empty: boolean, claudeMode: boolean) => {
       // Режим Claude: ⌃C прерывает ход агента (если идёт), оболочку не трогает.
@@ -1296,14 +1304,18 @@ export function TerminalPane(p: TerminalPaneProps) {
     editingRef.current = editing
   })
   const claudeState = claude?.state
-  /** Сообщения «Вы», которые можно изменить (id ленты): у остальных «Изменить» не показываем. */
-  const editable = useMemo(() => {
-    const ids = new Set<string>()
+  /**
+   * Сообщения «Вы», которые можно изменить (id ленты): у остальных «Изменить» не показываем.
+   * Набор — новый только при смене состава (не на каждый токен ответа): лента (memo) не перерисовывается.
+   */
+  const editableKey = useMemo(() => {
+    const ids: string[] = []
     claudeState?.items.forEach((_, i) => {
-      if (canEdit(claudeState, i)) ids.add(claudeItemId(i))
+      if (canEdit(claudeState, i)) ids.push(claudeItemId(i))
     })
-    return ids
+    return ids.join(' ')
   }, [claudeState])
+  const editable = useMemo(() => new Set(editableKey ? editableKey.split(' ') : []), [editableKey])
   const editableRef = useRef(editable)
   useLayoutEffect(() => {
     editableRef.current = editable
@@ -1492,10 +1504,24 @@ export function TerminalPane(p: TerminalPaneProps) {
   }, [])
 
   const liveHeight = Math.min(hostHeight, livePx)
-  const renderLive = (_b: ShellBlock) =>
-    alt ? null : (
-      <LiveTerminal host={host} parkRef={parkRef} mode="block" hostHeight={hostHeight} height={liveHeight} onAttach={onAttach} onDetach={onDetach} />
-    )
+  // Стабильные пропсы ленты (memo): токены ответа Claude и рендеры панели без её изменений ленту не перерисовывают.
+  const renderLive = useCallback(
+    (_b: ShellBlock) =>
+      alt ? null : (
+        <LiveTerminal host={host} parkRef={parkRef} mode="block" hostHeight={hostHeight} height={liveHeight} onAttach={onAttach} onDetach={onDetach} />
+      ),
+    [alt, host, hostHeight, liveHeight, onAttach, onDetach],
+  )
+  const feedPark = useMemo(
+    () => (
+      // Пока xterm не показан, он стоит здесь: невидим, но сохраняет ширину текста блока (cols).
+      // inert: спрятанный xterm не получает фокус по Tab/⇧Tab (ввод вслепую в ZLE).
+      <div className="feed-park" inert>
+        <div className="blk" ref={parkRef} />
+      </div>
+    ),
+    [],
+  )
 
   return (
     <div
@@ -1548,13 +1574,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         claudeMode={inClaude}
         thinking={claudeState ? thinkingSince(claudeState) : null}
         bgWait={claudeState ? backgroundWait(claudeState) : 0}
-        park={
-          // Пока xterm не показан, он стоит здесь: невидим, но сохраняет ширину текста блока (cols).
-          // inert: спрятанный xterm не получает фокус по Tab/⇧Tab (ввод вслепую в ZLE).
-          <div className="feed-park" inert>
-            <div className="blk" ref={parkRef} />
-          </div>
-        }
+        park={feedPark}
       />
       </PreviewContext.Provider>
       {!alt && <QuoteReply feedRef={feedRef} onQuote={attachQuote} />}
@@ -1562,7 +1582,7 @@ export function TerminalPane(p: TerminalPaneProps) {
       <div className="dock">
         {claudeOpen(claude) && !agentsHidden && (
           <ErrorBoundary name="панель агентов">
-            <AgentsPanel ref={agentsRef} state={claude.state} queued={queue.length} onExit={() => inputRef.current?.focus()} />
+            <AgentsPanel ref={agentsRef} state={claude.state} queued={queue.length} onExit={focusInput} />
           </ErrorBoundary>
         )}
         {trustAsk && !alt && (
@@ -1620,7 +1640,7 @@ export function TerminalPane(p: TerminalPaneProps) {
             paused={!!claude?.pauseHint}
             onRemove={onRemoveQueued}
             onSendNow={onSendQueuedNow}
-            onExit={() => inputRef.current?.focus()}
+            onExit={focusInput}
           />
           </ErrorBoundary>
         )}
@@ -1641,7 +1661,7 @@ export function TerminalPane(p: TerminalPaneProps) {
           completions={p.focused && !settingsOpen && settings.pathCompletions}
           atFiles={p.focused && !settingsOpen}
           hints={p.focused && !settingsOpen}
-          cwd={() => cwdRef.current}
+          cwd={getCwd}
           home={home || null}
           onRun={onRun}
           onAsk={onAsk}
@@ -1694,7 +1714,7 @@ export function TerminalPane(p: TerminalPaneProps) {
         </ErrorBoundary>
       )}
       <ErrorBoundary name="мини-просмотр" resetKey={preview.state}>
-        <PreviewLayer state={preview.state} api={preview.api} container={paneRef} cwd={() => cwdRef.current} home={home} />
+        <PreviewLayer state={preview.state} api={preview.api} container={paneRef} cwd={getCwd} home={home} />
       </ErrorBoundary>
       {drag && (
         <div className="tk-ghost" style={{ left: drag.x + 12, top: drag.y + 10 }} aria-hidden="true">
