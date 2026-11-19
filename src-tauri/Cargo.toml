@@ -55,3 +55,9 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.zune-jpeg]
 opt-level = 3
+
+# Release: меньше и быстрее бинарь. panic не трогаем: хук паники пишет журнал (diag).
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
