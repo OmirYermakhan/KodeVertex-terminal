@@ -1,7 +1,7 @@
 //! Панель проекта: список папки и чтение файла строго внутри корня проекта.
 //! Только просмотр — ничего не меняем. Пути от фронта относительные к корню.
 
-use crate::git::{env_refs, git_args, git_env, run_cmd, run_cmd_capped};
+use crate::git::{both, env_refs, git_args, git_env, run_cmd, run_cmd_capped};
 use crate::preview::{io_message, looks_binary};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -218,13 +218,15 @@ impl<'a> Git<'a> {
     // Пути — буквально (без `:(top)` и масок); `--` ставит вызывающий.
     let literal = [("GIT_LITERAL_PATHSPECS", "1")];
     let mut g = Git { cwd, env: git_env(&[], &literal), deadline };
-    // Не репозиторий (или нет доступа) — единый ответ для фронта. rev-parse фильтры не запускает.
-    if g.run(&["rev-parse", "--is-inside-work-tree"]).as_deref() != Some("true") {
+    // Проверка репозитория и чтение конфига независимы и ничего не запускают — параллельно.
+    let (inside, filters) = both(|| g.run(&["rev-parse", "--is-inside-work-tree"]), || list_filters(root, deadline));
+    // Не репозиторий (или нет доступа) — единый ответ для фронта.
+    if inside.as_deref() != Some("true") {
       return Err("not-git".to_string());
     }
     // Список фильтров не получен — дальше не идём (fail closed): status/diff без перекрытий
     // выполнили бы clean-фильтр из чужого конфига.
-    let filters = list_filters(root, deadline).ok_or_else(|| "Не удалось прочитать конфиг git".to_string())?;
+    let filters = filters.ok_or_else(|| "Не удалось прочитать конфиг git".to_string())?;
     g.env = git_env(&filters, &literal);
     Ok(g)
   }
@@ -240,6 +242,11 @@ impl<'a> Git<'a> {
 
   fn has_head(&self) -> bool {
     self.run(&["rev-parse", "--verify", "--quiet", "HEAD"]).is_some()
+  }
+
+  /// База сравнения рабочего дерева: HEAD, а без коммитов — индекс против пустого дерева.
+  fn diff_base(&self) -> &'static str {
+    if self.has_head() { "HEAD" } else { "--cached" }
   }
 }
 
@@ -336,8 +343,13 @@ fn parse_name_status(out: &str) -> Vec<Change> {
 
 pub fn git_status_at(root: &Path) -> Result<GitStatus, String> {
   let g = Git::new(root)?;
-  // Подмодули не трогаем: их конфиг (фильтры) не перекрыт, а панель зовёт status часто.
-  let st = g.run(&["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=all"]).ok_or("Не удалось получить состояние git")?;
+  // status и счётчики строк (diff) независимы — параллельно.
+  let (st, numstat) = both(
+    // Подмодули не трогаем: их конфиг (фильтры) не перекрыт, а панель зовёт status часто.
+    || g.run(&["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=all"]),
+    || g.run(&["diff", g.diff_base(), "--numstat", "-z", "-M", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all"]),
+  );
+  let st = st.ok_or("Не удалось получить состояние git")?;
   let mut changes = parse_status(&st);
   // Неотслеживаемые сверх потолка не отдаём: десятки тысяч строк фронт перерисовывал бы при каждом обновлении.
   let mut untracked = 0usize;
@@ -349,12 +361,6 @@ pub fn git_status_at(root: &Path) -> Result<GitStatus, String> {
     untracked <= UNTRACKED_MAX
   });
   let more_untracked = untracked.saturating_sub(UNTRACKED_MAX) as u32;
-  // Без коммитов сравниваем индекс с пустым деревом.
-  let numstat = if g.has_head() {
-    g.run(&["diff", "HEAD", "--numstat", "-z", "-M", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all"])
-  } else {
-    g.run(&["diff", "--cached", "--numstat", "-z", "-M", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all"])
-  };
   let nums = parse_numstat(&numstat.unwrap_or_default());
   changes = changes.into_iter().map(|c| with_counts(c, &nums)).collect();
   Ok(GitStatus { changes, more_untracked })
@@ -362,14 +368,13 @@ pub fn git_status_at(root: &Path) -> Result<GitStatus, String> {
 
 pub fn git_log_at(root: &Path, skip: u32, limit: u32) -> Result<Vec<Commit>, String> {
   let g = Git::new(root)?;
-  if !g.has_head() {
-    return Ok(vec![]);
-  }
   let skip = format!("--skip={skip}");
   let limit = format!("-n{}", limit.clamp(1, LOG_MAX));
-  let out = g
-    .run(&["log", "--no-show-signature", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1f%D%x1e", &skip, &limit])
-    .ok_or("Не удалось прочитать историю")?;
+  // Обычно HEAD есть — сразу log; наличие HEAD проверяем, только если log не удался.
+  let Some(out) = g.run(&["log", "--no-show-signature", "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ct%x1f%D%x1e", &skip, &limit]) else {
+    // Без коммитов история пуста — это не ошибка.
+    return if g.has_head() { Err("Не удалось прочитать историю".to_string()) } else { Ok(vec![]) };
+  };
   Ok(out.split('\x1e').filter_map(parse_commit).collect())
 }
 
@@ -392,8 +397,9 @@ pub fn git_commit_files_at(root: &Path, hash: &str) -> Result<Vec<Change>, Strin
   ns.extend(["--name-status", hash, "--"]);
   let mut nm = base.to_vec();
   nm.extend(["--numstat", hash, "--"]);
-  let names = g.run(&ns).ok_or("Коммит не найден")?;
-  let nums = parse_numstat(&g.run(&nm).unwrap_or_default());
+  let (names, nums) = both(|| g.run(&ns), || g.run(&nm));
+  let names = names.ok_or("Коммит не найден")?;
+  let nums = parse_numstat(&nums.unwrap_or_default());
   Ok(parse_name_status(&names).into_iter().map(|c| with_counts(c, &nums)).collect())
 }
 
@@ -444,14 +450,16 @@ pub fn git_diff_pair(root: &Path, rel: &str, old_rel: Option<&str>, rev: Option<
     a.extend(&paths);
     return g.run_raw(&a, DIFF_MAX).map(cut_mark).ok_or_else(|| "Коммит не найден".to_string());
   }
-  // Неотслеживаемый: у git для него diff пуст, поэтому синтезируем.
-  let untracked = old_rel.is_none()
-    && g.run(&["ls-files", "--others", "--exclude-standard", "-z", "--", rel]).is_some_and(|s| !s.is_empty());
+  // Неотслеживаемый: у git для него diff пуст, поэтому синтезируем. База diff — заодно, параллельно.
+  let (untracked, base) = both(
+    || old_rel.is_none() && g.run(&["ls-files", "--others", "--exclude-standard", "-z", "--", rel]).is_some_and(|s| !s.is_empty()),
+    || g.diff_base(),
+  );
   if untracked {
     return untracked_diff(root, rel);
   }
   let mut a = vec!["diff"];
-  a.push(if g.has_head() { "HEAD" } else { "--cached" });
+  a.push(base);
   a.extend(["-M", "--ignore-submodules=all"]);
   a.extend(opts());
   a.push("--");
