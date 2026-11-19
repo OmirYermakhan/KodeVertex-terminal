@@ -286,7 +286,7 @@ export default function TabBar({ activeGit = null }: { activeGit?: GitInfo | nul
             {dot && <i className={`tdot ${dot}`} data-testid="tab-dot" data-status={dot} />}
             {l && (
               <span className="tab-li" style={{ color: l.color }}>
-                <LauncherIcon icon={l.icon} size={13} />
+                {l.image ? <img className="tab-img" src={l.image} alt="" /> : <LauncherIcon icon={l.icon} size={13} />}
               </span>
             )}
             <span>{title}</span>
