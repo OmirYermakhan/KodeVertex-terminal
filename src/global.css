@@ -199,6 +199,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .sb-launchers::-webkit-scrollbar { display: none; }
 .sb-l { position: relative; color: var(--lc); }
 .sb-l.on { background: var(--lc); color: #fff; }
+.sb-img { width: 16px; height: 16px; border-radius: 3px; object-fit: cover; display: block; }
 .sb-live { position: absolute; right: 3px; bottom: 3px; width: 6px; height: 6px; border-radius: 50%; background: #3fb950; box-shadow: 0 0 0 1.5px var(--panel); }
 .sb-l.on .sb-live { box-shadow: 0 0 0 1.5px var(--lc); }
 .sb-add { margin-top: 4px; }
@@ -217,6 +218,11 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .ld-icons { display: grid; grid-template-columns: repeat(6, 34px); gap: 6px; }
 .st-panel .ld-icon { width: 34px; height: 34px; padding: 0; display: grid; place-items: center; border-radius: 7px; }
 .st-panel .ld-icon.on { border-color: currentColor; box-shadow: 0 0 0 1px currentColor; }
+.st-panel .ld-img img { width: 20px; height: 20px; border-radius: 4px; object-fit: cover; display: block; }
+.ld-err { color: #f0646e; }
+.ld-dir { display: flex; gap: 6px; align-items: center; }
+.ld-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-code); font-size: 13px; color: var(--text); background: var(--bg); border: 1px solid var(--rule); border-radius: 6px; padding: 7px 10px; }
+.ld-path.none { color: var(--muted); }
 .ld-colors { display: flex; gap: 8px; }
 .st-panel .ld-color { width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 2px solid transparent; }
 .st-panel .ld-color.on { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--strong); }
