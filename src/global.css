@@ -186,20 +186,21 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .win-main > .panes.off { flex: 0 0 0; overflow: hidden; }
 
 /* Полоса инструментов слева (макет 07 .stripe/.sb). Значки — токен --sbIcon (#a8adb5 макета; в светлой теме — тёмнее). */
-.stripe { width: 40px; flex: none; box-sizing: border-box; background: var(--panel); border-right: 1px solid var(--rule); display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 8px; }
-.sb { width: 30px; height: 30px; flex: none; padding: 0; border: 0; border-radius: 6px; background: transparent; display: grid; place-items: center; color: var(--sbIcon); cursor: default; }
+.stripe { width: 48px; flex: none; box-sizing: border-box; background: var(--panel); border-right: 1px solid var(--rule); display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 8px; }
+.sb { width: 38px; height: 38px; flex: none; padding: 0; border: 0; border-radius: 8px; background: transparent; display: grid; place-items: center; color: var(--sbIcon); cursor: default; }
 .sb:hover { background: var(--hover); }
 .sb.on { background: var(--acc); color: #fff; }
-.sb svg { width: 16px; height: 16px; }
+.sb svg { width: 20px; height: 20px; }
 /* Быстрые входы: значок цвета входа (--lc), открытая вкладка — плашка этого цвета, точка — сессия идёт. */
 .stripe { padding-bottom: 8px; }
 .tab-li { display: inline-flex; flex: none; margin-right: 6px; }
-.sb-sep { width: 20px; height: 1px; flex: none; background: var(--rule); margin: 4px 0; }
+.sb-sep { width: 26px; height: 1px; flex: none; background: var(--rule); margin: 4px 0; }
 .sb-launchers { flex: 1; min-height: 0; width: 100%; overflow-y: auto; scrollbar-width: none; display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .sb-launchers::-webkit-scrollbar { display: none; }
 .sb-l { position: relative; color: var(--lc); }
 .sb-l.on { background: var(--lc); color: #fff; }
-.sb-live { position: absolute; right: 3px; bottom: 3px; width: 6px; height: 6px; border-radius: 50%; background: #3fb950; box-shadow: 0 0 0 1.5px var(--panel); }
+.sb-img { width: 24px; height: 24px; border-radius: 5px; object-fit: cover; display: block; }
+.sb-live { position: absolute; right: 4px; bottom: 4px; width: 7px; height: 7px; border-radius: 50%; background: #3fb950; box-shadow: 0 0 0 1.5px var(--panel); }
 .sb-l.on .sb-live { box-shadow: 0 0 0 1.5px var(--lc); }
 .sb-add { margin-top: 4px; }
 .sb-menu { position: fixed; z-index: 120; min-width: 150px; padding: 4px; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); display: flex; flex-direction: column; }
@@ -214,9 +215,14 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .ld-field input { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--rule); border-radius: 6px; padding: 7px 10px; outline: none; }
 .ld-field input:focus { border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc); }
 .ld-field input.ld-cmd { font-family: var(--font-code); font-size: 13px; }
-.ld-icons { display: grid; grid-template-columns: repeat(6, 34px); gap: 6px; }
+.ld-icons { display: grid; grid-template-columns: repeat(7, 34px); gap: 6px; }
 .st-panel .ld-icon { width: 34px; height: 34px; padding: 0; display: grid; place-items: center; border-radius: 7px; }
 .st-panel .ld-icon.on { border-color: currentColor; box-shadow: 0 0 0 1px currentColor; }
+.st-panel .ld-img img { width: 20px; height: 20px; border-radius: 4px; object-fit: cover; display: block; }
+.ld-err { color: #f0646e; }
+.ld-dir { display: flex; gap: 6px; align-items: center; }
+.ld-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-code); font-size: 13px; color: var(--text); background: var(--bg); border: 1px solid var(--rule); border-radius: 6px; padding: 7px 10px; }
+.ld-path.none { color: var(--muted); }
 .ld-colors { display: flex; gap: 8px; }
 .st-panel .ld-color { width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 2px solid transparent; }
 .st-panel .ld-color.on { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--strong); }
@@ -228,8 +234,8 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 /* Окно инструмента (макет 07 .tw/.twh); ширина — из стора, правый край тянется (.tw-resize). */
 .tw { position: relative; flex: none; box-sizing: border-box; background: var(--panel2); border-right: 1px solid var(--rule); display: flex; flex-direction: column; min-height: 0; font-family: var(--font-text); line-height: normal; color: var(--text); outline: none; }
 .twh { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px 0 12px; font-size: 12.5px; font-weight: 600; color: var(--strong); flex: none; user-select: none; }
-.twh .sub { font-weight: 400; color: var(--muted); font-size: 12px; }
-.twh .acts { margin-left: auto; display: flex; gap: 2px; color: var(--muted); }
+.twh .sub { font-weight: 400; color: var(--muted); font-size: 12px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.twh .acts { margin-left: auto; flex: none; display: flex; gap: 2px; color: var(--muted); }
 .twh .acts span, .twh .acts button { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 4px; font-size: 12px; }
 .twh .acts button { padding: 0; border: 0; background: transparent; color: inherit; font-family: inherit; cursor: default; }
 .twh .acts button:hover { background: var(--hover); color: var(--strong); }

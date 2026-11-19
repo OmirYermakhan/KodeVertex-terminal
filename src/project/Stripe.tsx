@@ -72,14 +72,14 @@ function LauncherButton({ l, onMenu }: { l: Launcher; onMenu(x: number, y: numbe
       style={{ '--lc': l.color } as React.CSSProperties}
       aria-label={l.name}
       aria-pressed={on}
-      title={`${l.name}\n${l.command}${live ? '\n● сессия идёт' : ''}`}
+      title={`${l.name}\n${l.command || l.cwd || ''}${live ? '\n● сессия идёт' : ''}`}
       onClick={() => openLauncher(l)}
       onContextMenu={(e) => {
         e.preventDefault()
         onMenu(e.clientX, e.clientY)
       }}
     >
-      <LauncherIcon icon={l.icon} />
+      {l.image ? <img className="sb-img" src={l.image} alt="" /> : <LauncherIcon icon={l.icon} />}
       {live && <i className="sb-live" data-testid="launcher-live" />}
     </button>
   )

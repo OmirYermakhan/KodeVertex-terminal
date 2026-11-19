@@ -149,11 +149,27 @@ pub fn estimate_prepared(w: u32, h: u32, size: u64) -> u64 {
 }
 
 fn thumbnail(p: &Path) -> Option<String> {
-  let img = image_reader(p)?.decode().ok()?;
-  let t = img.resize_to_fill(THUMB, THUMB, FilterType::Triangle);
+  icon_data_url(p, THUMB).ok()
+}
+
+/// Квадратная PNG-миниатюра `side`×`side` (обрезка по центру) как data URL.
+pub fn icon_data_url(p: &Path, side: u32) -> Result<String, String> {
+  const NOT_IMAGE: &str = "не картинка";
+  if !is_image(p) {
+    return Err(NOT_IMAGE.into());
+  }
+  let meta = fs::metadata(p).map_err(|_| NOT_IMAGE.to_string())?;
+  if !meta.is_file() {
+    return Err(NOT_IMAGE.into());
+  }
+  if meta.len() > THUMB_SOURCE_MAX {
+    return Err("картинка слишком большая".into());
+  }
+  let img = image_reader(p).and_then(|r| r.decode().ok()).ok_or(NOT_IMAGE)?;
+  let t = img.resize_to_fill(side, side, FilterType::Triangle);
   let mut out = Cursor::new(Vec::new());
-  t.write_to(&mut out, ImageFormat::Png).ok()?;
-  Some(format!("data:image/png;base64,{}", B64.encode(out.into_inner())))
+  t.write_to(&mut out, ImageFormat::Png).map_err(|e| e.to_string())?;
+  Ok(format!("data:image/png;base64,{}", B64.encode(out.into_inner())))
 }
 
 fn media_type(f: ImageFormat) -> Option<&'static str> {
@@ -326,6 +342,12 @@ pub async fn attach_inspect(paths: Vec<String>) -> Result<Vec<PathInfo>, String>
   tauri::async_runtime::spawn_blocking(move || paths.iter().map(|p| inspect(p)).collect()).await.map_err(|e| e.to_string())
 }
 
+/// Своя картинка быстрого входа: 64×64 PNG data URL.
+#[tauri::command]
+pub async fn launcher_icon(path: String) -> Result<String, String> {
+  tauri::async_runtime::spawn_blocking(move || icon_data_url(Path::new(&path), 64)).await.map_err(|e| e.to_string())?
+}
+
 /// ⌘V с картинкой: буфер → PNG в attachments/. Картинки нет — None.
 #[tauri::command]
 pub async fn attach_clipboard_image(app: AppHandle) -> Result<Option<PathInfo>, String> {
@@ -350,6 +372,27 @@ pub(crate) mod tests {
     let img = image::RgbaImage::from_fn(w, h, |x, y| image::Rgba([(x % 256) as u8, (y % 256) as u8, ((x * y) % 256) as u8, 255]));
     img.save_with_format(&p, ImageFormat::Png).unwrap();
     p
+  }
+
+  #[test]
+  fn icon_data_url_makes_64px_png() {
+    let d = tempfile::tempdir().unwrap();
+    let p = png(d.path(), "pic.png", 200, 100);
+    let url = icon_data_url(&p, 64).unwrap();
+    let b64 = url.strip_prefix("data:image/png;base64,").expect("префикс data URL");
+    let img = image::load_from_memory(&B64.decode(b64).unwrap()).unwrap();
+    assert_eq!((img.width(), img.height()), (64, 64));
+  }
+
+  #[test]
+  fn icon_data_url_rejects_non_image() {
+    let d = tempfile::tempdir().unwrap();
+    let f = d.path().join("a.txt");
+    fs::write(&f, "hello").unwrap();
+    assert!(icon_data_url(&f, 64).is_err());
+    let fake = d.path().join("fake.png");
+    fs::write(&fake, "not png").unwrap();
+    assert_eq!(icon_data_url(&fake, 64), Err("не картинка".to_string()));
   }
 
   #[test]
