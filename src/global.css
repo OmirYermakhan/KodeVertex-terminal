@@ -152,6 +152,10 @@ body {
 .bar { display: flex; align-items: center; gap: 4px; height: 38px; flex: none; box-sizing: border-box; padding: 0 14px 0 94px; background: var(--panel); border-bottom: 1px solid var(--rule); line-height: normal; }
 .tab { position: relative; display: flex; align-items: center; gap: 7px; padding: 5px 11px; border-radius: 6px; font-family: var(--font-code); font-size: 12px; color: var(--muted); white-space: nowrap; user-select: none; cursor: default; }
 .tab.on { color: var(--strong); background: var(--bg); }
+/* Каждая вкладка — отдельная плашка с рамкой, чтобы сразу видно, какие открыты; активная — рамка акцента. */
+.tab[role="tab"] { border: 1px solid var(--rule); padding: 4px 10px; }
+.tab[role="tab"]:not(.on):hover { background: var(--hover); color: var(--text); }
+.tab[role="tab"].on { border-color: var(--acc); }
 .tdot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--acc); }
 .tdot.running { animation: kv-pulse 1.4s infinite; }
 .tdot.waiting { background: var(--warn); }
@@ -163,6 +167,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .tab-close { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); font: inherit; color: var(--muted); background: var(--panel); border: 0; border-radius: 4px; padding: 0 4px; line-height: 16px; cursor: default; visibility: hidden; }
 .tab.on .tab-close { background: var(--bg); }
 .tab:hover .tab-close { visibility: visible; }
+.tab[role="tab"]:not(.on):hover .tab-close { background: var(--hover); }
 .tab-close:hover { color: var(--strong); }
 /* Перетаскивание вкладки: соседи расступаются плавно, взятая — полупрозрачна и поверх;
    «призрак» с названием — за курсором, когда он вне полосы. Вне перетаскивания transition нет —
@@ -200,6 +205,11 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .sb-launchers::-webkit-scrollbar { display: none; }
 .sb-l { position: relative; color: var(--lc); }
 .sb-l.on { background: var(--lc); color: #fff; }
+/* Не открытый вход приглушён; открытый — полоска слева (как в Dock), у активного она высокая. */
+.sb-l:not(.open) > svg, .sb-l:not(.open) > .sb-img { opacity: 0.4; filter: saturate(0.4); transition: opacity 0.12s, filter 0.12s; }
+.sb-l:not(.open):hover > svg, .sb-l:not(.open):hover > .sb-img { opacity: 0.85; filter: none; }
+.sb-pill { position: absolute; left: -4px; top: 50%; width: 3px; height: 8px; margin-top: -4px; border-radius: 0 3px 3px 0; background: var(--text); transition: height 0.15s, margin-top 0.15s; }
+.sb-l.on .sb-pill { height: 22px; margin-top: -11px; }
 .sb-img { width: 24px; height: 24px; border-radius: 5px; object-fit: cover; display: block; }
 .sb-live { position: absolute; right: 4px; bottom: 4px; width: 7px; height: 7px; border-radius: 50%; background: #3fb950; box-shadow: 0 0 0 1.5px var(--panel); }
 .sb-l.on .sb-live { box-shadow: 0 0 0 1.5px var(--lc); }

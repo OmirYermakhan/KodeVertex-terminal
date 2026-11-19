@@ -68,17 +68,18 @@ function LauncherButton({ l, onMenu }: { l: Launcher; onMenu(x: number, y: numbe
   return (
     <button
       type="button"
-      className={on ? 'sb sb-l on' : 'sb sb-l'}
+      className={`sb sb-l${on ? ' on' : ''}${tab ? ' open' : ''}`}
       style={{ '--lc': l.color } as React.CSSProperties}
       aria-label={l.name}
       aria-pressed={on}
-      title={`${l.name}\n${l.command || l.cwd || ''}${live ? '\n● сессия идёт' : ''}`}
+      title={`${l.name}\n${l.command || l.cwd || ''}${tab ? '\n▎ вкладка открыта' : '\nне открыт'}${live ? '\n● сессия идёт' : ''}`}
       onClick={() => openLauncher(l)}
       onContextMenu={(e) => {
         e.preventDefault()
         onMenu(e.clientX, e.clientY)
       }}
     >
+      {tab && <i className="sb-pill" data-testid="launcher-open" />}
       {l.image ? <img className="sb-img" src={l.image} alt="" /> : <LauncherIcon icon={l.icon} />}
       {live && <i className="sb-live" data-testid="launcher-live" />}
     </button>
