@@ -57,7 +57,7 @@ export function normalizeLaunchers(raw: unknown): Launcher[] {
     const x = r as Record<string, unknown>
     if (typeof x.id !== 'string' || x.id === '' || ids.has(x.id)) continue
     const command = typeof x.command === 'string' ? x.command.trim() : ''
-    const cwd = typeof x.cwd === 'string' && x.cwd.startsWith('/') && x.cwd.trim() !== '' ? x.cwd : undefined
+    const cwd = typeof x.cwd === 'string' && x.cwd.startsWith('/') ? x.cwd : undefined
     if (command === '' && !cwd) continue
     const fallback = command !== '' ? command : folderName(cwd as string)
     const name = typeof x.name === 'string' && x.name.trim() !== '' ? x.name.trim() : fallback

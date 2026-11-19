@@ -83,4 +83,31 @@ describe('LauncherDialog', () => {
     fireEvent.click(saveBtn())
     expect(saved.launchers[0]).toMatchObject({ command: '', cwd: '/Users/x/proj', name: 'proj' })
   })
+
+  it('open() для картинки отклонён — показана ошибка, без unhandled rejection', async () => {
+    dialogOpen.mockRejectedValue(new Error('boom'))
+    render(<LauncherDialog editId={null} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('radio', { name: 'Своя картинка' }))
+    expect(await screen.findByText(/boom/)).toBeTruthy()
+    await new Promise((r) => setTimeout(r, 0))
+    // vitest падает на любом unhandled rejection, так что дойти досюда = его нет
+  })
+
+  it('отмена выбора картинки сбрасывает прежнюю ошибку', async () => {
+    dialogOpen.mockRejectedValueOnce(new Error('boom'))
+    render(<LauncherDialog editId={null} onClose={() => {}} />)
+    const tile = screen.getByRole('radio', { name: 'Своя картинка' })
+    fireEvent.click(tile)
+    expect(await screen.findByText(/boom/)).toBeTruthy()
+    dialogOpen.mockResolvedValueOnce(null)
+    fireEvent.click(tile)
+    await waitFor(() => expect(screen.queryByText(/boom/)).toBeNull())
+  })
+
+  it('open() для папки отклонён — показан хинт', async () => {
+    dialogOpen.mockRejectedValue(new Error('x'))
+    render(<LauncherDialog editId={null} onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Выбрать…' }))
+    expect(await screen.findByText('Не удалось открыть выбор папки')).toBeTruthy()
+  })
 })

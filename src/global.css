@@ -215,7 +215,7 @@ button.tab { font-family: var(--font-code); font-size: 12px; line-height: normal
 .ld-field input { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--rule); border-radius: 6px; padding: 7px 10px; outline: none; }
 .ld-field input:focus { border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc); }
 .ld-field input.ld-cmd { font-family: var(--font-code); font-size: 13px; }
-.ld-icons { display: grid; grid-template-columns: repeat(6, 34px); gap: 6px; }
+.ld-icons { display: grid; grid-template-columns: repeat(7, 34px); gap: 6px; }
 .st-panel .ld-icon { width: 34px; height: 34px; padding: 0; display: grid; place-items: center; border-radius: 7px; }
 .st-panel .ld-icon.on { border-color: currentColor; box-shadow: 0 0 0 1px currentColor; }
 .st-panel .ld-img img { width: 20px; height: 20px; border-radius: 4px; object-fit: cover; display: block; }

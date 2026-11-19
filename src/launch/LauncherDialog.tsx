@@ -26,6 +26,7 @@ export default function LauncherDialog({ editId, onClose }: LauncherDialogProps)
   const [cwd, setCwd] = useState<string | undefined>(existing?.cwd)
   const [image, setImage] = useState<string | undefined>(existing?.image)
   const [imageError, setImageError] = useState<string | null>(null)
+  const [folderError, setFolderError] = useState<string | null>(null)
   const cmdRef = useRef<HTMLInputElement>(null)
   const alive = useRef(true)
   useEffect(() => {
@@ -53,17 +54,27 @@ export default function LauncherDialog({ editId, onClose }: LauncherDialogProps)
   const defaultName = suggestName(command) || (cwd ? folderName(cwd) : '')
 
   const pickFolder = async () => {
-    const dir = await open({ directory: true, title: 'Папка проекта' })
-    if (alive.current && typeof dir === 'string') setCwd(dir)
+    try {
+      const dir = await open({ directory: true, title: 'Папка проекта' })
+      if (!alive.current) return
+      setFolderError(null)
+      if (typeof dir === 'string') setCwd(dir)
+    } catch {
+      if (alive.current) setFolderError('Не удалось открыть выбор папки')
+    }
   }
 
   const pickImage = async () => {
-    const path = await open({
-      multiple: false,
-      filters: [{ name: 'Картинка', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }],
-    })
-    if (!alive.current || typeof path !== 'string') return
     try {
+      const path = await open({
+        multiple: false,
+        filters: [{ name: 'Картинка', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }],
+      })
+      if (!alive.current) return
+      if (typeof path !== 'string') {
+        setImageError(null)
+        return
+      }
       const url = await invoke<string>('launcher_icon', { path })
       if (!alive.current) return
       setImage(url)
@@ -160,6 +171,7 @@ export default function LauncherDialog({ editId, onClose }: LauncherDialogProps)
                 </button>
               )}
             </div>
+            {folderError && <small className="st-hint ld-err">{folderError}</small>}
           </div>
           <label className="ld-field">
             <span>Название</span>
