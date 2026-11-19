@@ -191,13 +191,13 @@ describe('карточки', () => {
     const cmd = "cat >> notes.md <<'EOF'\n## 14. Виды\n" + 'x'.repeat(200) + '\nEOF'
     const { container } = render(<ActionCard item={action({ detail: cmd, result: 'ok' })} agent={agent()} />)
     const act = container.querySelector('.act')!
-    expect(act).toHaveClass('long', 'clip')
+    expect(act).toHaveClass('long', 'act-clip')
     expect(act.querySelector('b')?.textContent).not.toContain('\n')
     fireEvent.click(act)
-    expect(act).not.toHaveClass('clip')
+    expect(act).not.toHaveClass('act-clip')
     expect(act.querySelector('b')?.textContent).toBe(cmd)
     fireEvent.click(act)
-    expect(act).toHaveClass('clip')
+    expect(act).toHaveClass('act-clip')
   })
 
   it('короткая команда не сворачивается', () => {
