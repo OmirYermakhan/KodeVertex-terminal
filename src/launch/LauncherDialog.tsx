@@ -28,12 +28,13 @@ export default function LauncherDialog({ editId, onClose }: LauncherDialogProps)
   const [imageError, setImageError] = useState<string | null>(null)
   const cmdRef = useRef<HTMLInputElement>(null)
   const alive = useRef(true)
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // StrictMode монтирует дважды: флаг ставится заново при каждом монтировании.
+    alive.current = true
+    return () => {
       alive.current = false
-    },
-    [],
-  )
+    }
+  }, [])
 
   useEffect(() => {
     const el = cmdRef.current

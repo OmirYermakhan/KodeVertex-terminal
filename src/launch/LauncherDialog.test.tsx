@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const dialogOpen = vi.fn()
@@ -68,5 +69,18 @@ describe('LauncherDialog', () => {
     fireEvent.click(saveBtn())
     expect(saved.launchers[0].image).toBeUndefined()
     expect(saved.launchers[0].icon).toBe('server')
+  })
+
+  it('в StrictMode выбор папки тоже работает', async () => {
+    dialogOpen.mockResolvedValue('/Users/x/proj')
+    render(
+      <StrictMode>
+        <LauncherDialog editId={null} onClose={() => {}} />
+      </StrictMode>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Выбрать…' }))
+    await waitFor(() => expect(saveBtn().disabled).toBe(false))
+    fireEvent.click(saveBtn())
+    expect(saved.launchers[0]).toMatchObject({ command: '', cwd: '/Users/x/proj', name: 'proj' })
   })
 })
