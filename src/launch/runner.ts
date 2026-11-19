@@ -66,13 +66,14 @@ export function openLauncher(l: Launcher): void {
   const tab = launcherTab(s.tabs, l.id)
   if (!tab) {
     const cur = s.tabs.find((t) => t.id === s.active)
-    const id = s.newTab(cur?.cwd[cur.focused], l.id)
-    pending.set(id, l.command)
+    const id = s.newTab(l.cwd ?? cur?.cwd[cur.focused], l.id)
+    if (l.command !== '') pending.set(id, l.command)
     return
   }
   s.activate(tab.id)
   const pane = launcherPane(tab)
   if (tab.focused !== pane) s.focus(pane)
+  if (l.command === '') return
   const r = runners.get(pane)
   if (!r) {
     pending.set(pane, l.command)
