@@ -187,6 +187,25 @@ describe('карточки', () => {
     expect(container.querySelector('.act .who')?.textContent).toBe('✎ Стили')
   })
 
+  it('длинная команда свёрнута в одну строку и раскрывается кликом', () => {
+    const cmd = "cat >> notes.md <<'EOF'\n## 14. Виды\n" + 'x'.repeat(200) + '\nEOF'
+    const { container } = render(<ActionCard item={action({ detail: cmd, result: 'ok' })} agent={agent()} />)
+    const act = container.querySelector('.act')!
+    expect(act).toHaveClass('long', 'clip')
+    expect(act.querySelector('b')?.textContent).not.toContain('\n')
+    fireEvent.click(act)
+    expect(act).not.toHaveClass('clip')
+    expect(act.querySelector('b')?.textContent).toBe(cmd)
+    fireEvent.click(act)
+    expect(act).toHaveClass('clip')
+  })
+
+  it('короткая команда не сворачивается', () => {
+    const { container } = render(<ActionCard item={action()} agent={agent()} />)
+    expect(container.querySelector('.act')).not.toHaveClass('long')
+    expect(container.querySelector('.act-tg')).toBeNull()
+  })
+
   it('идущее действие — .run и «Сейчас выполняю…»', () => {
     const { container } = render(<ActionCard item={action({ status: 'running' })} agent={agent()} />)
     expect(container.querySelector('.act')).toHaveClass('run')

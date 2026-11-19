@@ -1,7 +1,9 @@
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import { modelLabel } from '../labels'
 import type { Agent, FeedClaudeItem } from '../reducer'
 import { DiffView } from './DiffView'
+
+const LONG = 120
 
 type Action = Extract<FeedClaudeItem, { type: 'action' }>
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
@@ -23,15 +25,21 @@ export const ActionCard = memo(function ActionCard({ item, agent, id, cwd }: { i
   const diff = item.diff && item.status !== 'error' ? item.diff : undefined
   const res = running || diff ? '' : shortResult(item.result)
   const detail = diff ? '' : item.detail
-  const cls = ['act', running && 'run', item.status === 'error' && 'fail'].filter(Boolean).join(' ')
-  return (
-    <div className={cls} data-item-id={id}>
-      <div className="who">
-        {icon} {label}
-      </div>
+  // Длинная/многострочная деталь (heredoc, цепочка команд) — свёрнута в одну строку, раскрывается кликом.
+  const long = detail.length > LONG || detail.includes('\n')
+  const [open, setOpen] = useState(false)
+  const clip = long && !open
+  const cls = ['act', running && 'run', item.status === 'error' && 'fail', long && 'long', clip && 'clip'].filter(Boolean).join(' ')
+  const toggle = () => {
+    // Выделение текста мышью не должно сворачивать карточку.
+    if (window.getSelection()?.toString()) return
+    setOpen((v) => !v)
+  }
+  const body = (
+    <>
       {isSub && item.title}
       {isSub && detail && ' '}
-      {detail && <b>{detail}</b>}
+      {detail && <b>{clip ? detail.replace(/\s+/g, ' ') : detail}</b>}
       {res && (
         <>
           {/* Результат — после тире, как в макете 04: «Нашёл Form.tsx:42 — обработчик кнопки». */}
@@ -39,6 +47,15 @@ export const ActionCard = memo(function ActionCard({ item, agent, id, cwd }: { i
           {res}
         </>
       )}
+    </>
+  )
+  return (
+    <div className={cls} data-item-id={id} onClick={long ? toggle : undefined} title={clip ? 'Показать полностью' : undefined}>
+      <div className="who">
+        {icon} {label}
+        {long && <span className="act-tg" aria-hidden="true">{open ? '▾' : '▸'}</span>}
+      </div>
+      {long ? <div className="act-body">{body}</div> : body}
       {diff && <DiffView diff={diff} cwd={cwd} />}
       {running && (
         <div className="act-now">
