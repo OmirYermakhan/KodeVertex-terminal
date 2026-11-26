@@ -9,7 +9,7 @@ import { CompletionPopup, LIST_WIDTH, PREVIEW_WIDTH, popupHeight } from '../comp
 import { useHints } from '../completion/useHints'
 import { HintsPopup } from '../completion/HintsPopup'
 import { shellEscape } from '../completion/completion'
-import { isClaudeExit, isClearCommand, isModelCommand, isResumeCommand, isShellClear, parseClaudeCommand } from './claudeCommand'
+import { authCommand, isClaudeExit, isClearCommand, isModelCommand, isResumeCommand, isShellClear, parseClaudeCommand } from './claudeCommand'
 import { btwQuestion, NO_QUESTION } from '../claude/btw'
 import { ModelPicker } from '../claude/ModelPicker'
 import { initialPicker, pickerKey, type ModelChoice, type PickerState } from '../claude/models'
@@ -58,6 +58,7 @@ const AT_SIDE_MIN = 600
 const NOTE_MS = 3500
 /** Над строкой после `/exit`: сессия закрыта, строка снова — оболочка. */
 export const EXIT_NOTE = 'Сессия Claude закрыта — обычный терминал'
+export const LOGIN_OFFER = 'Вход выполнен — нажмите ↵, чтобы продолжить в Claude'
 
 export interface InputBarProps {
   /** Режим Claude при монтировании (восстановлен после перезапуска приложения). */
@@ -189,6 +190,8 @@ export interface InputBarHandle {
   removeToken(id: string): boolean
   /** Подсказка над полем (ошибка открытия файла, блока нет в ленте). */
   note(text: string): void
+  /** Предложить вернуться в Claude: подсказка над полем, ↵ на пустой строке — режим Claude. */
+  offerClaude(text: string): void
   /** Что сейчас в строке (текст со значками и режим) — чтобы вернуть после правки сообщения. */
   snapshot(): InputSnapshot
   /** Вернуть строку из snapshot. */
@@ -246,10 +249,18 @@ export const InputBar = memo(forwardRef<InputBarHandle, InputBarProps>(function 
   /** Режим Claude панели: ↵ — вопрос агенту, подсказки путей выключены. */
   const [claudeMode, setClaudeModeState] = useState(() => p.initialClaudeMode === true)
   const claudeRef = useRef(claudeMode)
+  /** Предложение вернуться в Claude по ↵ на пустой строке (после `claude auth login`); null — нет. */
+  const [offer, setOfferState] = useState<string | null>(null)
+  const offerRef = useRef<string | null>(null)
+  const setOffer = useCallback((v: string | null) => {
+    offerRef.current = v
+    setOfferState(v)
+  }, [])
   const setClaudeMode = useCallback((v: boolean) => {
     claudeRef.current = v
     setClaudeModeState(v)
-  }, [])
+    if (v) setOffer(null)
+  }, [setOffer])
   /** Открытая карточка выбора модели (`/model`); null — закрыта. */
   const [picker, setPicker] = useState<PickerState | null>(null)
   const pickerRef = useRef<PickerState | null>(null)
@@ -477,6 +488,18 @@ export const InputBar = memo(forwardRef<InputBarHandle, InputBarProps>(function 
       setPickerState(initialPicker(info.current, info.effort))
     } else if (!q.continuation && isResumeCommand(text) && q.onListSessions) {
       openResume()
+    } else if (!q.continuation && authCommand(text) !== null) {
+      // Вход/выход — в оболочке панели: сессия Claude закрывается (новая прочтёт новые учётные данные).
+      completionRef.current.close()
+      hintsRef.current.close()
+      if (claudeRef.current) {
+        q.onExitClaude?.()
+        setClaudeMode(false)
+      }
+      if (!q.onRun(authCommand(text) ?? '')) {
+        setLine(text, text.length)
+        return
+      }
     } else if (!q.continuation && (text.trim() === '/exit' || (claudeRef.current && isClaudeExit(text)))) {
       // Как выход из claude в терминале: сессия закрывается, строка — снова оболочка.
       q.onExitClaude?.()
@@ -686,6 +709,9 @@ export const InputBar = memo(forwardRef<InputBarHandle, InputBarProps>(function 
       return true
     },
     note: showNote,
+    offerClaude: (text) => {
+      if (!claudeRef.current) setOffer(text)
+    },
     snapshot: () => ({ doc: docRef.current, claude: claudeRef.current }),
     restore: (snap) => {
       completionRef.current.close()
@@ -1126,6 +1152,13 @@ export const InputBar = memo(forwardRef<InputBarHandle, InputBarProps>(function 
         return
       }
       if (only(null)) {
+        if (offerRef.current !== null && !claudeRef.current) {
+          setOffer(null)
+          if (v === '' && !props.current.edit) {
+            if (props.current.onEnterClaude()) setClaudeMode(true)
+            return
+          }
+        }
         if (v.trim()) submit(v, false)
         else if (v === '' && !props.current.edit) props.current.queue?.sendNext()
       }
@@ -1376,6 +1409,7 @@ export const InputBar = memo(forwardRef<InputBarHandle, InputBarProps>(function 
       )}
       {p.continuation && !p.disabled && <div className="in-note">{CONTINUATION_NOTE}</div>}
       {note && !p.continuation && <div className="in-note">{note}</div>}
+      {offer && !note && !p.continuation && !claudeMode && <div className="in-note">{offer}</div>}
       <div className={'input' + (p.disabled ? ' off' : '')} onMouseDown={(e) => {
         // Клик по рамке/подсказке — фокус в поле.
         if (!edRef.current?.contains(e.target as Node)) {

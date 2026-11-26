@@ -35,7 +35,7 @@ import { QuestionPrompt } from '../claude/QuestionPrompt'
 import { LinkPrompt, TrustPrompt } from '../claude/ConfirmPrompt'
 import { answerLink, askOpenLink, useLinkAsk } from '../feed/linkAsk'
 import { dropPaneFeed, restoredPane, scheduleSave, setPaneFeed } from '../persist/session'
-import { InputBar, type InputBarHandle, type InputSnapshot } from '../input/InputBar'
+import { InputBar, LOGIN_OFFER, type InputBarHandle, type InputSnapshot } from '../input/InputBar'
 import { QueuePanel, type QueuePanelHandle } from '../claude/QueuePanel'
 import { BtwCard } from '../claude/BtwCard'
 import { askBtw, closeBtw, useBtw } from '../claude/btw'
@@ -47,7 +47,7 @@ import { Feed } from '../feed/FeedView'
 import { LiveTerminal } from '../feed/LiveTerminal'
 import { registerPaneCommands, type PaneAction } from '../feed/paneCommands'
 import { FindBar, type FindBarHandle } from '../feed/FindBar'
-import { parseClaudeCommand } from '../input/claudeCommand'
+import { isAuthLogin, parseClaudeCommand } from '../input/claudeCommand'
 import { registerPaneRunner, takePending, usePaneRunning } from '../launch/runner'
 import { feedAttachment, quoteAttachment } from '../attach/fromFeed'
 import { QuoteReply, quoteSelection, type QuoteSel } from '../claude/QuoteReply'
@@ -511,6 +511,8 @@ export function TerminalPane(p: TerminalPaneProps) {
       const cur = itemsRef.current.find((x): x is ShellBlock => x.kind === 'shell' && x.running)
       if (cur && exitCode !== null) {
         notifyCommandEnd(callbacks.current.paneId, cur.command, Math.max(0, at - cur.startedAt), exitCode, altUsedRef.current)
+        // Вход удался (`/login` → `claude auth login`): обратно в Claude — одним ↵, без набора `claude`.
+        if (exitCode === 0 && isAuthLogin(cur.command)) inputRef.current?.offerClaude(LOGIN_OFFER)
       }
       setItems((it) => applyShell(it, { t: 'end', exitCode, at, html, lines }))
       // Вывод заморожен: xterm чист к следующему приглашению — вывод оболочки до эха строки (direnv,

@@ -19,6 +19,7 @@ const SUBCOMMANDS = new Set([
   'migrate-installer',
   'plugin',
   'agents',
+  'auth',
 ])
 
 /** Одна пара одинаковых внешних кавычек снимается, только если вся строка — одна строка в кавычках. */
@@ -97,6 +98,23 @@ export function isModelCommand(text: string): boolean {
 /** `/resume` (режим Claude или ⌘↵): карточка выбора прошлого разговора вместо вопроса. */
 export function isResumeCommand(text: string): boolean {
   return text.trim() === '/resume'
+}
+
+/**
+ * `/login`, `/logout`: в фоновом режиме (`claude -p`, панель Claude) CLI их не выполняет
+ * («isn't available in this environment»), поэтому — `claude auth login|logout` в оболочке панели.
+ * null — это не они.
+ */
+export function authCommand(text: string): string | null {
+  const t = text.trim()
+  if (t === '/login') return 'claude auth login'
+  if (t === '/logout') return 'claude auth logout'
+  return null
+}
+
+/** `claude auth login [флаги]` — после успешного входа строка предлагает вернуться в Claude по ↵. */
+export function isAuthLogin(cmd: string): boolean {
+  return /^claude\s+auth\s+login(\s|$)/.test(cmd.trim())
 }
 
 /** `/clear` (в любом режиме: в оболочке это не команда): новая сессия Claude и чистая лента. */

@@ -7,7 +7,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...
 const dialogOpen = vi.fn(() => Promise.resolve([] as string[]))
 vi.mock('../ui/pickPaths', () => ({ pickPaths: () => dialogOpen() }))
 
-const { InputBar, EDIT_HINT, ASK_HINT, CLAUDE_HINT, CLAUDE_BUSY_HINT, CLAUDE_PLACEHOLDER, CONTINUATION_NOTE, PLACEHOLDER, PREVIEW_HINT, UNSUPPORTED_NOTE } = await import('./InputBar')
+const { InputBar, EDIT_HINT, ASK_HINT, CLAUDE_HINT, CLAUDE_BUSY_HINT, CLAUDE_PLACEHOLDER, CONTINUATION_NOTE, LOGIN_OFFER, PLACEHOLDER, PREVIEW_HINT, UNSUPPORTED_NOTE } = await import('./InputBar')
 const { createPreview } = await import('../attach/preview/usePreview')
 const { AT_HINT } = await import('../completion/CompletionPopup')
 const { TOKEN_CHAR: T } = await import('../attach/types')
@@ -1148,6 +1148,60 @@ describe('InputBar: /clear и clear', () => {
     s.key('Enter')
     expect(s.p.onRun).not.toHaveBeenCalled()
     expect(s.container.querySelector('.mp')).not.toBeNull()
+  })
+})
+
+describe('InputBar: /login и /logout', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    invoke.mockResolvedValue([])
+    resetHistory()
+  })
+
+  it('`/login` в режиме Claude — закрыть сессию и `claude auth login` в оболочке, не вопрос агенту', () => {
+    const onExitClaude = vi.fn()
+    const s = setup({ onExitClaude })
+    s.set('claude')
+    s.key('Enter')
+    s.set('/login')
+    s.key('Enter')
+    expect(onExitClaude).toHaveBeenCalledTimes(1)
+    expect(s.p.onAsk).not.toHaveBeenCalled()
+    expect(s.p.onRun).toHaveBeenCalledWith('claude auth login')
+    expect(s.ta.value).toBe('')
+    expect(s.container.querySelector('.input .ph')!.textContent).toBe(PLACEHOLDER)
+  })
+
+  it('после входа ↵ на пустой строке — снова режим Claude, без набора `claude`', () => {
+    const onEnterClaude = vi.fn(() => true)
+    const s = setup({ onEnterClaude })
+    act(() => s.ref.current!.offerClaude(LOGIN_OFFER))
+    expect(s.container.querySelector('.in-note')!.textContent).toBe(LOGIN_OFFER)
+    s.key('Enter')
+    expect(onEnterClaude).toHaveBeenCalledTimes(1)
+    expect(s.p.onRun).not.toHaveBeenCalled()
+    expect(s.container.querySelector('.input .ph')!.textContent).toBe(CLAUDE_PLACEHOLDER)
+    expect(s.container.querySelector('.in-note')).toBeNull()
+  })
+
+  it('после входа набранная команда уходит в оболочку, предложение снимается', () => {
+    const onEnterClaude = vi.fn(() => true)
+    const s = setup({ onEnterClaude })
+    act(() => s.ref.current!.offerClaude(LOGIN_OFFER))
+    s.set('ls')
+    s.key('Enter')
+    expect(onEnterClaude).not.toHaveBeenCalled()
+    expect(s.p.onRun).toHaveBeenCalledWith('ls')
+    expect(s.container.querySelector('.in-note')).toBeNull()
+  })
+
+  it('`/logout` в оболочке — `claude auth logout`, сессию не трогает', () => {
+    const onExitClaude = vi.fn()
+    const s = setup({ onExitClaude })
+    s.set('/logout')
+    s.key('Enter')
+    expect(onExitClaude).not.toHaveBeenCalled()
+    expect(s.p.onRun).toHaveBeenCalledWith('claude auth logout')
   })
 })
 

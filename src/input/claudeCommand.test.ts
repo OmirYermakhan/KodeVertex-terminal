@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isClaudeExit, isModelCommand, parseClaudeCommand } from './claudeCommand'
+import { authCommand, isAuthLogin, isClaudeExit, isModelCommand, parseClaudeCommand } from './claudeCommand'
 
 describe('parseClaudeCommand', () => {
   it('`claude` без аргументов — режим Claude', () => {
@@ -27,7 +27,7 @@ describe('parseClaudeCommand', () => {
   })
 
   it('флаги и подкоманды — в оболочку без изменений', () => {
-    for (const cmd of ['claude --version', 'claude -p "x"', 'claude mcp list', 'claude config get', 'claude update', 'claude doctor', 'claude plugin list', 'claude agents']) {
+    for (const cmd of ['claude --version', 'claude -p "x"', 'claude mcp list', 'claude config get', 'claude update', 'claude doctor', 'claude plugin list', 'claude agents', 'claude auth login', 'claude auth status']) {
       expect(parseClaudeCommand(cmd)).toEqual({ kind: 'shell', cmd })
     }
   })
@@ -60,5 +60,24 @@ describe('isModelCommand', () => {
     expect(isModelCommand(' /model ')).toBe(true)
     expect(isModelCommand('/model opus')).toBe(false)
     expect(isModelCommand('/models')).toBe(false)
+  })
+})
+
+describe('authCommand', () => {
+  it('`/login` и `/logout` — `claude auth …`, остальное — null', () => {
+    expect(authCommand('/login')).toBe('claude auth login')
+    expect(authCommand('  /logout ')).toBe('claude auth logout')
+    expect(authCommand('/login x')).toBeNull()
+    expect(authCommand('login')).toBeNull()
+  })
+})
+
+describe('isAuthLogin', () => {
+  it('`claude auth login` с флагами — да; logout, status и другое — нет', () => {
+    expect(isAuthLogin('claude auth login')).toBe(true)
+    expect(isAuthLogin('  claude  auth login --console ')).toBe(true)
+    expect(isAuthLogin('claude auth logout')).toBe(false)
+    expect(isAuthLogin('claude auth status')).toBe(false)
+    expect(isAuthLogin('echo claude auth login')).toBe(false)
   })
 })

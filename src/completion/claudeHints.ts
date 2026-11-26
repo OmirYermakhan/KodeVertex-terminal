@@ -64,6 +64,8 @@ export const BUILTIN_SLASH: HintItem[] = [
   ['context', 'Заполненность контекста'],
   ['init', 'Создать CLAUDE.md'],
   ['review', 'Ревью изменений'],
+  ['login', 'Войти в аккаунт (claude auth login)'],
+  ['logout', 'Выйти из аккаунта (claude auth logout)'],
 ].map(([name, description]) => ({ aliases: ['/' + name], description, group: 'builtin' as const }))
 
 /** Ответ `claude_slash_commands`. */
